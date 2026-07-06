@@ -1377,7 +1377,7 @@ def shiny_LaunchPy(shiny_dir, shiny_config_path, port=None, proxy_mode="relative
 
 
 
-def _shiny_cleanup_shell_command(port=None):
+def _shiny_cleanup_shell_command(port=None, port_min=None, port_max=None):
     cleanup = (
         'for pf in ~/.rnaseq_shiny_*.pid; do '
         '[ -e "$pf" ] || continue; '
@@ -1387,22 +1387,36 @@ def _shiny_cleanup_shell_command(port=None):
         'done'
     )
     if port is not None:
+        ports = [int(port)]
+    elif port_min is not None and port_max is not None:
+        ports = list(range(int(port_min), int(port_max) + 1))
+    else:
+        ports = []
+    if len(ports) > 0:
+        if len(ports) == 1:
+            port_loop = str(ports[0])
+        else:
+            port_loop = "$(seq "+str(ports[0])+" "+str(ports[-1])+")"
         cleanup += (
             '; if command -v lsof >/dev/null 2>&1; then '
-            'PIDS=$(lsof -ti :'+str(int(port))+' 2>/dev/null); '
+            'for p in '+port_loop+'; do '
+            'PIDS=$(lsof -ti :$p 2>/dev/null); '
             'if [ -n "$PIDS" ]; then kill $PIDS 2>/dev/null || true; fi; '
+            'done; '
             'fi'
         )
     return cleanup
 
 
-def _cleanup_local_shiny_processes(port=None):
+def _cleanup_local_shiny_processes(port=None, port_min=None, port_max=None):
+    killed = []
     for pidfile_path in glob.glob(os.path.expanduser("~/.rnaseq_shiny_*.pid")):
         try:
             with open(pidfile_path) as f:
                 pid = int(f.read().strip())
             try:
                 os.kill(pid, signal.SIGTERM)
+                killed.append("pid:"+str(pid))
             except OSError:
                 pass
             os.remove(pidfile_path)
@@ -1411,21 +1425,28 @@ def _cleanup_local_shiny_processes(port=None):
                 os.remove(pidfile_path)
             except OSError:
                 pass
-    if port is None:
-        return
-    try:
-        pids = subprocess.check_output(
-            ["lsof", "-ti", ":"+str(int(port))],
-            stderr=subprocess.DEVNULL,
-            universal_newlines=True
-        ).split()
-    except (OSError, subprocess.CalledProcessError):
-        pids = []
-    for pid_text in pids:
+    if port is not None:
+        ports = [int(port)]
+    elif port_min is not None and port_max is not None:
+        ports = list(range(int(port_min), int(port_max) + 1))
+    else:
+        ports = []
+    for p in ports:
         try:
-            os.kill(int(pid_text), signal.SIGTERM)
-        except (OSError, ValueError):
-            pass
+            pids = subprocess.check_output(
+                ["lsof", "-ti", ":"+str(int(p))],
+                stderr=subprocess.DEVNULL,
+                universal_newlines=True
+            ).split()
+        except (OSError, subprocess.CalledProcessError):
+            pids = []
+        for pid_text in pids:
+            try:
+                os.kill(int(pid_text), signal.SIGTERM)
+                killed.append("port:"+str(p)+"/pid:"+pid_text)
+            except (OSError, ValueError):
+                pass
+    return sorted(set(killed))
 
 
 def shiny_TerminalCommands(shiny_dir, shiny_config_path, username=None, server_host="bamdev1", port=None, port_min=3838, port_max=3900, server_only=False, minimal=False):
@@ -1456,7 +1477,7 @@ def shiny_TerminalCommands(shiny_dir, shiny_config_path, username=None, server_h
         port=port,
         pidfile=pidfile,
         logfile=logfile,
-        cleanup=_shiny_cleanup_shell_command(port),
+        cleanup=_shiny_cleanup_shell_command(port_min=port_min, port_max=port_max),
         script=run_script,
         cfg=shiny_config_path
     )
@@ -1469,7 +1490,7 @@ def shiny_TerminalCommands(shiny_dir, shiny_config_path, username=None, server_h
             h=server_host
         )
 
-    stop_cmd = _shiny_cleanup_shell_command(port)
+    stop_cmd = _shiny_cleanup_shell_command(port=port)
 
     if minimal:
         print(server_cmd)
@@ -1509,8 +1530,12 @@ def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_ho
         username = input().strip()
 
     if start_server_here:
-        _cleanup_local_shiny_processes(None)
-        print("Stopped previous RNA-seq Shiny sessions before starting a new viewer.")
+        killed = _cleanup_local_shiny_processes(port_min=port_min, port_max=port_max)
+        if len(killed) > 0:
+            print("Stopped previous RNA-seq Shiny sessions before starting a new viewer: "+", ".join(killed))
+            time.sleep(0.5)
+        else:
+            print("Checked RNA-seq Shiny ports "+str(port_min)+"-"+str(port_max)+"; no previous sessions found.")
 
     if port is None:
         port = _pick_available_port(start_port=port_min, end_port=port_max)
@@ -1546,7 +1571,7 @@ def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_ho
             "nohup bash {script} {cfg} 0.0.0.0 {port} > {log} 2>&1 < /dev/null & "
             "echo $! > {pid}"
         ).format(
-            cleanup=_shiny_cleanup_shell_command(port),
+            cleanup=_shiny_cleanup_shell_command(port_min=port_min, port_max=port_max),
             script=shlex.quote(run_script),
             cfg=shlex.quote(shiny_config_path),
             port=port,
@@ -1565,14 +1590,14 @@ def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_ho
         )
 
     if start_server_here:
-        stop_cmd = _shiny_cleanup_shell_command(port)
+        stop_cmd = _shiny_cleanup_shell_command(port=port)
     else:
         stop_cmd = (
             "ssh {user}@{host} {remote}"
         ).format(
             user=username,
             host=server_host,
-            remote=shlex.quote(_shiny_cleanup_shell_command(port))
+            remote=shlex.quote(_shiny_cleanup_shell_command(port=port))
         )
 
     print(one_liner)
@@ -1612,7 +1637,7 @@ def shiny_ServerFirstCommands(shiny_dir, shiny_config_path, username=None, serve
         "echo $! > {pid}"
     ).format(
         port=port,
-        cleanup=_shiny_cleanup_shell_command(port),
+        cleanup=_shiny_cleanup_shell_command(port_min=port_min, port_max=port_max),
         script=shlex.quote(run_script),
         cfg=shlex.quote(shiny_config_path),
         log=logfile,
@@ -1626,11 +1651,11 @@ def shiny_ServerFirstCommands(shiny_dir, shiny_config_path, username=None, serve
             h=server_host
         )
     browser_url = "http://localhost:{}/".format(port)
-    stop_cmd = _shiny_cleanup_shell_command(port)
+    stop_cmd = _shiny_cleanup_shell_command(port=port)
 
     if after_login_only:
         if minimal_after_login:
-            print("{}; bash {} {} 0.0.0.0 {} &".format(_shiny_cleanup_shell_command(port), run_script, shiny_config_path, port))
+            print("{}; bash {} {} 0.0.0.0 {} &".format(_shiny_cleanup_shell_command(port_min=port_min, port_max=port_max), run_script, shiny_config_path, port))
         else:
             print(server_cmd)
         if print_stop:
