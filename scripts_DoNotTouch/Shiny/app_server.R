@@ -860,6 +860,140 @@ heatmap_font_family <- function(style) {
   if (style %in% c("sans", "serif", "mono")) style else "sans"
 }
 
+volcano_palette_colors <- function(style) {
+  style <- value_or(style, "publication")
+  if (identical(style, "minimal")) {
+    return(c(nonsig = "#b8bec6", up = "#d95f02", down = "#1b9e77", selected = "#111111"))
+  }
+  if (identical(style, "colorblind")) {
+    return(c(nonsig = "#b9b9b9", up = "#d55e00", down = "#0072b2", selected = "#000000"))
+  }
+  if (identical(style, "dark")) {
+    return(c(nonsig = "#667085", up = "#ff6b6b", down = "#4dabf7", selected = "#ffffff"))
+  }
+  if (identical(style, "soft")) {
+    return(c(nonsig = "#c8cdd4", up = "#c44e52", down = "#4c72b0", selected = "#2f2f2f"))
+  }
+  c(nonsig = "#aeb6c2", up = "#b2182b", down = "#2166ac", selected = "#111111")
+}
+
+volcano_theme_options <- function(style) {
+  style <- value_or(style, "publication")
+  if (identical(style, "dark")) {
+    return(list(bg = "#111827", fg = "#f9fafb", grid = "#374151", axis = "#e5e7eb"))
+  }
+  if (identical(style, "minimal")) {
+    return(list(bg = "#ffffff", fg = "#202020", grid = "#eeeeee", axis = "#444444"))
+  }
+  list(bg = "#ffffff", fg = "#202020", grid = "#e6e9ef", axis = "#3a3a3a")
+}
+
+prepare_volcano_df <- function(df, p_col, p_cutoff, lfc_cutoff) {
+  if (is.null(df) || !nrow(df) || !("log2FoldChange" %in% colnames(df)) || !(p_col %in% colnames(df))) {
+    return(NULL)
+  }
+  pvals <- suppressWarnings(as.numeric(df[[p_col]]))
+  lfc <- suppressWarnings(as.numeric(df$log2FoldChange))
+  genes <- as.character(df$gene_label)
+  keep <- !is.na(genes) & nzchar(genes) & !is.na(pvals) & !is.na(lfc)
+  out <- data.frame(
+    gene_label = genes[keep],
+    log2FoldChange = lfc[keep],
+    pvalue_metric = pvals[keep],
+    neg_log10_p = -log10(pmax(pvals[keep], .Machine$double.xmin)),
+    stringsAsFactors = FALSE
+  )
+  out$status <- "Not significant"
+  out$status[out$pvalue_metric <= p_cutoff & out$log2FoldChange >= lfc_cutoff] <- "Up"
+  out$status[out$pvalue_metric <= p_cutoff & out$log2FoldChange <= -lfc_cutoff] <- "Down"
+  out
+}
+
+volcano_label_genes <- function(plot_df, mode, manual_genes, max_labels) {
+  if (is.null(plot_df) || !nrow(plot_df)) return(character(0))
+  mode <- value_or(mode, "top")
+  max_labels <- max(0, as.integer(value_or(max_labels, 20)))
+  if (identical(mode, "none") || max_labels == 0) return(character(0))
+  if (identical(mode, "manual")) {
+    return(intersect(value_or(manual_genes, character(0)), plot_df$gene_label))
+  }
+  sig <- plot_df[plot_df$status %in% c("Up", "Down"), , drop = FALSE]
+  if (!nrow(sig)) return(character(0))
+  sig <- sig[order(-sig$neg_log10_p, -abs(sig$log2FoldChange)), , drop = FALSE]
+  head(sig$gene_label, max_labels)
+}
+
+draw_volcano_plot <- function(plot_df, labels, title, subtitle, p_cutoff, lfc_cutoff, style, palette_style,
+                              point_size, point_alpha, label_size, show_thresholds, show_grid, font_family) {
+  validate(need(!is.null(plot_df) && nrow(plot_df) > 0, "No differential expression rows are available for this volcano plot."))
+  pal <- volcano_palette_colors(palette_style)
+  theme <- volcano_theme_options(style)
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par), add = TRUE)
+  par(bg = theme$bg, fg = theme$fg, col.axis = theme$axis, col.lab = theme$fg, col.main = theme$fg, family = font_family)
+  par(mar = c(5, 5, 4.5, 2) + 0.1)
+
+  x <- plot_df$log2FoldChange
+  y <- plot_df$neg_log10_p
+  xlim <- range(c(x, -lfc_cutoff, lfc_cutoff), finite = TRUE)
+  ylim <- range(c(0, y), finite = TRUE)
+  xpad <- max(0.5, diff(xlim) * 0.08)
+  ypad <- max(0.5, diff(ylim) * 0.08)
+  xlim <- xlim + c(-xpad, xpad)
+  ylim <- c(0, ylim[2] + ypad)
+
+  plot(
+    x,
+    y,
+    type = "n",
+    xlim = xlim,
+    ylim = ylim,
+    xlab = "log2 fold change",
+    ylab = paste0("-log10(", subtitle, ")"),
+    main = title,
+    cex.main = 1.15,
+    font.main = 2,
+    bty = "l"
+  )
+  if (isTRUE(show_grid)) {
+    abline(h = pretty(ylim), v = pretty(xlim), col = theme$grid, lwd = 0.8)
+  }
+  if (isTRUE(show_thresholds)) {
+    abline(v = c(-lfc_cutoff, lfc_cutoff), col = "#7f8792", lty = 2, lwd = 1.1)
+    abline(h = -log10(pmax(p_cutoff, .Machine$double.xmin)), col = "#7f8792", lty = 2, lwd = 1.1)
+  }
+
+  cols <- rep(pal[["nonsig"]], nrow(plot_df))
+  cols[plot_df$status == "Up"] <- pal[["up"]]
+  cols[plot_df$status == "Down"] <- pal[["down"]]
+  cols <- adjustcolor(cols, alpha.f = as.numeric(value_or(point_alpha, 0.72)))
+  points(x, y, pch = 16, col = cols, cex = as.numeric(value_or(point_size, 0.75)))
+
+  label_hits <- plot_df[plot_df$gene_label %in% labels, , drop = FALSE]
+  if (nrow(label_hits)) {
+    points(label_hits$log2FoldChange, label_hits$neg_log10_p, pch = 21, bg = pal[["selected"]], col = theme$bg, cex = 1.15)
+    text(
+      label_hits$log2FoldChange,
+      label_hits$neg_log10_p,
+      labels = label_hits$gene_label,
+      pos = 3,
+      cex = as.numeric(value_or(label_size, 0.72)),
+      col = pal[["selected"]],
+      xpd = NA
+    )
+  }
+
+  legend(
+    "topright",
+    legend = c("Up", "Down", "Not significant"),
+    col = c(pal[["up"]], pal[["down"]], pal[["nonsig"]]),
+    pch = 16,
+    bty = "n",
+    text.col = theme$fg,
+    cex = 0.85
+  )
+}
+
 make_enrichr_gene_lists <- function(df, p_col, p_cutoff, lfc_cutoff) {
   if (is.null(df) || !nrow(df) || !(p_col %in% colnames(df)) || !("log2FoldChange" %in% colnames(df))) {
     return(list(up = character(0), down = character(0)))
@@ -1060,6 +1194,63 @@ app_tabs <- list(
               )
             ),
             conditionalPanel(
+              "input.deg_subtab == 'Volcano'",
+              selectInput("volcano_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj"),
+              numericInput("volcano_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
+              numericInput("volcano_lfc_cutoff", "Absolute log2FC cutoff", value = 1, min = 0, step = 0.1),
+              selectInput(
+                "volcano_style",
+                "Volcano style",
+                choices = c("Clean publication" = "publication", "Minimal" = "minimal", "Dark" = "dark", "Colorblind" = "colorblind", "Soft" = "soft"),
+                selected = "publication"
+              ),
+              selectInput(
+                "volcano_palette",
+                "Volcano colors",
+                choices = c("Publication" = "publication", "Minimal" = "minimal", "Dark" = "dark", "Colorblind" = "colorblind", "Soft" = "soft"),
+                selected = "publication"
+              ),
+              selectInput(
+                "volcano_label_mode",
+                "Gene labels",
+                choices = c("Top significant genes" = "top", "Select genes manually" = "manual", "No labels" = "none"),
+                selected = "top"
+              ),
+              conditionalPanel(
+                "input.volcano_label_mode == 'manual'",
+                selectizeInput("volcano_label_genes", "Genes to label", choices = NULL, selected = NULL, multiple = TRUE)
+              ),
+              conditionalPanel(
+                "input.volcano_label_mode == 'top'",
+                numericInput("volcano_max_labels", "Maximum labels", value = 20, min = 0, max = 100, step = 1)
+              ),
+              numericInput("volcano_point_size", "Point size", value = 0.75, min = 0.2, max = 3, step = 0.05),
+              numericInput("volcano_point_alpha", "Point opacity", value = 0.72, min = 0.1, max = 1, step = 0.05),
+              numericInput("volcano_label_size", "Label size", value = 0.72, min = 0.3, max = 2, step = 0.05),
+              selectInput(
+                "volcano_font_family",
+                "Font family",
+                choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
+                selected = "sans"
+              ),
+              checkboxInput("volcano_show_thresholds", "Show cutoff lines", value = TRUE),
+              checkboxInput("volcano_show_grid", "Show grid", value = TRUE),
+              numericInput("volcano_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
+              numericInput("volcano_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
+              selectInput(
+                "volcano_save_mode",
+                "Saved image size",
+                choices = c("Match display" = "match", "High-res 2x" = "double", "High-res 3x" = "triple", "Custom" = "custom"),
+                selected = "double"
+              ),
+              conditionalPanel(
+                "input.volcano_save_mode == 'custom'",
+                numericInput("volcano_save_width", "Custom saved width (px)", value = 1800, min = 600, max = 8000, step = 100),
+                numericInput("volcano_save_height", "Custom saved height (px)", value = 1400, min = 600, max = 8000, step = 100),
+                numericInput("volcano_save_res", "Custom saved DPI", value = 192, min = 72, max = 600, step = 10)
+              )
+            ),
+            conditionalPanel(
               "input.deg_subtab == 'Heatmap'",
               radioButtons(
                 "heatmap_gene_mode",
@@ -1225,6 +1416,12 @@ app_tabs <- list(
               tabPanel(
                 "PCA",
                 uiOutput("deg_pca_ui")
+              ),
+              tabPanel(
+                "Volcano",
+                textInput("volcano_filename", "Filename", value = ""),
+                actionButton("save_volcano_btn", "Save volcano plot"),
+                plotOutput("deg_volcano_plot", height = "700px")
               ),
               tabPanel(
                 "Heatmap",
@@ -2227,6 +2424,105 @@ server <- function(input, output, session) {
       }
     })
 
+    observe({
+      df <- deg_df()
+      if (is.null(df)) {
+        updateSelectizeInput(session, "volcano_label_genes", choices = character(0), selected = character(0), server = TRUE)
+      } else {
+        updateSelectizeInput(session, "volcano_label_genes", choices = df$gene_label, selected = isolate(input$volcano_label_genes), server = TRUE)
+      }
+    })
+
+    volcano_plot_state <- reactive({
+      df <- deg_df()
+      req(!is.null(df))
+      p_col <- value_or(input$volcano_p_col, "padj")
+      validate(need(p_col %in% colnames(df), "Selected p-value column is not present in the DEG table."))
+      plot_df <- prepare_volcano_df(
+        df,
+        p_col = p_col,
+        p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
+        lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1))
+      )
+      validate(need(!is.null(plot_df) && nrow(plot_df) > 0, "No usable log2FoldChange and p-value rows were found."))
+      labels <- volcano_label_genes(
+        plot_df,
+        mode = value_or(input$volcano_label_mode, "top"),
+        manual_genes = value_or(input$volcano_label_genes, character(0)),
+        max_labels = value_or(input$volcano_max_labels, 20)
+      )
+      list(plot_df = plot_df, labels = labels, p_col = p_col)
+    })
+
+    output$deg_volcano_plot <- renderPlot({
+      vp <- volcano_plot_state()
+      draw_volcano_plot(
+        vp$plot_df,
+        labels = vp$labels,
+        title = sprintf("%s vs %s", value_or(input$deg_treatment, "treatment"), value_or(input$deg_control, "control")),
+        subtitle = vp$p_col,
+        p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
+        lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
+        style = value_or(input$volcano_style, "publication"),
+        palette_style = value_or(input$volcano_palette, "publication"),
+        point_size = value_or(input$volcano_point_size, 0.75),
+        point_alpha = value_or(input$volcano_point_alpha, 0.72),
+        label_size = value_or(input$volcano_label_size, 0.72),
+        show_thresholds = isTRUE(input$volcano_show_thresholds),
+        show_grid = isTRUE(input$volcano_show_grid),
+        font_family = heatmap_font_family(input$volcano_font_family)
+      )
+    }, width = function() {
+      as.numeric(value_or(input$volcano_plot_width, 900))
+    }, height = function() {
+      as.numeric(value_or(input$volcano_plot_height, 700))
+    })
+
+    observeEvent(input$save_volcano_btn, {
+      vp <- volcano_plot_state()
+      default_name <- sprintf(
+        "volcano_%s_%s_vs_%s.png",
+        value_or(input$deg_compare_col, "comparison"),
+        value_or(input$deg_treatment, "treatment"),
+        value_or(input$deg_control, "control")
+      )
+      filename <- sanitize_filename(input$volcano_filename)
+      if (!nzchar(filename)) filename <- default_name
+      if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
+      out_path <- file.path(deseq2_dir, filename)
+      display_width <- as.numeric(value_or(input$volcano_plot_width, 900))
+      display_height <- as.numeric(value_or(input$volcano_plot_height, 700))
+      save_mode <- value_or(input$volcano_save_mode, "double")
+      save_scale <- if (identical(save_mode, "triple")) 3 else if (identical(save_mode, "double")) 2 else 1
+      save_width <- display_width * save_scale
+      save_height <- display_height * save_scale
+      save_res <- 96 * save_scale
+      if (identical(save_mode, "custom")) {
+        save_width <- as.numeric(value_or(input$volcano_save_width, 1800))
+        save_height <- as.numeric(value_or(input$volcano_save_height, 1400))
+        save_res <- as.numeric(value_or(input$volcano_save_res, 192))
+      }
+      png(out_path, width = save_width, height = save_height, units = "px", res = save_res)
+      draw_volcano_plot(
+        vp$plot_df,
+        labels = vp$labels,
+        title = sprintf("%s vs %s", value_or(input$deg_treatment, "treatment"), value_or(input$deg_control, "control")),
+        subtitle = vp$p_col,
+        p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
+        lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
+        style = value_or(input$volcano_style, "publication"),
+        palette_style = value_or(input$volcano_palette, "publication"),
+        point_size = value_or(input$volcano_point_size, 0.75),
+        point_alpha = value_or(input$volcano_point_alpha, 0.72),
+        label_size = value_or(input$volcano_label_size, 0.72),
+        show_thresholds = isTRUE(input$volcano_show_thresholds),
+        show_grid = isTRUE(input$volcano_show_grid),
+        font_family = heatmap_font_family(input$volcano_font_family)
+      )
+      dev.off()
+      showNotification(sprintf("Saved volcano plot to %s", out_path), type = "message", duration = 6)
+    })
+
     heatmap_selected_genes <- reactive({
       if (identical(input$heatmap_gene_mode, "manual")) {
         return(value_or(input$heatmap_genes, character(0)))
@@ -2439,6 +2735,10 @@ server <- function(input, output, session) {
     output$deg_pca_ui <- renderUI({
       tags$p("PCA has not been generated yet.")
     })
+    output$deg_volcano_plot <- renderPlot({
+      plot.new()
+      text(0.5, 0.5, "Volcano plot not available until differential expression outputs are generated.")
+    })
     output$deg_heatmap_plot <- renderPlot({
       plot.new()
       text(0.5, 0.5, "Heatmap not available until differential expression outputs are generated.")
@@ -2448,6 +2748,7 @@ server <- function(input, output, session) {
       updateTextAreaInput(session, "deg_down_genes", value = "")
       updateSelectizeInput(session, "deseq_gene_query", choices = character(0), selected = character(0), server = TRUE)
       updateSelectizeInput(session, "deg_gene_query", choices = character(0), selected = character(0), server = TRUE)
+      updateSelectizeInput(session, "volcano_label_genes", choices = character(0), selected = character(0), server = TRUE)
       updateSelectizeInput(session, "heatmap_genes", choices = character(0), selected = character(0), server = TRUE)
     })
   }
