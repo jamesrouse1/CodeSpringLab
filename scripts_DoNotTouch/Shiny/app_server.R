@@ -698,6 +698,77 @@ pdf_render_relpath <- function(resource_rel) {
   if (file.exists(full_png)) file.path("gseapy_results", png_rel) else NULL
 }
 
+js_string <- function(x) {
+  x <- gsub("\\", "\\\\", x)
+  x <- gsub("'", "\\'", x, fixed = TRUE)
+  paste0("'", x, "'")
+}
+
+pdf_canvas_block <- function(title, rel) {
+  canvas_id <- paste0(
+    "gsea_pdf_canvas_",
+    gsub("[^A-Za-z0-9_]", "_", substr(paste(title, rel, sep = "_"), 1, 80)),
+    "_",
+    sample.int(.Machine$integer.max, 1)
+  )
+  status_id <- paste0(canvas_id, "_status")
+  render_js <- sprintf(
+    "(function() {
+      var url = %s;
+      var canvasId = %s;
+      var statusId = %s;
+      function setStatus(message) {
+        var el = document.getElementById(statusId);
+        if (el) el.textContent = message || '';
+      }
+      function renderPdf() {
+        var canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        if (!window.pdfjsLib) {
+          setTimeout(renderPdf, 200);
+          return;
+        }
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        window.pdfjsLib.getDocument(url).promise.then(function(pdf) {
+          return pdf.getPage(1);
+        }).then(function(page) {
+          var container = canvas.parentElement;
+          var viewport = page.getViewport({ scale: 1 });
+          var targetWidth = Math.max(700, container ? container.clientWidth : 900);
+          var scale = targetWidth / viewport.width;
+          var scaled = page.getViewport({ scale: scale });
+          var ratio = window.devicePixelRatio || 1;
+          canvas.width = Math.floor(scaled.width * ratio);
+          canvas.height = Math.floor(scaled.height * ratio);
+          canvas.style.width = Math.floor(scaled.width) + 'px';
+          canvas.style.height = Math.floor(scaled.height) + 'px';
+          var ctx = canvas.getContext('2d');
+          ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+          setStatus('');
+          return page.render({ canvasContext: ctx, viewport: scaled }).promise;
+        }).catch(function(err) {
+          setStatus('Could not render this PDF in the browser. Open the original PDF below.');
+        });
+      }
+      renderPdf();
+    })();",
+    js_string(rel),
+    js_string(canvas_id),
+    js_string(status_id)
+  )
+  tags$div(
+    tags$h5(title),
+    tags$script(src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"),
+    tags$div(
+      style = "width: 100%; overflow-x: auto; border: 1px solid #ddd; background: #fff; margin-bottom: 12px;",
+      tags$canvas(id = canvas_id, style = "display: block; max-width: 100%;")
+    ),
+    tags$p(id = status_id, style = "color: #9a3412;"),
+    tags$script(HTML(render_js)),
+    tags$p(tags$a(href = rel, target = "_blank", "Open original PDF"))
+  )
+}
+
 normalized_counts_path <- function(treatment_value, control_value) {
   file.path(deseq2_dir, sprintf("normalized_counts_%s_vs_%s(ref).txt", treatment_value, control_value))
 }
@@ -2506,15 +2577,14 @@ server <- function(input, output, session) {
       plot_block <- function(title, rel) {
         if (is.null(rel)) return(NULL)
         rendered_rel <- pdf_render_relpath(rel)
-        tags$div(
-          tags$h5(title),
-          if (!is.null(rendered_rel)) {
-            tags$img(src = rendered_rel, style = "width: 100%; max-width: 100%; border: 1px solid #ddd; margin-bottom: 12px;")
-          } else {
-            tags$object(data = rel, type = "application/pdf", style = "width: 100%; height: 900px; border: 1px solid #ddd; margin-bottom: 12px;")
-          },
-          tags$p(tags$a(href = rel, target = "_blank", "Open original PDF"))
-        )
+        if (!is.null(rendered_rel)) {
+          return(tags$div(
+            tags$h5(title),
+            tags$img(src = rendered_rel, style = "width: 100%; max-width: 100%; border: 1px solid #ddd; margin-bottom: 12px;"),
+            tags$p(tags$a(href = rel, target = "_blank", "Open original PDF"))
+          ))
+        }
+        pdf_canvas_block(title, rel)
       }
       tags$div(
         plot_block("Enrichment Plot", pdf_rel),
