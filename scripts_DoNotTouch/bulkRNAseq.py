@@ -4,6 +4,10 @@ import pandas as pd
 import os
 import time
 import re
+import importlib
+import shlex
+import socket
+import subprocess
 from IPython.display import IFrame,clear_output,HTML,Image
 import shutil
 import seaborn as sns
@@ -1034,6 +1038,387 @@ def deseq2_RunDE(scriptpath_deseq2,Rpath_deseq2,inpath_counts,inpath_design,outp
     #jobid.append(job[1].split(' ')[2])
 
     return jobid
+
+def shiny_Prep(data_dir=None, inpath_design=None):
+    
+    global project_name
+    global res_dir
+
+    cfg = importlib.reload(config)
+    project_name = getattr(cfg, "project_name", project_name)
+    res_dir = getattr(cfg, "results_directory", res_dir)
+
+    shiny_dir = "../scripts_DoNotTouch/Shiny/"
+    shiny_dir_abs = os.path.abspath(os.path.expanduser(shiny_dir))
+    outpath_shiny = res_dir+project_name+"/shiny/"
+    os.makedirs(outpath_shiny,exist_ok=True)
+
+    default_data_dir = os.path.abspath(os.path.expanduser(res_dir+project_name+"/data"))
+    if data_dir is None or len(str(data_dir).strip()) == 0:
+        data_dir = default_data_dir
+    else:
+        data_dir = os.path.abspath(os.path.expanduser(data_dir))
+
+    design_base = inpath_design if inpath_design is not None else getattr(cfg, "inpath_design", "")
+    if len(design_base) > 0:
+        design_base = os.path.abspath(os.path.expanduser(design_base))
+        if design_base.endswith("design_matrix.txt"):
+            design_matrix_path = design_base
+        else:
+            design_matrix_path = os.path.join(design_base, "design_matrix.txt")
+    else:
+        design_matrix_path = ""
+
+    if (len(design_matrix_path) == 0) or (not os.path.exists(design_matrix_path)):
+        print("========================================")
+        print("Paste the full path to design_matrix.txt used for this project:")
+        print("If you paste the folder instead, design_matrix.txt will be added automatically.")
+        user_design = os.path.expanduser(input()).strip()
+        if user_design.endswith("design_matrix.txt"):
+            candidate = user_design
+        else:
+            candidate = os.path.join(user_design, "design_matrix.txt")
+        design_matrix_path = os.path.abspath(candidate)
+    else:
+        design_matrix_path = os.path.abspath(design_matrix_path)
+
+    config_path = outpath_shiny+"shiny_results_config.R"
+    with open(config_path, "w") as config_file:
+        config_file.write('project_name <- "'+project_name+'"'+'\n')
+        config_file.write('results_root <- "'+os.path.abspath(os.path.expanduser(res_dir))+'"'+'\n')
+        config_file.write('data_dir <- "'+data_dir+'"'+'\n')
+        config_file.write('design_matrix_path <- "'+design_matrix_path+'"'+'\n')
+        config_file.write('host <- "0.0.0.0"'+'\n')
+        config_file.write('port <- 3838'+'\n')
+        config_file.write('logo_search_dirs <- c('+'\n')
+        config_file.write('  "'+os.path.abspath(os.path.expanduser("../scripts_DoNotTouch"))+'"'+'\n')
+        config_file.write(')'+'\n')
+
+    config_path_abs = os.path.abspath(config_path)
+
+    return shiny_dir_abs, outpath_shiny, config_path_abs
+
+
+def _port_is_available(port, bind_host="127.0.0.1"):
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((bind_host, int(port)))
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    return True
+
+
+def _pick_available_port(start_port=3838, end_port=3900):
+
+    for port in range(int(start_port), int(end_port) + 1):
+        if _port_is_available(port):
+            return port
+    raise RuntimeError("No free Shiny port found between {} and {}".format(start_port, end_port))
+
+
+def shiny_Launch(shiny_dir, shiny_config_path, port=None, proxy_mode="relative", port_min=3838, port_max=3900, host="0.0.0.0"):
+
+    if port is None:
+        port = _pick_available_port(start_port=port_min, end_port=port_max)
+
+    port = int(port)
+    launch_cmd = [
+        "bash",
+        os.path.join(shiny_dir, "run_rnaseq_results_explorer.sh"),
+        shiny_config_path,
+        host,
+        str(port)
+    ]
+
+    proc = subprocess.Popen(
+        launch_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+
+    prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/").rstrip("/")
+    proxy_relative_suffix = "/proxy/{}/".format(port)
+    proxy_absolute_suffix = "/proxy/absolute/{}/".format(port)
+    proxy_relative_path = prefix + proxy_relative_suffix if prefix else proxy_relative_suffix
+    proxy_absolute_path = prefix + proxy_absolute_suffix if prefix else proxy_absolute_suffix
+    proxy_path = proxy_absolute_path if proxy_mode == "absolute" else proxy_relative_path
+
+    return {
+        "proc": proc,
+        "port": port,
+        "proxy_path": proxy_path,
+        "proxy_path_relative": proxy_relative_path,
+        "proxy_path_absolute": proxy_absolute_path,
+        "launch_cmd": launch_cmd
+    }
+
+
+def shiny_LaunchPy(shiny_dir, shiny_config_path, port=None, proxy_mode="relative", port_min=3838, port_max=3900, host="0.0.0.0", python_bin=None):
+
+    if port is None:
+        port = _pick_available_port(start_port=port_min, end_port=port_max)
+
+    if python_bin is None or len(str(python_bin).strip()) == 0:
+        python_bin = os.environ.get("PYTHON_BIN", "")
+    if python_bin is None or len(str(python_bin).strip()) == 0:
+        python_bin = "python"
+
+    port = int(port)
+    launch_cmd = [
+        "bash",
+        os.path.join(shiny_dir, "run_rnaseq_results_explorer_py.sh"),
+        shiny_config_path,
+        host,
+        str(port),
+        str(python_bin)
+    ]
+
+    proc = subprocess.Popen(
+        launch_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+
+    prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/").rstrip("/")
+    proxy_relative_suffix = "/proxy/{}/".format(port)
+    proxy_absolute_suffix = "/proxy/absolute/{}/".format(port)
+    proxy_relative_path = prefix + proxy_relative_suffix if prefix else proxy_relative_suffix
+    proxy_absolute_path = prefix + proxy_absolute_suffix if prefix else proxy_absolute_suffix
+    proxy_path = proxy_absolute_path if proxy_mode == "absolute" else proxy_relative_path
+
+    return {
+        "proc": proc,
+        "port": port,
+        "proxy_path": proxy_path,
+        "proxy_path_relative": proxy_relative_path,
+        "proxy_path_absolute": proxy_absolute_path,
+        "launch_cmd": launch_cmd,
+        "python_bin": python_bin
+    }
+
+
+def shiny_TerminalCommands(shiny_dir, shiny_config_path, username=None, server_host="bamdev1", port=None, port_min=3838, port_max=3900, server_only=False, minimal=False):
+
+    if (not server_only) and (username is None or len(str(username).strip()) == 0):
+        print("========================================")
+        print("Enter your CSHL username (for SSH tunnel command):")
+        username = input().strip()
+
+    if port is None:
+        port = _pick_available_port(start_port=port_min, end_port=port_max)
+    port = int(port)
+
+    run_script = os.path.join(shiny_dir, "run_rnaseq_results_explorer.sh")
+    pidfile = "~/.rnaseq_shiny_{}.pid".format(port)
+    logfile = "~/.rnaseq_shiny_{}.log".format(port)
+
+    server_cmd = (
+        "PORT={port}\n"
+        "PIDFILE={pidfile}\n"
+        "LOGFILE={logfile}\n"
+        "nohup bash {script} {cfg} 0.0.0.0 $PORT > $LOGFILE 2>&1 &\n"
+        "echo $! > $PIDFILE\n"
+        "echo \"Started R Shiny PID $(cat $PIDFILE) on port $PORT\"\n"
+        "echo \"Log: $LOGFILE\""
+    ).format(
+        port=port,
+        pidfile=pidfile,
+        logfile=logfile,
+        script=run_script,
+        cfg=shiny_config_path
+    )
+
+    local_cmd = None
+    if not server_only:
+        local_cmd = "ssh -N -L {p}:localhost:{p} {u}@{h}".format(
+            p=port,
+            u=username,
+            h=server_host
+        )
+
+    stop_cmd = "kill $(cat {pidfile}) && rm -f {pidfile}".format(pidfile=pidfile)
+
+    if minimal:
+        print(server_cmd)
+        print(stop_cmd)
+    else:
+        print("========================================")
+        print("Run this on bamdev1 terminal:")
+        print(server_cmd)
+        if not server_only:
+            print("========================================")
+            print("Run this on your local Mac terminal:")
+            print(local_cmd)
+            print("========================================")
+            print("Open this in browser:")
+            print("http://localhost:{}/".format(port))
+        print("========================================")
+        print("When done, stop the server on bamdev1 with:")
+        print(stop_cmd)
+
+    return {
+        "port": port,
+        "server_command": server_cmd,
+        "local_tunnel_command": local_cmd,
+        "browser_url": "http://localhost:{}/".format(port),
+        "stop_command": stop_cmd,
+        "pidfile": pidfile,
+        "logfile": logfile
+    }
+
+
+def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_host="bamdev1", port=None, port_min=3838, port_max=3900, print_stop=True, start_server_here=True):
+
+    if username is None or len(str(username).strip()) == 0:
+        username = os.environ.get("USER", "").strip()
+    if username is None or len(str(username).strip()) == 0:
+        print("Enter your CSHL username:")
+        username = input().strip()
+
+    if port is None:
+        port = _pick_available_port(start_port=port_min, end_port=port_max)
+    port = int(port)
+
+    run_script = os.path.join(shiny_dir, "run_rnaseq_results_explorer.sh")
+    pidfile = "~/.rnaseq_shiny_{}.pid".format(port)
+    logfile = "~/.rnaseq_shiny_{}.log".format(port)
+    pidfile_expanded = os.path.expanduser(pidfile)
+    logfile_expanded = os.path.expanduser(logfile)
+
+    if start_server_here:
+        log_handle = open(logfile_expanded, "a")
+        proc = subprocess.Popen(
+            ["bash", run_script, shiny_config_path, "0.0.0.0", str(port)],
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=log_handle,
+            start_new_session=True
+        )
+        log_handle.close()
+        with open(pidfile_expanded, "w") as f:
+            f.write(str(proc.pid))
+        one_liner = "ssh -N -L {p}:localhost:{p} {u}@{h}".format(
+            p=port,
+            u=username,
+            h=server_host
+        )
+    else:
+        remote_start_cmd = (
+            "nohup bash {script} {cfg} 0.0.0.0 {port} > {log} 2>&1 < /dev/null & "
+            "echo $! > {pid}"
+        ).format(
+            script=shlex.quote(run_script),
+            cfg=shlex.quote(shiny_config_path),
+            port=port,
+            log=logfile,
+            pid=pidfile
+        )
+        one_liner = (
+            "PORT={port}; "
+            "ssh {user}@{host} {remote}; "
+            "ssh -N -L ${{PORT}}:localhost:${{PORT}} {user}@{host}"
+        ).format(
+            port=port,
+            user=username,
+            host=server_host,
+            remote=shlex.quote(remote_start_cmd)
+        )
+
+    if start_server_here:
+        stop_cmd = "PORT={}; PIDS=$(lsof -ti :$PORT); if [ -n \"$PIDS\" ]; then kill $PIDS; fi; rm -f {}".format(port, pidfile)
+    else:
+        stop_cmd = (
+            "ssh {user}@{host} \"PORT={port}; "
+            "PIDS=\\$(lsof -ti :\\$PORT); "
+            "if [ -n \\\"\\$PIDS\\\" ]; then kill \\$PIDS; fi; "
+            "rm -f {pid}\""
+        ).format(
+            user=username,
+            host=server_host,
+            port=port,
+            pid=pidfile
+        )
+
+    print(one_liner)
+    print("http://localhost:{}/".format(port))
+    if print_stop:
+        print(stop_cmd)
+
+    return {
+        "port": port,
+        "one_liner": one_liner,
+        "stop_command": stop_cmd,
+        "browser_url": "http://localhost:{}/".format(port)
+    }
+
+
+def shiny_ServerFirstCommands(shiny_dir, shiny_config_path, username=None, server_host="bamdev1", port=None, port_min=3838, port_max=3900, print_stop=True, after_login_only=True, minimal_after_login=True):
+
+    if (not after_login_only) and (username is None or len(str(username).strip()) == 0):
+        print("Enter your CSHL username:")
+        username = input().strip()
+
+    if port is None:
+        port = _pick_available_port(start_port=port_min, end_port=port_max)
+    port = int(port)
+
+    run_script = os.path.join(shiny_dir, "run_rnaseq_results_explorer.sh")
+    pidfile = "~/.rnaseq_shiny_{}.pid".format(port)
+    logfile = "~/.rnaseq_shiny_{}.log".format(port)
+
+    login_cmd = None
+    if username is not None and len(str(username).strip()) > 0:
+        login_cmd = "ssh {user}@{host}".format(user=username, host=server_host)
+    server_cmd = (
+        "PORT={port}; "
+        "nohup bash {script} {cfg} 0.0.0.0 $PORT > {log} 2>&1 < /dev/null & "
+        "echo $! > {pid}"
+    ).format(
+        port=port,
+        script=shlex.quote(run_script),
+        cfg=shlex.quote(shiny_config_path),
+        log=logfile,
+        pid=pidfile
+    )
+    tunnel_cmd = None
+    if username is not None and len(str(username).strip()) > 0:
+        tunnel_cmd = "ssh -N -L {p}:localhost:{p} {u}@{h}".format(
+            p=port,
+            u=username,
+            h=server_host
+        )
+    browser_url = "http://localhost:{}/".format(port)
+    stop_cmd = "lsof -ti :{} | xargs -r kill".format(port)
+
+    if after_login_only:
+        if minimal_after_login:
+            print("bash {} {} 0.0.0.0 {} &".format(run_script, shiny_config_path, port))
+        else:
+            print(server_cmd)
+        if print_stop:
+            print(stop_cmd)
+    else:
+        print(login_cmd)
+        print(server_cmd)
+        print(tunnel_cmd)
+        print(browser_url)
+        if print_stop:
+            print(stop_cmd)
+
+    return {
+        "port": port,
+        "login_command": login_cmd,
+        "server_command": server_cmd,
+        "tunnel_command": tunnel_cmd,
+        "browser_url": browser_url,
+        "stop_command": stop_cmd
+    }
 
 def gseapy_Prep():
     
