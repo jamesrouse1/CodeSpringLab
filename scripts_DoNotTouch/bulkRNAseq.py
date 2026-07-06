@@ -923,12 +923,13 @@ def featurecounts_Prep(genome,out_dir,pairing):
     else:
         scriptpath_featurecounts = '../scripts_DoNotTouch/featureCounts/qsub_featurecounts_SE.sh'
 
-    feature = _config_value("feature", "")
-    if len(str(feature).strip()) > 0:
-        print("Using saved feature: "+str(feature))
-    else:
-        print("Specify the genomic feature to quantify (e.g gene_name, gene_id, etc):")
-        feature = input()
+    feature_default = _config_value("feature", "gene_id")
+    print("========================================")
+    print("Specify the genomic feature to quantify (gene_id or gene_name):")
+    print("Press enter/return to use "+str(feature_default))
+    feature = input().strip()
+    if len(feature) == 0:
+        feature = feature_default
     
     count_prefix_list = count_dir+prefix+'/'+prefix
     bam_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bam'
@@ -1803,6 +1804,8 @@ def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
 
     if gene_exp.index.to_series().astype(str).str.startswith("ENS").any():
         feature = "gene_id"
+    elif feature in ["", "auto"]:
+        feature = "gene_name"
 
     if genome == "human" and feature == "gene_name":
         gene_exp_conv = gene_exp.copy()
@@ -1839,9 +1842,6 @@ def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
 
 def _gseapy_gene_set_prompt():
     saved = _config_value("geneset", "")
-    if len(str(saved).strip()) > 0:
-        print("Using saved geneset: "+str(saved))
-        return os.path.expanduser(str(saved).strip())
 
     print("========================================")
     print("Specify gene set database or full path to a local .gmt file:")
@@ -1850,27 +1850,33 @@ def _gseapy_gene_set_prompt():
     print("FANTOM6_lncRNA_KD_DEGs, miRTarBase_2017, TRANSFAC_and_JASPAR_PWMs")
     print("GTEx_Tissues_V8_2023, CellMarker_2024, Cancer_Cell_Line_Encyclopedia")
     print("ClinVar_2019, GTEx_Aging_Signatures_2021, Proteomics_Drug_Atlas_2023")
+    if len(str(saved).strip()) > 0:
+        print("Press enter/return to use saved geneset: "+str(saved))
     geneset = os.path.expanduser(input().strip())
+    if len(geneset) == 0:
+        geneset = str(saved).strip()
     _save_config_updates(geneset=geneset)
     return geneset
     
 def _gseapy_comparison_from_config():
-    refcond = _config_value("refcond", "")
-    compared = _config_value("compared", "")
+    refcond_saved = str(_config_value("refcond", "")).strip()
+    compared_saved = str(_config_value("compared", "")).strip()
 
-    if len(str(refcond).strip()) == 0:
-        print("========================================")
-        print("Which phenotype/condition/replicate/batch should be the reference/baseline?(e.g control)")
-        refcond = input().strip()
-    else:
-        print("Using saved reference/baseline: "+str(refcond))
+    print("========================================")
+    print("Which phenotype/condition/replicate/batch should be the reference/baseline?(e.g control)")
+    if len(refcond_saved) > 0:
+        print("Press enter/return to use saved reference/baseline: "+refcond_saved)
+    refcond = input().strip()
+    if len(refcond) == 0:
+        refcond = refcond_saved
 
-    if len(str(compared).strip()) == 0:
-        print("========================================")
-        print("Which phenotype/condition/replicate/batch to compare?(e.g treated)")
-        compared = input().strip()
-    else:
-        print("Using saved comparison: "+str(compared))
+    print("========================================")
+    print("Which phenotype/condition/replicate/batch to compare?(e.g treated)")
+    if len(compared_saved) > 0:
+        print("Press enter/return to use saved comparison: "+compared_saved)
+    compared = input().strip()
+    if len(compared) == 0:
+        compared = compared_saved
 
     _save_config_updates(refcond=refcond, compared=compared)
     return str(refcond), str(compared)
@@ -1899,12 +1905,8 @@ def gseapy_PrepDirect():
     print("GSEApy results are stored in "+outpath_pathway)
 
     genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
-    feature = _config_value("feature", "")
-    if len(str(feature).strip()) == 0:
-        feature = "gene_name"
-        print("No saved feature found; defaulting to gene_name. Ensembl gene IDs will still be detected automatically.")
-    else:
-        print("Using saved feature: "+str(feature))
+    feature = "auto"
+    print("GSEA gene labels will be auto-detected from the normalized counts row names.")
 
     inpath_design = _config_value("inpath_design", "")
     if len(str(inpath_design).strip()) == 0:
