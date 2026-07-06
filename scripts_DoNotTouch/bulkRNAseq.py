@@ -19,6 +19,8 @@ import gseapy as gp
 from gseapy import GSEA,dotplot,heatmap
 import imgkit
 
+config = importlib.reload(config)
+
 project_name=getattr(config, 'project_name', 'example_dataset')
 param=getattr(config, 'parameters_exist', 'n')
 res_dir=getattr(config, 'results_directory', '../../csl_results/')

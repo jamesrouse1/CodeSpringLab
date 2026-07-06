@@ -51,6 +51,9 @@ def config(analysis_type=None):
         values = config_store.activate_project(analysis_type, last_project)
         print("Using saved "+label+" project: "+str(values.get("project_name", last_project)))
         print("Using saved results directory: "+str(values.get("results_directory", "../../csl_results/")))
+        if values.get("parameters_exist", "n") == "n":
+            print("Saved setup is missing genome, design matrix, or reads paths.")
+            print("Please answer the setup prompts once; they will be saved for this project.")
     else:
         values = _new_project_values(analysis_type, active_values)
         config_store.save_config_values(values, analysis_type)

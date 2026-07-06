@@ -22,6 +22,14 @@ ANALYSIS_LABELS = {
     "chip": "ChIP-seq"
 }
 
+REQUIRED_SETUP_KEYS = [
+    "read_path_original", "read_path_destination", "genome", "pairing",
+    "inpath_design", "scriptpath_listdir", "scriptpath_copy"
+]
+
+def setup_is_complete(values):
+    return all(len(str(values.get(key, "")).strip()) > 0 for key in REQUIRED_SETUP_KEYS)
+
 def scripts_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
@@ -101,11 +109,14 @@ def activate_project(analysis_type, project_name):
     active = read_values(config_path())
     project_values = load_project_values(analysis_type, project_name)
     if not project_values:
-        project_values = {
+        if str(active.get("project_name", "")).strip() == str(project_name).strip():
+            project_values = dict(active)
+        else:
+            project_values = {}
+        project_values.update({
             "analysis_type": analysis_type,
             "project_name": project_name,
-            "parameters_exist": "y",
             "results_directory": active.get("results_directory", "../../csl_results/")
-        }
-    project_values["parameters_exist"] = "y"
+        })
+    project_values["parameters_exist"] = "y" if setup_is_complete(project_values) else "n"
     return save_config_values(project_values, analysis_type)

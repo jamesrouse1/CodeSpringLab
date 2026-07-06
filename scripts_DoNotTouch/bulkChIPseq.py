@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 from pandas import DataFrame
 import imgkit
 
+config = importlib.reload(config)
+
 ANALYSIS_TYPE='chip'
 project_name=getattr(config, 'project_name', 'example_dataset')
 param=getattr(config, 'parameters_exist', 'n')
