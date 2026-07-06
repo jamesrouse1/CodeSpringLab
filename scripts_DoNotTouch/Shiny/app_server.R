@@ -1104,9 +1104,23 @@ app_tabs <- list(
               ),
               numericInput("heatmap_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
               numericInput("heatmap_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
-              numericInput("heatmap_save_width", "Saved width (px)", value = 2400, min = 600, max = 8000, step = 100),
-              numericInput("heatmap_save_height", "Saved height (px)", value = 1900, min = 600, max = 8000, step = 100),
-              numericInput("heatmap_save_res", "Saved resolution", value = 220, min = 72, max = 600, step = 10)
+              selectInput(
+                "heatmap_save_mode",
+                "Saved image size",
+                choices = c(
+                  "Match display" = "match",
+                  "High-res 2x" = "double",
+                  "High-res 3x" = "triple",
+                  "Custom" = "custom"
+                ),
+                selected = "double"
+              ),
+              conditionalPanel(
+                "input.heatmap_save_mode == 'custom'",
+                numericInput("heatmap_save_width", "Custom saved width (px)", value = 1800, min = 600, max = 8000, step = 100),
+                numericInput("heatmap_save_height", "Custom saved height (px)", value = 1400, min = 600, max = 8000, step = 100),
+                numericInput("heatmap_save_res", "Custom saved DPI", value = 96, min = 72, max = 600, step = 10)
+              )
             ),
             tags$hr(),
             helpText("Shows DEGs, PCA, and a custom heatmap for an available treatment vs control comparison.")
@@ -2291,11 +2305,24 @@ server <- function(input, output, session) {
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
       out_path <- file.path(deseq2_dir, filename)
+      display_width <- as.numeric(value_or(input$heatmap_plot_width, 900))
+      display_height <- as.numeric(value_or(input$heatmap_plot_height, 700))
+      save_mode <- value_or(input$heatmap_save_mode, "double")
+      save_scale <- if (identical(save_mode, "triple")) 3 else if (identical(save_mode, "double")) 2 else 1
+      save_width <- display_width * save_scale
+      save_height <- display_height * save_scale
+      save_res <- 96 * save_scale
+      if (identical(save_mode, "custom")) {
+        save_width <- as.numeric(value_or(input$heatmap_save_width, 1800))
+        save_height <- as.numeric(value_or(input$heatmap_save_height, 1400))
+        save_res <- as.numeric(value_or(input$heatmap_save_res, 96))
+      }
       png(
         out_path,
-        width = as.numeric(value_or(input$heatmap_save_width, 2400)),
-        height = as.numeric(value_or(input$heatmap_save_height, 1900)),
-        res = as.numeric(value_or(input$heatmap_save_res, 220))
+        width = save_width,
+        height = save_height,
+        units = "px",
+        res = save_res
       )
       heatmap_theme <- value_or(input$heatmap_theme, "publication")
       pheatmap::pheatmap(
