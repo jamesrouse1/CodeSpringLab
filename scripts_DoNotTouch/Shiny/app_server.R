@@ -1001,7 +1001,7 @@ draw_volcano_plot <- function(plot_df, labels, title, subtitle, p_cutoff, lfc_cu
         ggplot2::geom_hline(yintercept = threshold_y, color = "#7f8792", linetype = "dashed", size = 0.45)
     }
     p <- p +
-      ggplot2::geom_point(alpha = as.numeric(value_or(point_alpha, 0.72)), size = as.numeric(value_or(point_size, 0.75))) +
+      ggplot2::geom_point(alpha = as.numeric(value_or(point_alpha, 0.72)), size = as.numeric(value_or(point_size, 2.5))) +
       ggplot2::scale_color_manual(
         values = c("Down" = pal[["down"]], "Not significant" = pal[["nonsig"]], "Up" = pal[["up"]]),
         breaks = c("Up", "Down", "Not significant")
@@ -1029,7 +1029,7 @@ draw_volcano_plot <- function(plot_df, labels, title, subtitle, p_cutoff, lfc_cu
         data = label_hits,
         ggplot2::aes(label = gene_label),
         color = pal[["selected"]],
-        size = max(2.5, as.numeric(value_or(label_size, 0.72)) * 3.4),
+        size = max(2.5, as.numeric(value_or(label_size, 2.5))),
         box.padding = 0.55,
         point.padding = 0.35,
         min.segment.length = 0,
@@ -1070,10 +1070,10 @@ draw_volcano_plot <- function(plot_df, labels, title, subtitle, p_cutoff, lfc_cu
   cols <- rep(pal[["nonsig"]], nrow(plot_df))
   cols[plot_df$status == "Up"] <- pal[["up"]]
   cols[plot_df$status == "Down"] <- pal[["down"]]
-  points(x, y, pch = 16, col = adjustcolor(cols, alpha.f = as.numeric(value_or(point_alpha, 0.72))), cex = as.numeric(value_or(point_size, 0.75)))
+  points(x, y, pch = 16, col = adjustcolor(cols, alpha.f = as.numeric(value_or(point_alpha, 0.72))), cex = as.numeric(value_or(point_size, 2.5)))
   if (nrow(label_hits)) {
     text(label_hits$log2FoldChange, label_hits$neg_log10_p, labels = label_hits$gene_label,
-         pos = 3, cex = as.numeric(value_or(label_size, 0.72)), col = pal[["selected"]], xpd = NA)
+         pos = 3, cex = as.numeric(value_or(label_size, 2.5)), col = pal[["selected"]], xpd = NA)
   }
   legend("topright", legend = c("Up", "Down", "Not significant"),
          col = c(pal[["up"]], pal[["down"]], pal[["nonsig"]]), pch = 16, bty = "n", text.col = theme$fg, cex = 0.85)
@@ -1323,9 +1323,9 @@ app_tabs <- list(
                 "input.volcano_label_mode == 'top'",
                 numericInput("volcano_max_labels", "Maximum labels", value = 20, min = 0, max = 100, step = 1)
               ),
-              numericInput("volcano_point_size", "Point size", value = 0.75, min = 0.2, max = 3, step = 0.05),
+              numericInput("volcano_point_size", "Point size", value = 2.5, min = 0.2, max = 8, step = 0.1),
               numericInput("volcano_point_alpha", "Point opacity", value = 0.72, min = 0.1, max = 1, step = 0.05),
-              numericInput("volcano_label_size", "Label size", value = 0.72, min = 0.3, max = 2, step = 0.05),
+              numericInput("volcano_label_size", "Label size", value = 2.5, min = 0.5, max = 8, step = 0.1),
               selectInput(
                 "volcano_font_family",
                 "Font family",
@@ -2643,9 +2643,9 @@ server <- function(input, output, session) {
         lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
         style = value_or(input$volcano_style, "publication"),
         palette_style = value_or(input$volcano_palette, "publication"),
-        point_size = value_or(input$volcano_point_size, 0.75),
+        point_size = value_or(input$volcano_point_size, 2.5),
         point_alpha = value_or(input$volcano_point_alpha, 0.72),
-        label_size = value_or(input$volcano_label_size, 0.72),
+        label_size = value_or(input$volcano_label_size, 2.5),
         show_thresholds = isTRUE(input$volcano_show_thresholds),
         show_grid = isTRUE(input$volcano_show_grid),
         font_family = heatmap_font_family(input$volcano_font_family)
@@ -2690,9 +2690,9 @@ server <- function(input, output, session) {
         lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
         style = value_or(input$volcano_style, "publication"),
         palette_style = value_or(input$volcano_palette, "publication"),
-        point_size = value_or(input$volcano_point_size, 0.75),
+        point_size = value_or(input$volcano_point_size, 2.5),
         point_alpha = value_or(input$volcano_point_alpha, 0.72),
-        label_size = value_or(input$volcano_label_size, 0.72),
+        label_size = value_or(input$volcano_label_size, 2.5),
         show_thresholds = isTRUE(input$volcano_show_thresholds),
         show_grid = isTRUE(input$volcano_show_grid),
         font_family = heatmap_font_family(input$volcano_font_family)
