@@ -18,9 +18,110 @@ import gseapy as gp
 from gseapy import GSEA,dotplot,heatmap
 import imgkit
 
-project_name=config.project_name
-param=config.parameters_exist
-res_dir=config.results_directory
+project_name=getattr(config, 'project_name', 'example_dataset')
+param=getattr(config, 'parameters_exist', 'n')
+res_dir=getattr(config, 'results_directory', '../../csl_results/')
+
+
+CONFIG_KEYS = [
+    "project_name", "parameters_exist", "results_directory",
+    "read_path_original", "read_path_destination", "genome", "pairing",
+    "inpath_design", "scriptpath_listdir", "scriptpath_copy",
+    "feature", "outpath_counts", "outpath_deseq2",
+    "refcond", "compared", "redundant", "geneset",
+    "visualizer_data_dir"
+]
+
+def _config_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.py")
+
+def _config_value(key, default=""):
+    return getattr(config, key, default)
+
+def _as_config_dir(path):
+    if path is None:
+        return ""
+    path = os.path.expanduser(str(path).strip())
+    if len(path) == 0:
+        return ""
+    return path.rstrip("/")
+
+def _with_slash(path):
+    path = _as_config_dir(path)
+    if len(path) == 0:
+        return path
+    return path+"/"
+
+def _design_matrix_path(path):
+    path = _as_config_dir(path)
+    if len(path) == 0:
+        return ""
+    if path.endswith("design_matrix.txt"):
+        return path
+    return os.path.join(path, "design_matrix.txt")
+
+def _config_snapshot():
+    values = {}
+    for key in CONFIG_KEYS:
+        if hasattr(config, key):
+            values[key] = getattr(config, key)
+    values.setdefault("project_name", project_name)
+    values.setdefault("parameters_exist", param)
+    values.setdefault("results_directory", res_dir)
+    return values
+
+def _save_config_updates(**updates):
+    global project_name
+    global param
+    global res_dir
+
+    values = _config_snapshot()
+    for key, value in updates.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = os.path.expanduser(value.strip())
+        values[key] = value
+
+    for required_key in ["project_name", "parameters_exist", "results_directory"]:
+        values.setdefault(required_key, _config_value(required_key, ""))
+
+    ordered_keys = [key for key in CONFIG_KEYS if key in values]
+    ordered_keys += sorted([key for key in values if key not in ordered_keys])
+
+    with open(_config_path(), "w") as conf:
+        for key in ordered_keys:
+            conf.write(key+"="+repr(str(values[key]))+"\n")
+
+    importlib.invalidate_caches()
+    cfg = importlib.reload(config)
+    project_name = getattr(cfg, "project_name", project_name)
+    param = getattr(cfg, "parameters_exist", param)
+    res_dir = getattr(cfg, "results_directory", res_dir)
+    return cfg
+
+def _saved_or_prompt(key, prompt, default="", example=None, normalize_dir=False, allow_blank=False):
+    value = _config_value(key, default)
+    if value is not None and len(str(value).strip()) > 0:
+        value = str(value).strip()
+        print("Using saved "+key+": "+value)
+        return _with_slash(value) if normalize_dir else value
+
+    print("========================================")
+    print(prompt)
+    if example is not None:
+        print("\033[91m"+"If you want to use our example dataset, use:"+"\x1b[0m")
+        print("\033[94m"+example+"\x1b[0m")
+    value = input().strip()
+    if len(value) == 0 and not allow_blank:
+        value = default
+    value = os.path.expanduser(value)
+    _save_config_updates(**{key: value})
+    return _with_slash(value) if normalize_dir else value
+
+def _default_data_dir():
+    return os.path.abspath(os.path.expanduser(os.path.join(res_dir, project_name, "data")))
+
 
 def Tree():
     
@@ -144,40 +245,31 @@ def _maybe_launch_results_explorer_from_setup():
     if not jump.startswith("y"):
         return None
 
-    default_data_dir = os.path.abspath(os.path.expanduser(res_dir+project_name+"/data"))
-    default_design = getattr(config, "inpath_design", "")
+    default_data_dir = _config_value("visualizer_data_dir", _default_data_dir())
+    default_data_dir = os.path.abspath(os.path.expanduser(default_data_dir))
+    default_design = _design_matrix_path(_config_value("inpath_design", ""))
     if len(default_design) > 0:
         default_design = os.path.abspath(os.path.expanduser(default_design))
-        if not default_design.endswith("design_matrix.txt"):
-            default_design = os.path.join(default_design, "design_matrix.txt")
 
-    example_data_dir = "~/csl_results/example_dataset/data"
-    print("==================================")
-    print("Copy the path to the completed data folder for the visualizer:")
-    print("\033[91m"+"If you want to use our example dataset and it is stored in your home folder, copy and paste this path below,"+"\x1b[0m")
-    print("\033[94m"+example_data_dir+"\x1b[0m")
-    print("Current saved/default data folder:")
-    print(default_data_dir)
-    data_dir = input().strip()
-    if len(data_dir) == 0:
-        data_dir = default_data_dir
-    data_dir = os.path.abspath(os.path.expanduser(data_dir))
+    data_dir = default_data_dir
+    print("Using saved/default visualizer data folder:")
+    print(data_dir)
 
-    print("==================================")
-    print("Copy the path to design_matrix.txt used for the visualizer:")
-    print("\033[91m"+"If you want to use our example dataset and it is stored in your home folder, copy and paste this path below,"+"\x1b[0m")
-    print("\033[94m"+"../scripts_DoNotTouch/test/manifest/"+"\x1b[0m")
     if len(default_design) > 0:
-        print("Current saved/default design matrix path:")
-        print(default_design)
-    else:
-        print("No previous design matrix path was saved in config.py.")
-    design_matrix = input().strip()
-    if len(design_matrix) == 0:
         design_matrix = default_design
-    design_matrix = os.path.abspath(os.path.expanduser(design_matrix)) if len(design_matrix) > 0 else design_matrix
-    if len(design_matrix) > 0 and not design_matrix.endswith("design_matrix.txt"):
-        design_matrix = os.path.join(design_matrix, "design_matrix.txt")
+        print("Using saved design matrix path:")
+        print(design_matrix)
+    else:
+        example_design = "../scripts_DoNotTouch/test/manifest/"
+        print("==================================")
+        print("Copy the path to design_matrix.txt used for the visualizer:")
+        print("\033[91m"+"If you want to use our example dataset, use:"+"\x1b[0m")
+        print("\033[94m"+example_design+"\x1b[0m")
+        design_matrix = input().strip()
+        design_matrix = _design_matrix_path(design_matrix)
+        design_matrix = os.path.abspath(os.path.expanduser(design_matrix)) if len(design_matrix) > 0 else design_matrix
+
+    _save_config_updates(visualizer_data_dir=data_dir, inpath_design=os.path.dirname(design_matrix) if len(design_matrix) > 0 else "")
 
     shiny_dir, outpath_shiny, shiny_config_path = shiny_Prep(data_dir=data_dir, inpath_design=design_matrix)
     _ = shiny_OutsideOneLiner(shiny_dir, shiny_config_path, start_server_here=True)
@@ -201,7 +293,7 @@ def filetransfer_Prep():
     jump_results = _maybe_launch_results_explorer_from_setup()
     if jump_results is not None:
         read_path_original,read_path_destination,scriptpath_copy,genome,pairing,inpath_design = jump_results
-        return read_path_original+"/",read_path_destination+"/",scriptpath_copy,genome,pairing,inpath_design+"/"
+        return _with_slash(read_path_original),_with_slash(read_path_destination),scriptpath_copy,genome,pairing,_with_slash(inpath_design)
 
     os.makedirs(res_dir+project_name+"/data/",exist_ok=True)
     #os.makedirs(res_dir+project_name+"/data/manifest/",exist_ok=True)
@@ -258,28 +350,36 @@ def filetransfer_Prep():
         else:
             pairing = 'n'
 
-        conf = open("../scripts_DoNotTouch/config.py", "w")
-        conf.write("project_name="+"'"+project_name+"'"+"\n")
-        conf.write("parameters_exist="+"'"+param+"'"+"\n")
-        conf.write("results_directory="+"'"+res_dir+"'"+"\n")
-        conf.write("read_path_original="+"'"+read_path_original+"'"+"\n")
-        conf.write("read_path_destination="+"'"+read_path_destination+"'"+"\n")
-        conf.write("genome="+"'"+genome+"'"+"\n")
-        conf.write("pairing="+"'"+pairing+"'"+"\n")
-        conf.write("inpath_design="+"'"+inpath_design+"'"+"\n")
-        conf.write("scriptpath_listdir="+"'"+scriptpath_listdir+"'"+"\n")
-        conf.write("scriptpath_copy="+"'"+scriptpath_copy+"'")
-        conf.close()
+        _save_config_updates(project_name=project_name,
+                             parameters_exist=param,
+                             results_directory=res_dir,
+                             read_path_original=read_path_original,
+                             read_path_destination=read_path_destination,
+                             genome=genome,
+                             pairing=pairing,
+                             inpath_design=inpath_design,
+                             scriptpath_listdir=scriptpath_listdir,
+                             scriptpath_copy=scriptpath_copy,
+                             visualizer_data_dir=res_dir+project_name+"/data")
 
     else:
     
-        read_path_original=config.read_path_original
-        read_path_destination=config.read_path_destination
-        genome=config.genome
-        pairing=config.pairing
-        inpath_design=config.inpath_design
-        scriptpath_listdir=config.scriptpath_listdir
-        scriptpath_copy=config.scriptpath_copy
+        required = ["read_path_original", "read_path_destination", "genome", "pairing", "inpath_design", "scriptpath_listdir", "scriptpath_copy"]
+        missing = [key for key in required if len(str(_config_value(key, "")).strip()) == 0]
+        if missing:
+            print("Saved project setup is missing: "+", ".join(missing))
+            print("Please answer the setup prompts once; the values will be saved for the next tools.")
+            param = "n"
+            return filetransfer_Prep()
+
+        read_path_original=_config_value("read_path_original")
+        read_path_destination=_config_value("read_path_destination")
+        genome=_config_value("genome")
+        pairing=_config_value("pairing")
+        inpath_design=_config_value("inpath_design")
+        scriptpath_listdir=_config_value("scriptpath_listdir")
+        scriptpath_copy=_config_value("scriptpath_copy")
+        print("Using saved project setup from config.py.")
 
     #command = "sbatch "+scriptpath_listdir+" "+read_path_original+" "+project_name
     ##command = "source "+scriptpath_listdir+" "+read_path_original+" "+project_name
@@ -287,7 +387,7 @@ def filetransfer_Prep():
     ##print(joblist)
     
     #return read_path_original,read_path_destination,scriptpath_copy,scriptpath_listdir,genome,pairing,inpath_design
-    return read_path_original+"/",read_path_destination+"/",scriptpath_copy,genome,pairing,inpath_design+"/"
+    return _with_slash(read_path_original),_with_slash(read_path_destination),scriptpath_copy,genome,pairing,_with_slash(inpath_design)
 
 def filetransfer_ListDir(read_path_original):
     
@@ -746,6 +846,7 @@ def kallisto_Prep(genome,pairing,read_dir,inpath_design):
     else:
         scriptpath_kallisto = '../scripts_DoNotTouch/Kallisto/qsub_kallisto_SE.sh'
 
+    _save_config_updates(genome=genome, pairing=pairing, inpath_design=inpath_design, feature='gene_id')
     return genome_index_path,read1_list,read2_list,out_prefix_list,out_dir_kal,scriptpath_kallisto
 
 def kallisto_PrepDirect():
@@ -943,6 +1044,7 @@ def rsem_Prep(genome,out_dir,pairing):
     bam_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bam'
     bamTranscript_list = out_dir+prefix+'/'+prefix+'Aligned.toTranscriptome.out.bam'
 
+    _save_config_updates(genome=genome, pairing=pairing, feature=feature)
     return scriptpath_rsem,rsem_index,bam_list,count_prefix_list,prefix,feature,strandBED,bamTranscript_list
 
 def rsem_PrepDirect():
@@ -1030,6 +1132,7 @@ def rsem_CreateCountMatrix():
     isoform_tpm_matrix.to_csv(outpath_counts+'isoform_tpm_matrix.txt',sep='\t')
     isoform_fpkm_matrix.to_csv(outpath_counts+'isoform_fpkm_matrix.txt',sep='\t')
 
+    _save_config_updates(outpath_counts=outpath_counts, feature='gene_id')
     return outpath_counts,gene_tpm_matrix,gene_fpkm_matrix,isoform_tpm_matrix,isoform_fpkm_matrix
 
 def deseq2_Prep(inpath_design):
@@ -1071,6 +1174,11 @@ def deseq2_Prep(inpath_design):
     scriptpath_deseq2 = '../scripts_DoNotTouch/DESeq2/qsub_deseq2.sh'
     Rpath_deseq2 = '../scripts_DoNotTouch/DESeq2/DESeq2.R'
     
+    _save_config_updates(inpath_design=inpath_design,
+                         outpath_deseq2=outpath,
+                         refcond=refcond,
+                         compared=compared,
+                         redundant=redundant)
     return scriptpath_deseq2,Rpath_deseq2,outpath,refcond,compared,design_var,redundant
     
 def deseq2_PrepDirect():
@@ -1085,7 +1193,8 @@ def deseq2_PrepDirect():
     inpath_design = os.path.expanduser(inpath_design)
     print("========================================")
     
-    return outpath_counts+"/",inpath_design+"/"
+    _save_config_updates(outpath_counts=outpath_counts, inpath_design=inpath_design)
+    return _with_slash(outpath_counts),_with_slash(inpath_design)
 
 def deseq2_RunDE(scriptpath_deseq2,Rpath_deseq2,inpath_counts,inpath_design,outpath,refcond,compared,redundant):
     
@@ -1159,6 +1268,8 @@ def shiny_Prep(data_dir=None, inpath_design=None):
         config_file.write('logo_search_dirs <- c('+'\n')
         config_file.write('  "'+os.path.abspath(os.path.expanduser("../scripts_DoNotTouch"))+'"'+'\n')
         config_file.write(')'+'\n')
+
+    _save_config_updates(visualizer_data_dir=data_dir, inpath_design=os.path.dirname(design_matrix_path))
 
     config_path_abs = os.path.abspath(config_path)
 
@@ -1686,6 +1797,9 @@ def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
     if feature == "gene_id" or gene_exp.index.to_series().str.startswith("ENS").any():
         gene_exp.index = _clean_ensembl_ids(gene_exp.index).values
 
+    if gene_exp.index.to_series().astype(str).str.startswith("ENS").any():
+        feature = "gene_id"
+
     if genome == "human" and feature == "gene_name":
         gene_exp_conv = gene_exp.copy()
         gene_exp_conv["GENE"] = gene_exp_conv.index
@@ -1719,22 +1833,11 @@ def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
     print("WARNING: Genome '"+str(genome)+"' not recognized for pathway gene mapping; using input gene labels directly.")
     return _collapse_gsea_expression(gene_exp_conv, sample_cols)
 
-def gseapy_Prep():
-    
-    global project_name
-    global res_dir
-
-    print("========================================")
-    print("Which phenotype/condition/replicate/batch should be the reference/baseline?(e.g control)")
-    refcond = input()
-    
-    print("========================================")
-    print("Which phenotype/condition/replicate/batch to compare?(e.g treated)")
-    compared = input()
-    
-    outpath_pathway = res_dir+project_name+"/data/gseapy/"+compared+'_vs_'+refcond+"/"
-    os.makedirs(outpath_pathway,exist_ok=True)
-    print("GSEApy results are stored in "+res_dir+project_name+"/data/gseapy/")
+def _gseapy_gene_set_prompt():
+    saved = _config_value("geneset", "")
+    if len(str(saved).strip()) > 0:
+        print("Using saved geneset: "+str(saved))
+        return os.path.expanduser(str(saved).strip())
 
     print("========================================")
     print("Specify gene set database or full path to a local .gmt file:")
@@ -1744,7 +1847,41 @@ def gseapy_Prep():
     print("GTEx_Tissues_V8_2023, CellMarker_2024, Cancer_Cell_Line_Encyclopedia")
     print("ClinVar_2019, GTEx_Aging_Signatures_2021, Proteomics_Drug_Atlas_2023")
     geneset = os.path.expanduser(input().strip())
+    _save_config_updates(geneset=geneset)
+    return geneset
     
+def _gseapy_comparison_from_config():
+    refcond = _config_value("refcond", "")
+    compared = _config_value("compared", "")
+
+    if len(str(refcond).strip()) == 0:
+        print("========================================")
+        print("Which phenotype/condition/replicate/batch should be the reference/baseline?(e.g control)")
+        refcond = input().strip()
+    else:
+        print("Using saved reference/baseline: "+str(refcond))
+
+    if len(str(compared).strip()) == 0:
+        print("========================================")
+        print("Which phenotype/condition/replicate/batch to compare?(e.g treated)")
+        compared = input().strip()
+    else:
+        print("Using saved comparison: "+str(compared))
+
+    _save_config_updates(refcond=refcond, compared=compared)
+    return str(refcond), str(compared)
+
+def gseapy_Prep():
+
+    global project_name
+    global res_dir
+
+    refcond, compared = _gseapy_comparison_from_config()
+    outpath_pathway = res_dir+project_name+"/data/gseapy/"+compared+'_vs_'+refcond+"/"
+    os.makedirs(outpath_pathway,exist_ok=True)
+    print("GSEApy results are stored in "+outpath_pathway)
+
+    geneset = _gseapy_gene_set_prompt()
     return geneset,outpath_pathway
 
 def gseapy_PrepDirect():
@@ -1752,45 +1889,46 @@ def gseapy_PrepDirect():
     global project_name
     global res_dir
 
-    print("========================================")
-    print("Which phenotype/condition/replicate/batch should be the reference/baseline?(e.g control)")
-    refcond = input()
-    
-    print("========================================")
-    print("Which phenotype/condition/replicate/batch to compare?(e.g treated)")
-    compared = input()
-    
+    refcond, compared = _gseapy_comparison_from_config()
     outpath_pathway = res_dir+project_name+"/data/gseapy/"+compared+'_vs_'+refcond+"/"
     os.makedirs(outpath_pathway,exist_ok=True)
-    print("GSEApy results are stored in "+res_dir+project_name+"/data/gseapy/"+compared+'_vs_'+refcond+"/")
+    print("GSEApy results are stored in "+outpath_pathway)
 
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    
-    print("========================================")
-    print("Specify the genomic feature to quantify (e.g gene_name, gene_id, etc):")
-    feature = input() 
-    
-    print("========================================")
-    print("Specify the path to folder containing design_matrix.txt used for DE:")
-    inpath_design = input()
-    inpath_design = os.path.expanduser(inpath_design)
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    feature = _config_value("feature", "")
+    if len(str(feature).strip()) == 0:
+        feature = "gene_name"
+        print("No saved feature found; defaulting to gene_name. Ensembl gene IDs will still be detected automatically.")
+    else:
+        print("Using saved feature: "+str(feature))
 
-    print("========================================")
-    print("Specify the path to folder containing normalized counts from DE:")
-    outpath = input()
+    inpath_design = _config_value("inpath_design", "")
+    if len(str(inpath_design).strip()) == 0:
+        inpath_design = _saved_or_prompt("inpath_design",
+                                         "Specify the path to folder containing design_matrix.txt used for DE:",
+                                         example="../scripts_DoNotTouch/test/manifest/",
+                                         normalize_dir=False)
+    inpath_design = _as_config_dir(inpath_design)
 
-    print("========================================")
-    print("Specify gene set database or full path to a local .gmt file:")
-    print("MSigDB_Hallmark_2020, KEGG_2021_Human, GO_Biological_Process_2025, Reactome_Pathways_2024")
-    print("ARCHS4_TFs_Coexp, ENCODE_TF_ChIP-seq_2015, ENCODE_Histone_Modifications_2015")
-    print("FANTOM6_lncRNA_KD_DEGs, miRTarBase_2017, TRANSFAC_and_JASPAR_PWMs")
-    print("GTEx_Tissues_V8_2023, CellMarker_2024, Cancer_Cell_Line_Encyclopedia")
-    print("ClinVar_2019, GTEx_Aging_Signatures_2021, Proteomics_Drug_Atlas_2023")
-    geneset = os.path.expanduser(input().strip())
-    
-    return geneset,genome,feature,inpath_design+"/",outpath+"/",outpath_pathway,refcond,compared
+    outpath = _config_value("outpath_deseq2", res_dir+project_name+"/data/deseq2/")
+    if len(str(outpath).strip()) > 0:
+        print("Using saved/default DESeq2 normalized-counts folder: "+str(outpath))
+    else:
+        outpath = _saved_or_prompt("outpath_deseq2",
+                                   "Specify the path to folder containing normalized counts from DE:",
+                                   normalize_dir=False)
+    outpath = _as_config_dir(outpath)
+
+    geneset = _gseapy_gene_set_prompt()
+    _save_config_updates(genome=genome,
+                         feature=feature,
+                         inpath_design=inpath_design,
+                         outpath_deseq2=outpath,
+                         refcond=refcond,
+                         compared=compared,
+                         geneset=geneset)
+
+    return geneset,genome,feature,_with_slash(inpath_design),_with_slash(outpath),outpath_pathway,refcond,compared
 
 def gseapy_RunPathway(geneset,genome,feature,inpath_design,outpath,outpath_pathway,refcond,compared):
     
