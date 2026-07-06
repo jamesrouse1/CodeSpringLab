@@ -288,6 +288,150 @@ def _maybe_launch_results_explorer_from_setup():
     return read_path_original, read_path_destination, scriptpath_copy, genome, pairing, design_dir
 
 
+
+def _normalize_yes_no(value):
+    value = str(value).strip().lower()
+    if value in ["y", "yes", "paired", "pe", "p"]:
+        return "y"
+    if value in ["n", "no", "single", "single-end", "se", "s"]:
+        return "n"
+    return value
+
+def _fastq_files(folder):
+    folder = os.path.abspath(os.path.expanduser(str(folder).strip()))
+    if not os.path.isdir(folder):
+        raise ValueError("FASTQ folder does not exist: "+folder)
+    files = sorted([
+        f for f in os.listdir(folder)
+        if f.lower().endswith((".fastq.gz", ".fq.gz", ".fastq", ".fq"))
+    ])
+    return files
+
+def _fastq_sample_stem(filename):
+    stem = os.path.basename(str(filename))
+    for suffix in [".fastq.gz", ".fq.gz", ".fastq", ".fq"]:
+        if stem.lower().endswith(suffix):
+            stem = stem[:-len(suffix)]
+            break
+    patterns = [
+        r"(_R[12]_001)$",
+        r"(_R[12])$"
+    ]
+    for pattern in patterns:
+        stem = re.sub(pattern, "", stem)
+    stem = re.sub(r"[^A-Za-z0-9_]+", "_", stem).strip("_")
+    return stem or "sample"
+
+def _paired_fastq_rows(files):
+    r1_files = [f for f in files if re.search(r"(_R1_001|_R1)(\.f(ast)?q(\.gz)?)$", f, flags=re.IGNORECASE)]
+    rows = []
+    missing = []
+    for r1 in r1_files:
+        r2 = re.sub(r"_R1_001", "_R2_001", r1, flags=re.IGNORECASE)
+        if r2 == r1:
+            r2 = re.sub(r"_R1", "_R2", r1, flags=re.IGNORECASE)
+        if r2 in files:
+            rows.append((_fastq_sample_stem(r1), r1+","+r2))
+        else:
+            missing.append(r1)
+    if len(rows) == 0:
+        raise ValueError("No paired FASTQ files were detected. Expected names containing _R1/_R2, for example sample_R1_001.fastq.gz and sample_R2_001.fastq.gz.")
+    if len(missing) > 0:
+        print("\033[91m"+"WARNING: These R1 files did not have matching R2 files and were skipped:"+"\x1b[0m")
+        print(pd.Series(missing).to_string(index=False))
+    return rows
+
+def _single_fastq_rows(files):
+    keep = [f for f in files if not re.search(r"(_R2_001|_R2)(\.f(ast)?q(\.gz)?)$", f, flags=re.IGNORECASE)]
+    if len(keep) == 0:
+        raise ValueError("No single-end FASTQ files were detected.")
+    return [(_fastq_sample_stem(f), f) for f in keep]
+
+def _display_design_matrix(design_path):
+    des = pd.read_table(design_path)
+    print("==================================")
+    print("Design matrix preview:")
+    try:
+        from IPython.display import display, HTML
+        display(HTML(des.to_html(index=False)))
+    except Exception:
+        print(des.to_string(index=False))
+    print("Design matrix saved at:")
+    print("\033[94m"+design_path+"\x1b[0m")
+    return des
+
+def _resolve_design_matrix_path(path_value):
+    path_value = os.path.abspath(os.path.expanduser(str(path_value).strip()))
+    if path_value.endswith("design_matrix.txt"):
+        return path_value
+    return os.path.join(path_value, "design_matrix.txt")
+
+def _prompt_design_matrix_for_new_rna_project(read_path_original, pairing):
+    red = "\033[91m"
+    blue = "\033[94m"
+    reset = "\x1b[0m"
+    print("==================================")
+    print("How do you want to provide the design matrix?")
+    print("Type "+blue+"1"+reset+" to provide an existing design_matrix.txt path")
+    print("Type "+blue+"2"+reset+" to create it now from user inputs")
+    design_mode = input().strip()
+
+    if design_mode in ["1", "manual", "m"]:
+        print("==================================")
+        print("Copy the path to design_matrix.txt or its folder:")
+        print(red+"If you want to use our example dataset, copy and paste this path below,"+reset)
+        print("../scripts_DoNotTouch/test/manifest/")
+        design_path = _resolve_design_matrix_path(input())
+        if not os.path.exists(design_path):
+            raise FileNotFoundError("design_matrix.txt was not found at: "+design_path)
+        _display_design_matrix(design_path)
+        return os.path.dirname(design_path)
+
+    files = _fastq_files(read_path_original)
+    print("==================================")
+    print("FASTQ files detected:")
+    print(pd.Series(files).to_string(index=False))
+    rows = _paired_fastq_rows(files) if pairing == "y" else _single_fastq_rows(files)
+
+    default_design_dir = os.path.join(res_dir, project_name, "data", "manifest")
+    os.makedirs(default_design_dir, exist_ok=True)
+
+    print("==================================")
+    print("Enter design/metadata column names separated by commas.")
+    print("For most RNA-seq projects, type "+blue+"treatment"+reset)
+    metadata_input = input().strip()
+    metadata_cols = [x.strip() for x in metadata_input.split(",") if len(x.strip()) > 0]
+    if len(metadata_cols) == 0:
+        metadata_cols = ["treatment"]
+    metadata_cols = [re.sub(r"[^A-Za-z0-9_]+", "_", x).strip("_") or "condition" for x in metadata_cols]
+
+    records = []
+    used_samples = {}
+    for sample_base, filename in rows:
+        sample = sample_base
+        if sample in used_samples:
+            used_samples[sample] += 1
+            sample = sample+"_"+str(used_samples[sample])
+        else:
+            used_samples[sample] = 1
+        row = {"sample": sample}
+        print("==================================")
+        print("Sample: "+blue+sample+reset)
+        print("FASTQ: "+filename)
+        for col in metadata_cols:
+            print("Enter "+col+" for "+sample+":")
+            value = input().strip()
+            row[col] = re.sub(r"\s+", "_", value) if len(value) > 0 else "NA"
+        row["filename"] = filename
+        records.append(row)
+
+    des = pd.DataFrame(records, columns=["sample"]+metadata_cols+["filename"])
+    design_path = os.path.join(default_design_dir, "design_matrix.txt")
+    des.to_csv(design_path, sep="\t", index=False)
+    _display_design_matrix(design_path)
+    return default_design_dir
+
+
 def filetransfer_Prep():
         
     global project_name
@@ -308,7 +452,26 @@ def filetransfer_Prep():
         os.remove(res_dir+project_name+"/log/error_listFastq.txt")
     if param == "n":
         read_path_destination = res_dir+project_name+"/data/fastq/"
-        #print("Read files will be copied to "+res_dir+project_name+"/data/fastq/")
+        red = "\033[91m"
+        blue = "\033[94m"
+        reset = "\x1b[0m"
+
+        print("==================================")
+        print("Copy the path to your original read files folder:")
+        print(red+"If you want to use our example dataset, copy and paste this path below,"+reset)
+        print("../scripts_DoNotTouch/test/fastq/")
+        read_path_original = os.path.abspath(os.path.expanduser(input().strip()))
+
+        print("==================================")
+        print("Are the reads paired-end or single-end?")
+        print("Type "+blue+"paired"+reset+" for paired-end or "+blue+"single"+reset+" for single-end")
+        pairing_answer = _normalize_yes_no(input())
+        if pairing_answer not in ["y", "n"]:
+            raise ValueError("Please answer paired/single or y/n for read pairing.")
+        pairing = pairing_answer
+
+        inpath_design = _prompt_design_matrix_for_new_rna_project(read_path_original, pairing)
+
         print("==================================")
         print("Here's the list of available genomes:")
         genome_list = pd.Series(['human','mouse'])
@@ -316,43 +479,31 @@ def filetransfer_Prep():
         print(genome_list)
         print("==================================")
         print("Specify the index to the genome:(e.g 0)")
-        print("\033[91m"+"If you want to use our example dataset, type the number"+"\033[94m"+" 1"+"\x1b[0m")
+        print(red+"If you want to use our example dataset, type the number"+blue+" 1"+reset)
         genome_index = int(input())
         genome = genome_list[genome_index]
-        print("==================================")
-        print("Copy the path to your original read files folder:")
-        print("\033[91m"+"If you want to use our example dataset, copy and paste this path below,"+"\x1b[0m")
-        print("../scripts_DoNotTouch/test/fastq/")
-        read_path_original = input()
-        read_path_original = os.path.expanduser(read_path_original)
+
         print("==================================")
         print("Do you want to copy your fastq files to your home folder? Only recommended if the files are not in your lab/home folder yet or they will be removed in the near future:(y/n)")
-        copyfastq = input()
+        copyfastq = input().strip().lower()
         if copyfastq == 'n':
             read_path_destination = read_path_original
             os.makedirs(res_dir+project_name+"/data/fastq/",exist_ok=True)
         else:
             print("Read files will be copied to "+res_dir+project_name+"/data/fastq/")
         print("==================================")
-        print("Copy the path to design matrix folder (If it's in your home folder, type tilde sign ~):")
-        print("\033[91m"+"If you want to use our example dataset, copy and paste this path below,"+"\x1b[0m")
-        print("../scripts_DoNotTouch/test/manifest/")
-        inpath_design = input()
-        inpath_design = os.path.expanduser(inpath_design)
-        print("==================================")
-        print("You'll be working with "+"\033[91m"+project_name+"\x1b[0m"+" folder")
-        print("Re-running any cell will overwrite exisiting outputs in folder "+"\033[91m"+project_name+"\x1b[0m")
-        print("If you don't want to overwrite, please re-run this cell and specify different unique"+"\033[91m project_name")
+        print("You'll be working with "+red+project_name+reset+" folder")
+        print("Re-running any cell will overwrite existing outputs in folder "+red+project_name+reset)
+        print("If you don't want to overwrite, please re-run this cell and specify a different unique project_name.")
     
         scriptpath_listdir = "../scripts_DoNotTouch/fastq/qsub_listdir.sh"
         scriptpath_copy = "../scripts_DoNotTouch/fastq/qsub_copy.sh"
     
         des=pd.read_table(inpath_design+"/design_matrix.txt")
         filename=des.iloc[:,len(des.columns)-1]
-        if filename.str.contains('_R2_').any() ==True:
-            pairing = 'y'
-        else:
-            pairing = 'n'
+        detected_pairing = 'y' if filename.astype(str).str.contains('_R2_').any() else 'n'
+        if detected_pairing != pairing:
+            print(red+"WARNING: Your selected pairing does not match the design matrix filenames. Using your selected pairing: "+pairing+reset)
 
         _save_config_updates(project_name=project_name,
                              parameters_exist=param,
