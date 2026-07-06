@@ -15,7 +15,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from pandas import DataFrame
 import gseapy as gp
-from gseapy import GSEA,Biomart,dotplot,heatmap
+from gseapy import GSEA,dotplot,heatmap
 import imgkit
 
 project_name=config.project_name
@@ -1492,6 +1492,13 @@ def _gseapy_cache_dir(outpath_pathway):
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
 
+def _packaged_mouse_human_ortholog_table():
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "reference",
+        "mouse_human_orthologs_MGI.tsv"
+    )
+
 def _clean_ensembl_ids(values):
     return pd.Series(values, dtype="object").astype(str).str.replace(r"\.\d+$", "", regex=True)
 
@@ -1549,24 +1556,6 @@ def _read_gtf_gene_map(genome):
             print("WARNING: Could not read GTF gene map from "+gtf_path+": "+str(exc))
     return None
 
-def _biomart_query_cached(dataset, attributes, cache_dir, cache_name):
-    cache_path = os.path.join(cache_dir, cache_name)
-    if os.path.exists(cache_path):
-        try:
-            print("Using cached BioMart table: "+cache_path)
-            return pd.read_table(cache_path)
-        except Exception as exc:
-            print("WARNING: Could not read cached BioMart table "+cache_path+": "+str(exc))
-    try:
-        bm = Biomart()
-        df = bm.query(dataset=dataset, attributes=attributes)
-        df.to_csv(cache_path, sep="\t", index=False)
-        print("Saved BioMart table cache: "+cache_path)
-        return df
-    except Exception as exc:
-        print("WARNING: BioMart query failed for "+dataset+": "+str(exc))
-        return None
-
 def _pick_column(df, candidates):
     normalized = {re.sub(r"[^a-z0-9]+", "", str(col).lower()): col for col in df.columns}
     for candidate in candidates:
@@ -1575,13 +1564,22 @@ def _pick_column(df, candidates):
             return normalized[key]
     return None
 
+def _filter_gsea_orthologs(orth):
+    mouse_counts = orth["mouse_gene_symbol"].value_counts()
+    keep = orth["mouse_gene_symbol"].map(mouse_counts).eq(1)
+    filtered = orth.loc[keep, :].copy()
+    removed = len(orth) - len(filtered)
+    print(
+        "GSEA ortholog mapping: retained "
+        + str(len(filtered))
+        + " one-to-one or many-mouse-to-one-human mappings and excluded "
+        + str(removed)
+        + " mouse-to-many/many-to-many mappings."
+    )
+    return filtered
+
 def _read_mouse_human_ortholog_table(cache_dir):
-    candidates = [
-        os.environ.get("CSL_MOUSE_HUMAN_ORTHOLOGS", ""),
-        os.path.join(cache_dir, "mouse_human_orthologs.tsv"),
-        os.path.join(cache_dir, "mouse_human_orthologs.csv"),
-        os.path.join(cache_dir, "mmusculus_to_hsapiens_homologs.tsv"),
-    ]
+    candidates = [_packaged_mouse_human_ortholog_table()]
     mouse_symbol_names = [
         "mouse_gene_symbol", "mouse_symbol", "mgi_symbol", "marker_symbol",
         "external_gene_name", "mouse_gene_name"
@@ -1620,9 +1618,13 @@ def _read_mouse_human_ortholog_table(cache_dir):
             out["human_gene_symbol"] = orth[human_symbol_col]
             out = out.dropna(subset=["human_gene_symbol"]).drop_duplicates()
             out["human_gene_symbol"] = out["human_gene_symbol"].astype(str).str.strip()
+            if "mouse_gene_symbol" in out.columns:
+                out = out.dropna(subset=["mouse_gene_symbol"])
+                out["mouse_gene_symbol"] = out["mouse_gene_symbol"].astype(str).str.strip()
+                out = out[out["mouse_gene_symbol"] != ""]
             out = out[out["human_gene_symbol"] != ""]
             print("Using mouse-human ortholog table: "+table_path)
-            return out
+            return _filter_gsea_orthologs(out)
         except Exception as exc:
             print("WARNING: Could not read mouse-human ortholog table "+table_path+": "+str(exc))
     return None
@@ -1667,7 +1669,10 @@ def _collapse_gsea_expression(gene_exp_conv, sample_cols):
     for col in sample_cols:
         gene_exp_conv[col] = pd.to_numeric(gene_exp_conv[col], errors="coerce")
     gene_exp_conv = gene_exp_conv.dropna(subset=sample_cols, how="all")
+    duplicate_gene_rows = int(gene_exp_conv.duplicated("GENE").sum())
     gene_exp_conv = gene_exp_conv.groupby("GENE", as_index=False)[sample_cols].mean()
+    if duplicate_gene_rows > 0:
+        print("GSEA gene labels: averaged "+str(duplicate_gene_rows)+" duplicate ortholog rows by human gene symbol.")
     gene_exp_conv.insert(1, "NAME", "na")
     return gene_exp_conv[["GENE", "NAME"] + sample_cols]
 
@@ -1701,33 +1706,11 @@ def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
         return _collapse_gsea_expression(gene_exp_conv, sample_cols)
 
     if genome == "mouse":
-        m2h = _biomart_query_cached(
-            dataset="mmusculus_gene_ensembl",
-            attributes=[
-                "ensembl_gene_id",
-                "external_gene_name",
-                "hsapiens_homolog_ensembl_gene",
-                "hsapiens_homolog_associated_gene_name",
-            ],
-            cache_dir=cache_dir,
-            cache_name="mmusculus_to_hsapiens_homologs.tsv",
-        )
-        if m2h is not None and len(m2h):
-            key = "external_gene_name" if feature == "gene_name" else "ensembl_gene_id"
-            gene_exp_conv = gene_exp.merge(m2h, how="inner", left_index=True, right_on=key)
-            gene_exp_conv["GENE"] = gene_exp_conv["hsapiens_homolog_associated_gene_name"]
-            mapped = gene_exp_conv["GENE"].notna().sum()
-            if mapped > 0:
-                print("GSEA gene labels: mapped "+str(mapped)+" mouse genes to human homolog symbols using BioMart/cache.")
-                return _collapse_gsea_expression(gene_exp_conv, sample_cols)
-
-        print("WARNING: BioMart mouse-to-human mapping unavailable; trying local ortholog table.")
         gene_exp_conv = _map_mouse_expression_with_ortholog_table(gene_exp, feature, cache_dir)
         if gene_exp_conv is not None and gene_exp_conv["GENE"].notna().sum() > 0:
             return _collapse_gsea_expression(gene_exp_conv, sample_cols)
         raise ValueError(
-            "Mouse-to-human ortholog mapping requires BioMart/cache or a real local ortholog table. "
-            "Provide one with CSL_MOUSE_HUMAN_ORTHOLOGS=/path/to/table.tsv. "
+            "Mouse-to-human ortholog mapping requires the bundled MGI table. "
             "GTF can convert mouse Ensembl IDs to mouse symbols, but it cannot define human orthologs."
         )
 
