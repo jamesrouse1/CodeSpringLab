@@ -10,6 +10,7 @@ import socket
 import subprocess
 from IPython.display import IFrame,clear_output,HTML,Image
 import shutil
+import gzip
 import seaborn as sns
 import matplotlib.pyplot as plt
 from pandas import DataFrame
@@ -1485,6 +1486,171 @@ def shiny_ServerFirstCommands(shiny_dir, shiny_config_path, username=None, serve
         "stop_command": stop_cmd
     }
 
+
+def _gseapy_cache_dir(outpath_pathway):
+    cache_dir = os.path.join(os.path.dirname(outpath_pathway.rstrip('/')), "_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+def _clean_ensembl_ids(values):
+    return pd.Series(values, dtype="object").astype(str).str.replace(r"\.\d+$", "", regex=True)
+
+def _default_gtf_paths(genome):
+    genome = str(genome).lower()
+    paths = []
+    if genome == "human":
+        env_path = os.environ.get("CSL_HUMAN_GTF", "")
+        paths.extend([
+            env_path,
+            "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf",
+            "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.annotation.gtf",
+        ])
+    elif genome == "mouse":
+        env_path = os.environ.get("CSL_MOUSE_GTF", "")
+        paths.extend([
+            env_path,
+            "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation.gtf",
+            "/grid/bsr/data/data/utama/genome/mm39_gencode/gencode.vM29.annotation.gtf",
+        ])
+    return [p for p in paths if p and os.path.exists(os.path.expanduser(p))]
+
+def _open_text_maybe_gzip(path):
+    if str(path).endswith(".gz"):
+        return gzip.open(path, "rt")
+    return open(path, "rt")
+
+def _parse_gtf_attributes(attr_text):
+    out = {}
+    for key, value in re.findall(r'(\S+) "([^"]*)"', attr_text):
+        out[key] = value
+    return out
+
+def _read_gtf_gene_map(genome):
+    for gtf_path in _default_gtf_paths(genome):
+        rows = []
+        try:
+            with _open_text_maybe_gzip(os.path.expanduser(gtf_path)) as handle:
+                for line in handle:
+                    if not line or line.startswith("#"):
+                        continue
+                    fields = line.rstrip("\n").split("\t")
+                    if len(fields) < 9 or fields[2] != "gene":
+                        continue
+                    attrs = _parse_gtf_attributes(fields[8])
+                    gene_id = attrs.get("gene_id", "")
+                    gene_name = attrs.get("gene_name", "")
+                    if gene_id and gene_name:
+                        rows.append((gene_id.split(".")[0], gene_name))
+            if rows:
+                df = pd.DataFrame(rows, columns=["ensembl_gene_id", "external_gene_name"]).drop_duplicates()
+                print("Using local GTF gene map: "+gtf_path)
+                return df
+        except Exception as exc:
+            print("WARNING: Could not read GTF gene map from "+gtf_path+": "+str(exc))
+    return None
+
+def _biomart_query_cached(dataset, attributes, cache_dir, cache_name):
+    cache_path = os.path.join(cache_dir, cache_name)
+    if os.path.exists(cache_path):
+        try:
+            print("Using cached BioMart table: "+cache_path)
+            return pd.read_table(cache_path)
+        except Exception as exc:
+            print("WARNING: Could not read cached BioMart table "+cache_path+": "+str(exc))
+    try:
+        bm = Biomart()
+        df = bm.query(dataset=dataset, attributes=attributes)
+        df.to_csv(cache_path, sep="\t", index=False)
+        print("Saved BioMart table cache: "+cache_path)
+        return df
+    except Exception as exc:
+        print("WARNING: BioMart query failed for "+dataset+": "+str(exc))
+        return None
+
+def _collapse_gsea_expression(gene_exp_conv, sample_cols):
+    gene_exp_conv = gene_exp_conv.dropna(subset=["GENE"])
+    gene_exp_conv["GENE"] = gene_exp_conv["GENE"].astype(str).str.strip()
+    gene_exp_conv = gene_exp_conv[gene_exp_conv["GENE"] != ""]
+    for col in sample_cols:
+        gene_exp_conv[col] = pd.to_numeric(gene_exp_conv[col], errors="coerce")
+    gene_exp_conv = gene_exp_conv.dropna(subset=sample_cols, how="all")
+    gene_exp_conv = gene_exp_conv.groupby("GENE", as_index=False)[sample_cols].mean()
+    gene_exp_conv.insert(1, "NAME", "na")
+    return gene_exp_conv[["GENE", "NAME"] + sample_cols]
+
+def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
+    genome = str(genome).strip().lower()
+    feature = str(feature).strip().lower()
+    cache_dir = _gseapy_cache_dir(outpath_pathway)
+    sample_cols = list(gene_exp.columns)
+    gene_exp = gene_exp.copy()
+    gene_exp.index = gene_exp.index.astype(str)
+    if feature == "gene_id" or gene_exp.index.to_series().str.startswith("ENS").any():
+        gene_exp.index = _clean_ensembl_ids(gene_exp.index).values
+
+    if genome == "human" and feature == "gene_name":
+        gene_exp_conv = gene_exp.copy()
+        gene_exp_conv["GENE"] = gene_exp_conv.index
+        print("GSEA gene labels: using human gene symbols directly.")
+        return _collapse_gsea_expression(gene_exp_conv, sample_cols)
+
+    if genome == "human" and feature == "gene_id":
+        gtf_map = _read_gtf_gene_map("human")
+        if gtf_map is not None:
+            gene_exp_conv = gene_exp.merge(gtf_map, how="left", left_index=True, right_on="ensembl_gene_id")
+            gene_exp_conv["GENE"] = gene_exp_conv["external_gene_name"]
+            mapped = gene_exp_conv["GENE"].notna().sum()
+            print("GSEA gene labels: mapped "+str(mapped)+" human Ensembl IDs to symbols using local GTF.")
+        else:
+            gene_exp_conv = gene_exp.copy()
+            gene_exp_conv["GENE"] = gene_exp_conv.index
+            print("WARNING: No human GTF map found; using Ensembl IDs for GSEA.")
+        return _collapse_gsea_expression(gene_exp_conv, sample_cols)
+
+    if genome == "mouse":
+        m2h = _biomart_query_cached(
+            dataset="mmusculus_gene_ensembl",
+            attributes=[
+                "ensembl_gene_id",
+                "external_gene_name",
+                "hsapiens_homolog_ensembl_gene",
+                "hsapiens_homolog_associated_gene_name",
+            ],
+            cache_dir=cache_dir,
+            cache_name="mmusculus_to_hsapiens_homologs.tsv",
+        )
+        if m2h is not None and len(m2h):
+            key = "external_gene_name" if feature == "gene_name" else "ensembl_gene_id"
+            gene_exp_conv = gene_exp.merge(m2h, how="inner", left_index=True, right_on=key)
+            gene_exp_conv["GENE"] = gene_exp_conv["hsapiens_homolog_associated_gene_name"]
+            mapped = gene_exp_conv["GENE"].notna().sum()
+            if mapped > 0:
+                print("GSEA gene labels: mapped "+str(mapped)+" mouse genes to human homolog symbols using BioMart/cache.")
+                return _collapse_gsea_expression(gene_exp_conv, sample_cols)
+
+        print("WARNING: BioMart mouse-to-human mapping unavailable; using local fallback.")
+        if feature == "gene_id":
+            gtf_map = _read_gtf_gene_map("mouse")
+            if gtf_map is not None:
+                gene_exp_conv = gene_exp.merge(gtf_map, how="left", left_index=True, right_on="ensembl_gene_id")
+                gene_exp_conv["GENE"] = gene_exp_conv["external_gene_name"]
+                gene_exp_conv.loc[gene_exp_conv["GENE"].notna(), "GENE"] = gene_exp_conv.loc[gene_exp_conv["GENE"].notna(), "GENE"].astype(str).str.upper()
+                print("GSEA gene labels: mapped mouse Ensembl IDs to mouse symbols with GTF, then uppercased for human-style gene sets.")
+            else:
+                gene_exp_conv = gene_exp.copy()
+                gene_exp_conv["GENE"] = gene_exp_conv.index
+                print("WARNING: No mouse GTF map found; using mouse Ensembl IDs for GSEA.")
+        else:
+            gene_exp_conv = gene_exp.copy()
+            gene_exp_conv["GENE"] = gene_exp_conv.index.astype(str).str.upper()
+            print("GSEA gene labels: uppercased mouse gene symbols for human-style gene sets.")
+        return _collapse_gsea_expression(gene_exp_conv, sample_cols)
+
+    gene_exp_conv = gene_exp.copy()
+    gene_exp_conv["GENE"] = gene_exp_conv.index
+    print("WARNING: Genome '"+str(genome)+"' not recognized for pathway gene mapping; using input gene labels directly.")
+    return _collapse_gsea_expression(gene_exp_conv, sample_cols)
+
 def gseapy_Prep():
     
     global project_name
@@ -1503,13 +1669,13 @@ def gseapy_Prep():
     print("GSEApy results are stored in "+res_dir+project_name+"/data/gseapy/")
 
     print("========================================")
-    print("Specify gene set database:")
+    print("Specify gene set database or full path to a local .gmt file:")
     print("MSigDB_Hallmark_2020, KEGG_2021_Human, GO_Biological_Process_2025, Reactome_Pathways_2024")
     print("ARCHS4_TFs_Coexp, ENCODE_TF_ChIP-seq_2015, ENCODE_Histone_Modifications_2015")
     print("FANTOM6_lncRNA_KD_DEGs, miRTarBase_2017, TRANSFAC_and_JASPAR_PWMs")
     print("GTEx_Tissues_V8_2023, CellMarker_2024, Cancer_Cell_Line_Encyclopedia")
     print("ClinVar_2019, GTEx_Aging_Signatures_2021, Proteomics_Drug_Atlas_2023")
-    geneset = input()
+    geneset = os.path.expanduser(input().strip())
     
     return geneset,outpath_pathway
 
@@ -1548,13 +1714,13 @@ def gseapy_PrepDirect():
     outpath = input()
 
     print("========================================")
-    print("Specify gene set database:")
+    print("Specify gene set database or full path to a local .gmt file:")
     print("MSigDB_Hallmark_2020, KEGG_2021_Human, GO_Biological_Process_2025, Reactome_Pathways_2024")
     print("ARCHS4_TFs_Coexp, ENCODE_TF_ChIP-seq_2015, ENCODE_Histone_Modifications_2015")
     print("FANTOM6_lncRNA_KD_DEGs, miRTarBase_2017, TRANSFAC_and_JASPAR_PWMs")
     print("GTEx_Tissues_V8_2023, CellMarker_2024, Cancer_Cell_Line_Encyclopedia")
     print("ClinVar_2019, GTEx_Aging_Signatures_2021, Proteomics_Drug_Atlas_2023")
-    geneset = input()
+    geneset = os.path.expanduser(input().strip())
     
     return geneset,genome,feature,inpath_design+"/",outpath+"/",outpath_pathway,refcond,compared
 
@@ -1567,41 +1733,16 @@ def gseapy_RunPathway(geneset,genome,feature,inpath_design,outpath,outpath_pathw
     #vardesign = design.T[(design.T.iloc[:,0]==refcond) | (design.T.iloc[:,0]==compared)].T.columns[0]
     design = design.loc[design[vardesign].isin([refcond,compared]),:]
     class_vector = list(design[vardesign])
-    reordering = ['GENE','NAME']+list(design.index)
-
     gene_exp = pd.read_table(outpath+'/normalized_counts_'+compared+'_vs_'+refcond+'(ref).txt',index_col=0)
-    gene_exp = gene_exp.drop(['DESCRIPTION'],axis=1)
-    gene_exp.index = gene_exp.index.str.split('.').str[0]
-    gene_exp['GENE'] = gene_exp.index
-    gene_exp['NAME'] = 'na'
+    gene_exp = gene_exp.drop(['DESCRIPTION'],axis=1,errors='ignore')
+    missing_samples = [sample for sample in design.index if sample not in gene_exp.columns]
+    if missing_samples:
+        raise ValueError("Normalized counts file is missing samples from design matrix: "+", ".join(missing_samples))
+    gene_exp = gene_exp[list(design.index)]
+    gene_exp_conv = _prepare_gseapy_expression(gene_exp,genome,feature,outpath_pathway)
 
-    #######################
-
-    bm = Biomart()
-    # note the dataset and attribute names are different
-    m2h = bm.query(dataset='mmusculus_gene_ensembl',
-                   attributes=['ensembl_gene_id','external_gene_name',
-                               'hsapiens_homolog_ensembl_gene',
-                               'hsapiens_homolog_associated_gene_name'])
-    h2m = bm.query(dataset='hsapiens_gene_ensembl',
-                   attributes=['ensembl_gene_id','external_gene_name',
-                               'mmusculus_homolog_ensembl_gene',
-                               'mmusculus_homolog_associated_gene_name'])
-    
-    if (genome == 'mouse') & (feature == 'gene_name'):        
-        gene_exp_conv = gene_exp.merge(m2h,how='inner',left_index=True,right_on='external_gene_name')
-        gene_exp_conv['GENE'] = gene_exp_conv['hsapiens_homolog_associated_gene_name']
-    elif (genome == 'mouse') & (feature == 'gene_id'):
-        gene_exp_conv = gene_exp.merge(m2h,how='inner',left_index=True,right_on='ensembl_gene_id')
-        gene_exp_conv['GENE'] = gene_exp_conv['hsapiens_homolog_associated_gene_name']       
-    elif (genome == 'human') & (feature == 'gene_id'):
-        gene_exp_conv = gene_exp.merge(h2m,how='inner',left_index=True,right_on='ensembl_gene_id')
-        gene_exp_conv['GENE'] = gene_exp_conv['external_gene_name']
-    elif (genome == 'human') & (feature == 'gene_name'):
-        gene_exp_conv = gene_exp
-    
-    gene_exp_conv = gene_exp_conv.dropna(subset=['GENE'])
-    gene_exp_conv = gene_exp_conv[reordering]
+    if gene_exp_conv.shape[0] < 10:
+        raise ValueError("Too few genes remained after pathway gene mapping ("+str(gene_exp_conv.shape[0])+"). Check genome/feature settings.")
 
     #############################
     
