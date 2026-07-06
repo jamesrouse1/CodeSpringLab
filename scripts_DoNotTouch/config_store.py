@@ -30,6 +30,122 @@ REQUIRED_SETUP_KEYS = [
 def setup_is_complete(values):
     return all(len(str(values.get(key, "")).strip()) > 0 for key in REQUIRED_SETUP_KEYS)
 
+def with_slash(path):
+    path = os.path.expanduser(str(path).strip())
+    if len(path) == 0:
+        return path
+    return path.rstrip("/")+"/"
+
+def design_matrix_path(path):
+    path = os.path.expanduser(str(path).strip())
+    if len(path) == 0:
+        return ""
+    if path.endswith("design_matrix.txt"):
+        return path
+    return os.path.join(path.rstrip("/"), "design_matrix.txt")
+
+def infer_pairing_from_design(inpath_design):
+    design_path = design_matrix_path(inpath_design)
+    if not os.path.exists(design_path):
+        return ""
+    try:
+        with open(design_path) as handle:
+            header = handle.readline()
+            rows = [line.rstrip("\n").split("\t") for line in handle if len(line.strip()) > 0]
+        if not rows:
+            return ""
+        filenames = [row[-1] for row in rows if len(row) > 0]
+        joined = " ".join(filenames)
+        return "y" if ("_R2_" in joined or "_R2." in joined or ",") else "n"
+    except Exception:
+        return ""
+
+def first_existing_dir(paths):
+    for path in paths:
+        if os.path.isdir(path):
+            return path
+    return ""
+
+def first_existing_design_dir(paths):
+    for path in paths:
+        if os.path.exists(design_matrix_path(path)):
+            return os.path.dirname(design_matrix_path(path))
+    return ""
+
+def infer_standard_project_values(values, analysis_type=None):
+    values = dict(values)
+    analysis_type = analysis_type or values.get("analysis_type") or infer_analysis_type("rna")
+    project_name = str(values.get("project_name", "")).strip()
+    if len(project_name) == 0:
+        return values
+
+    res_dir = with_slash(values.get("results_directory", "../../csl_results/"))
+    values["results_directory"] = res_dir
+    data_dir = os.path.join(res_dir, project_name, "data")
+
+    if os.path.isdir(data_dir) and len(str(values.get("visualizer_data_dir", "")).strip()) == 0:
+        values["visualizer_data_dir"] = data_dir
+
+    fastq_dir = os.path.join(data_dir, "fastq")
+    if len(str(values.get("read_path_destination", "")).strip()) == 0 and os.path.isdir(fastq_dir):
+        values["read_path_destination"] = fastq_dir
+    if len(str(values.get("read_path_original", "")).strip()) == 0 and len(str(values.get("read_path_destination", "")).strip()) > 0:
+        values["read_path_original"] = values["read_path_destination"]
+
+    design_dir = first_existing_design_dir([
+        os.path.join(data_dir, "manifest"),
+        os.path.join(data_dir, "design_matrix"),
+        os.path.join(data_dir, "design")
+    ])
+    if len(str(values.get("inpath_design", "")).strip()) == 0 and len(design_dir) > 0:
+        values["inpath_design"] = design_dir
+
+    if len(str(values.get("pairing", "")).strip()) == 0 and len(str(values.get("inpath_design", "")).strip()) > 0:
+        inferred_pairing = infer_pairing_from_design(values["inpath_design"])
+        if len(inferred_pairing) > 0:
+            values["pairing"] = inferred_pairing
+
+    values.setdefault("scriptpath_listdir", "../scripts_DoNotTouch/fastq/qsub_listdir.sh")
+    values.setdefault("scriptpath_copy", "../scripts_DoNotTouch/fastq/qsub_copy.sh")
+    if len(str(values.get("scriptpath_listdir", "")).strip()) == 0:
+        values["scriptpath_listdir"] = "../scripts_DoNotTouch/fastq/qsub_listdir.sh"
+    if len(str(values.get("scriptpath_copy", "")).strip()) == 0:
+        values["scriptpath_copy"] = "../scripts_DoNotTouch/fastq/qsub_copy.sh"
+
+    if analysis_type == "rna":
+        standard_dirs = {
+            "out_dir_star": os.path.join(data_dir, "star"),
+            "out_dir_kallisto": os.path.join(data_dir, "kallisto"),
+            "out_dir_featurecounts": os.path.join(data_dir, "featurecounts"),
+            "out_dir_rsem": os.path.join(data_dir, "rsem"),
+            "outpath_counts": os.path.join(data_dir, "counts"),
+            "outpath_deseq2": os.path.join(data_dir, "deseq2")
+        }
+        for key, path in standard_dirs.items():
+            if len(str(values.get(key, "")).strip()) == 0 and os.path.isdir(path):
+                values[key] = path
+    elif analysis_type == "atac":
+        standard_dirs = {
+            "out_dir_bowtie2": os.path.join(data_dir, "bowtie2"),
+            "out_peak_macs2": os.path.join(data_dir, "macs2"),
+            "outpath_diffbind": os.path.join(data_dir, "diffbind"),
+            "outpath_homer": os.path.join(data_dir, "homer"),
+            "tracks_dir": os.path.join(data_dir, "tracks")
+        }
+        for key, path in standard_dirs.items():
+            if len(str(values.get(key, "")).strip()) == 0 and os.path.isdir(path):
+                values[key] = path
+
+    values["parameters_exist"] = "y" if setup_is_complete(values) else "n"
+    return values
+
+def project_data_dir_exists(values):
+    project_name = str(values.get("project_name", "")).strip()
+    if len(project_name) == 0:
+        return False
+    res_dir = with_slash(values.get("results_directory", "../../csl_results/"))
+    return os.path.isdir(os.path.join(res_dir, project_name, "data"))
+
 def scripts_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
@@ -105,7 +221,7 @@ def save_config_values(values, analysis_type=None):
 def load_project_values(analysis_type, project_name):
     return read_values(project_config_path(analysis_type, project_name))
 
-def activate_project(analysis_type, project_name):
+def activate_project(analysis_type, project_name, results_directory=None):
     active = read_values(config_path())
     project_values = load_project_values(analysis_type, project_name)
     if not project_values:
@@ -113,10 +229,10 @@ def activate_project(analysis_type, project_name):
             project_values = dict(active)
         else:
             project_values = {}
-        project_values.update({
-            "analysis_type": analysis_type,
-            "project_name": project_name,
-            "results_directory": active.get("results_directory", "../../csl_results/")
-        })
-    project_values["parameters_exist"] = "y" if setup_is_complete(project_values) else "n"
+    project_values.update({
+        "analysis_type": analysis_type,
+        "project_name": project_name,
+        "results_directory": results_directory or project_values.get("results_directory") or active.get("results_directory", "../../csl_results/")
+    })
+    project_values = infer_standard_project_values(project_values, analysis_type)
     return save_config_values(project_values, analysis_type)
