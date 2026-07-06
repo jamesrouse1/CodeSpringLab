@@ -648,17 +648,31 @@ pathway_pdf_relpath <- function(treatment_value, control_value, pathway_name, he
   file.path("gseapy_results", rel)
 }
 
-pdf_preview_relpath <- function(resource_rel) {
+pdf_render_relpath <- function(resource_rel) {
   if (is.null(resource_rel)) return(NULL)
   rel <- sub("^gseapy_results/", "", resource_rel)
   full_pdf <- file.path(gseapy_dir, rel)
   if (!file.exists(full_pdf)) return(NULL)
-  png_rel <- paste0(tools::file_path_sans_ext(rel), ".preview.png")
+  png_rel <- paste0(tools::file_path_sans_ext(rel), ".rendered.png")
   full_png <- file.path(gseapy_dir, png_rel)
-  if (!file.exists(full_png) && requireNamespace("pdftools", quietly = TRUE)) {
+  if (!file.exists(full_png)) {
     dir.create(dirname(full_png), recursive = TRUE, showWarnings = FALSE)
+    if (requireNamespace("pdftools", quietly = TRUE)) {
+      tryCatch(
+        pdftools::pdf_convert(full_pdf, format = "png", pages = 1, dpi = 300, filenames = full_png),
+        error = function(e) NULL
+      )
+    }
+  }
+  if (!file.exists(full_png) && requireNamespace("magick", quietly = TRUE)) {
+    tryCatch({
+      img <- magick::image_read_pdf(full_pdf, density = 300)
+      magick::image_write(img[1], path = full_png, format = "png")
+    }, error = function(e) NULL)
+  }
+  if (!file.exists(full_png) && nzchar(Sys.which("pdftoppm"))) {
     tryCatch(
-      pdftools::pdf_convert(full_pdf, format = "png", pages = 1, dpi = 150, filenames = full_png),
+      system2("pdftoppm", c("-png", "-r", "300", "-singlefile", full_pdf, tools::file_path_sans_ext(full_png))),
       error = function(e) NULL
     )
   }
@@ -723,17 +737,37 @@ format_deg_table <- function(df) {
   out
 }
 
-heatmap_palette_colors <- function(style) {
-  style <- value_or(style, "blue_red")
+heatmap_theme_options <- function(style) {
+  style <- value_or(style, "publication")
+  if (identical(style, "minimal")) return(list(palette = "viridis", border = "none"))
+  if (identical(style, "compact")) return(list(palette = "magma", border = "none"))
+  if (identical(style, "labeled")) return(list(palette = "blue_red", border = "light"))
+  if (identical(style, "contrast")) return(list(palette = "green_purple", border = "light"))
+  list(palette = "blue_red", border = "none")
+}
+
+heatmap_palette_colors <- function(style, theme = "publication") {
+  if (identical(value_or(style, "theme"), "theme")) {
+    style <- heatmap_theme_options(theme)$palette
+  }
   if (identical(style, "viridis")) return(grDevices::hcl.colors(100, "viridis"))
   if (identical(style, "magma")) return(grDevices::hcl.colors(100, "inferno"))
   if (identical(style, "green_purple")) return(colorRampPalette(c("#1b7837", "white", "#762a83"))(100))
   if (identical(style, "navy_orange")) return(colorRampPalette(c("#2c7bb6", "white", "#d7191c"))(100))
+  if (identical(style, "gray_red")) return(colorRampPalette(c("#3b3b3b", "white", "#b2182b"))(100))
   colorRampPalette(c("#2166ac", "white", "#b2182b"))(100)
 }
 
-heatmap_border_color <- function(style) {
-  if (identical(value_or(style, "none"), "light")) "#d9d9d9" else NA
+heatmap_border_color <- function(style, theme = "publication") {
+  if (identical(value_or(style, "theme"), "theme")) {
+    style <- heatmap_theme_options(theme)$border
+  }
+  if (identical(style, "light")) "#d9d9d9" else NA
+}
+
+heatmap_font_family <- function(style) {
+  style <- value_or(style, "sans")
+  if (style %in% c("sans", "serif", "mono")) style else "sans"
 }
 
 make_enrichr_gene_lists <- function(df, p_col, p_cutoff, lfc_cutoff) {
@@ -979,29 +1013,64 @@ app_tabs <- list(
               ),
               checkboxInput("heatmap_scale_rows", "Scale heatmap rows", value = TRUE),
               selectInput(
+                "heatmap_theme",
+                "Heatmap style",
+                choices = c(
+                  "Clean publication" = "publication",
+                  "Minimal" = "minimal",
+                  "Compact" = "compact",
+                  "Fully labeled" = "labeled",
+                  "High contrast" = "contrast"
+                ),
+                selected = "publication"
+              ),
+              selectInput(
                 "heatmap_palette",
                 "Heatmap colors",
                 choices = c(
+                  "Use style default" = "theme",
                   "Blue-white-red" = "blue_red",
                   "Viridis" = "viridis",
                   "Magma" = "magma",
                   "Green-white-purple" = "green_purple",
-                  "Blue-white-red vivid" = "navy_orange"
+                  "Blue-white-red vivid" = "navy_orange",
+                  "Gray-white-red" = "gray_red"
                 ),
-                selected = "blue_red"
+                selected = "theme"
               ),
               selectInput(
                 "heatmap_border_style",
                 "Cell borders",
-                choices = c("None" = "none", "Light grid" = "light"),
-                selected = "none"
+                choices = c("Use style default" = "theme", "None" = "none", "Light grid" = "light"),
+                selected = "theme"
               ),
               selectInput(
-                "heatmap_font_size",
-                "Font size",
+                "heatmap_font_family",
+                "Font family",
+                choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
+                selected = "sans"
+              ),
+              selectInput(
+                "heatmap_row_font_size",
+                "Gene label size",
+                choices = c("Small" = 7, "Medium" = 9, "Large" = 11, "XL" = 13),
+                selected = 9
+              ),
+              selectInput(
+                "heatmap_col_font_size",
+                "Sample label size",
                 choices = c("Small" = 8, "Medium" = 10, "Large" = 12, "XL" = 14),
                 selected = 10
-              )
+              ),
+              selectInput(
+                "heatmap_col_angle",
+                "Sample label angle",
+                choices = c("0" = "0", "45" = "45", "90" = "90", "315" = "315"),
+                selected = "45"
+              ),
+              checkboxInput("heatmap_show_row_names", "Show gene labels", value = TRUE),
+              checkboxInput("heatmap_show_col_names", "Show sample labels", value = TRUE),
+              checkboxInput("heatmap_show_annotation_names", "Show annotation track labels", value = FALSE)
             ),
             tags$hr(),
             helpText("Shows DEGs, PCA, and a custom heatmap for an available treatment vs control comparison.")
@@ -2151,17 +2220,23 @@ server <- function(input, output, session) {
 
     output$deg_heatmap_plot <- renderPlot({
       hp <- heatmap_plot_state()
-      font_size <- as.numeric(value_or(input$heatmap_font_size, 10))
+      heatmap_theme <- value_or(input$heatmap_theme, "publication")
       pheatmap::pheatmap(
         hp$mat,
         annotation_col = hp$ann_col,
         cluster_rows = isTRUE(input$heatmap_cluster_rows),
         cluster_cols = isTRUE(input$heatmap_cluster_cols),
         scale = "none",
-        fontsize_row = font_size,
-        fontsize_col = font_size,
-        border_color = heatmap_border_color(input$heatmap_border_style),
-        color = heatmap_palette_colors(input$heatmap_palette)
+        fontsize = as.numeric(value_or(input$heatmap_col_font_size, 10)),
+        fontsize_row = as.numeric(value_or(input$heatmap_row_font_size, 9)),
+        fontsize_col = as.numeric(value_or(input$heatmap_col_font_size, 10)),
+        fontfamily = heatmap_font_family(input$heatmap_font_family),
+        angle_col = value_or(input$heatmap_col_angle, "45"),
+        show_rownames = isTRUE(input$heatmap_show_row_names),
+        show_colnames = isTRUE(input$heatmap_show_col_names),
+        annotation_names_col = isTRUE(input$heatmap_show_annotation_names),
+        border_color = heatmap_border_color(input$heatmap_border_style, heatmap_theme),
+        color = heatmap_palette_colors(input$heatmap_palette, heatmap_theme)
       )
     })
 
@@ -2177,18 +2252,24 @@ server <- function(input, output, session) {
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
       out_path <- file.path(deseq2_dir, filename)
-      png(out_path, width = 2200, height = 1800, res = 200)
-      font_size <- as.numeric(value_or(input$heatmap_font_size, 10))
+      png(out_path, width = 2400, height = 1900, res = 220)
+      heatmap_theme <- value_or(input$heatmap_theme, "publication")
       pheatmap::pheatmap(
         hp$mat,
         annotation_col = hp$ann_col,
         cluster_rows = isTRUE(input$heatmap_cluster_rows),
         cluster_cols = isTRUE(input$heatmap_cluster_cols),
         scale = "none",
-        fontsize_row = font_size,
-        fontsize_col = font_size,
-        border_color = heatmap_border_color(input$heatmap_border_style),
-        color = heatmap_palette_colors(input$heatmap_palette)
+        fontsize = as.numeric(value_or(input$heatmap_col_font_size, 10)),
+        fontsize_row = as.numeric(value_or(input$heatmap_row_font_size, 9)),
+        fontsize_col = as.numeric(value_or(input$heatmap_col_font_size, 10)),
+        fontfamily = heatmap_font_family(input$heatmap_font_family),
+        angle_col = value_or(input$heatmap_col_angle, "45"),
+        show_rownames = isTRUE(input$heatmap_show_row_names),
+        show_colnames = isTRUE(input$heatmap_show_col_names),
+        annotation_names_col = isTRUE(input$heatmap_show_annotation_names),
+        border_color = heatmap_border_color(input$heatmap_border_style, heatmap_theme),
+        color = heatmap_palette_colors(input$heatmap_palette, heatmap_theme)
       )
       dev.off()
       showNotification(sprintf("Saved heatmap to %s", out_path), type = "message", duration = 6)
@@ -2350,10 +2431,15 @@ server <- function(input, output, session) {
       }
       plot_block <- function(title, rel) {
         if (is.null(rel)) return(NULL)
+        rendered_rel <- pdf_render_relpath(rel)
         tags$div(
           tags$h5(title),
-          tags$iframe(src = rel, style = "width: 100%; height: 900px; border: 1px solid #ddd; margin-bottom: 16px;"),
-          tags$p(tags$a(href = rel, target = "_blank", "Open PDF in new tab"))
+          if (!is.null(rendered_rel)) {
+            tags$img(src = rendered_rel, style = "width: 100%; max-width: 100%; border: 1px solid #ddd; margin-bottom: 12px;")
+          } else {
+            status_box("This server could not render the PDF to an image. Open the PDF link below.", "warning")
+          },
+          tags$p(tags$a(href = rel, target = "_blank", "Open original PDF"))
         )
       }
       tags$div(
