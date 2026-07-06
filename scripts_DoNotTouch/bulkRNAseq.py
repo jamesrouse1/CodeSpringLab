@@ -895,6 +895,25 @@ def featurecounts_ListDir(prefix,count_prefix_list):
     
     return log_matrix
 
+def _prompt_featurecounts_feature():
+    valid = ["gene_id", "gene_name"]
+    feature_default = str(_config_value("featurecounts_feature", "")).strip()
+    if feature_default not in valid:
+        legacy_default = str(_config_value("feature", "")).strip()
+        feature_default = legacy_default if legacy_default in valid else "gene_id"
+
+    while True:
+        print("========================================")
+        print("Specify the genomic feature to quantify with featureCounts (gene_id or gene_name):")
+        print("Press enter/return to use "+str(feature_default))
+        feature = input().strip()
+        if len(feature) == 0:
+            feature = feature_default
+        feature = feature.lower()
+        if feature in valid:
+            return feature
+        print("Please type gene_id or gene_name.")
+
 def featurecounts_Prep(genome,out_dir,pairing):
     
     global project_name
@@ -923,18 +942,16 @@ def featurecounts_Prep(genome,out_dir,pairing):
     else:
         scriptpath_featurecounts = '../scripts_DoNotTouch/featureCounts/qsub_featurecounts_SE.sh'
 
-    feature_default = _config_value("feature", "gene_id")
-    print("========================================")
-    print("Specify the genomic feature to quantify (gene_id or gene_name):")
-    print("Press enter/return to use "+str(feature_default))
-    feature = input().strip()
-    if len(feature) == 0:
-        feature = feature_default
+    feature = _prompt_featurecounts_feature()
     
     count_prefix_list = count_dir+prefix+'/'+prefix
     bam_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bam'
 
-    _save_config_updates(genome=genome, pairing=pairing, out_dir_star=out_dir, out_dir_featurecounts=count_dir, feature=feature)
+    _save_config_updates(genome=genome,
+                         pairing=pairing,
+                         out_dir_star=out_dir,
+                         out_dir_featurecounts=count_dir,
+                         featurecounts_feature=feature)
     return scriptpath_featurecounts,GTF,bam_list,count_prefix_list,prefix,feature,strandBED
 
 def featurecounts_PrepDirect():

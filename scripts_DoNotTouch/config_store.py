@@ -8,7 +8,7 @@ CONFIG_KEYS = [
     "analysis_type", "project_name", "parameters_exist", "results_directory",
     "read_path_original", "read_path_destination", "genome", "pairing",
     "inpath_design", "scriptpath_listdir", "scriptpath_copy",
-    "feature", "outpath_counts", "outpath_deseq2",
+    "feature", "featurecounts_feature", "outpath_counts", "outpath_deseq2",
     "refcond", "compared", "redundant", "geneset",
     "visualizer_data_dir",
     "out_dir_star", "out_dir_kallisto", "out_dir_featurecounts", "out_dir_rsem",
