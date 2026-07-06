@@ -723,6 +723,19 @@ format_deg_table <- function(df) {
   out
 }
 
+heatmap_palette_colors <- function(style) {
+  style <- value_or(style, "blue_red")
+  if (identical(style, "viridis")) return(grDevices::hcl.colors(100, "viridis"))
+  if (identical(style, "magma")) return(grDevices::hcl.colors(100, "inferno"))
+  if (identical(style, "green_purple")) return(colorRampPalette(c("#1b7837", "white", "#762a83"))(100))
+  if (identical(style, "navy_orange")) return(colorRampPalette(c("#2c7bb6", "white", "#d7191c"))(100))
+  colorRampPalette(c("#2166ac", "white", "#b2182b"))(100)
+}
+
+heatmap_border_color <- function(style) {
+  if (identical(value_or(style, "none"), "light")) "#d9d9d9" else NA
+}
+
 make_enrichr_gene_lists <- function(df, p_col, p_cutoff, lfc_cutoff) {
   if (is.null(df) || !nrow(df) || !(p_col %in% colnames(df)) || !("log2FoldChange" %in% colnames(df))) {
     return(list(up = character(0), down = character(0)))
@@ -964,7 +977,31 @@ app_tabs <- list(
                   selected = if ("treatment" %in% comparison_columns) "treatment" else comparison_columns[1]
                 )
               ),
-              checkboxInput("heatmap_scale_rows", "Scale heatmap rows", value = TRUE)
+              checkboxInput("heatmap_scale_rows", "Scale heatmap rows", value = TRUE),
+              selectInput(
+                "heatmap_palette",
+                "Heatmap colors",
+                choices = c(
+                  "Blue-white-red" = "blue_red",
+                  "Viridis" = "viridis",
+                  "Magma" = "magma",
+                  "Green-white-purple" = "green_purple",
+                  "Blue-white-red vivid" = "navy_orange"
+                ),
+                selected = "blue_red"
+              ),
+              selectInput(
+                "heatmap_border_style",
+                "Cell borders",
+                choices = c("None" = "none", "Light grid" = "light"),
+                selected = "none"
+              ),
+              selectInput(
+                "heatmap_font_size",
+                "Font size",
+                choices = c("Small" = 8, "Medium" = 10, "Large" = 12, "XL" = 14),
+                selected = 10
+              )
             ),
             tags$hr(),
             helpText("Shows DEGs, PCA, and a custom heatmap for an available treatment vs control comparison.")
@@ -2114,16 +2151,17 @@ server <- function(input, output, session) {
 
     output$deg_heatmap_plot <- renderPlot({
       hp <- heatmap_plot_state()
+      font_size <- as.numeric(value_or(input$heatmap_font_size, 10))
       pheatmap::pheatmap(
         hp$mat,
         annotation_col = hp$ann_col,
         cluster_rows = isTRUE(input$heatmap_cluster_rows),
         cluster_cols = isTRUE(input$heatmap_cluster_cols),
         scale = "none",
-        fontsize_row = 10,
-        fontsize_col = 10,
-        border_color = NA,
-        color = colorRampPalette(c("#2166ac", "white", "#b2182b"))(100)
+        fontsize_row = font_size,
+        fontsize_col = font_size,
+        border_color = heatmap_border_color(input$heatmap_border_style),
+        color = heatmap_palette_colors(input$heatmap_palette)
       )
     })
 
@@ -2140,16 +2178,17 @@ server <- function(input, output, session) {
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
       out_path <- file.path(deseq2_dir, filename)
       png(out_path, width = 2200, height = 1800, res = 200)
+      font_size <- as.numeric(value_or(input$heatmap_font_size, 10))
       pheatmap::pheatmap(
         hp$mat,
         annotation_col = hp$ann_col,
         cluster_rows = isTRUE(input$heatmap_cluster_rows),
         cluster_cols = isTRUE(input$heatmap_cluster_cols),
         scale = "none",
-        fontsize_row = 10,
-        fontsize_col = 10,
-        border_color = NA,
-        color = colorRampPalette(c("#2166ac", "white", "#b2182b"))(100)
+        fontsize_row = font_size,
+        fontsize_col = font_size,
+        border_color = heatmap_border_color(input$heatmap_border_style),
+        color = heatmap_palette_colors(input$heatmap_palette)
       )
       dev.off()
       showNotification(sprintf("Saved heatmap to %s", out_path), type = "message", duration = 6)
@@ -2311,14 +2350,10 @@ server <- function(input, output, session) {
       }
       plot_block <- function(title, rel) {
         if (is.null(rel)) return(NULL)
-        png_rel <- pdf_preview_relpath(rel)
         tags$div(
           tags$h5(title),
-          if (!is.null(png_rel)) {
-            tags$img(src = png_rel, style = "max-width: 100%; border: 1px solid #ddd; margin-bottom: 16px;")
-          } else {
-            tags$iframe(src = rel, style = "width: 100%; height: 900px; border: 1px solid #ddd; margin-bottom: 16px;")
-          }
+          tags$iframe(src = rel, style = "width: 100%; height: 900px; border: 1px solid #ddd; margin-bottom: 16px;"),
+          tags$p(tags$a(href = rel, target = "_blank", "Open PDF in new tab"))
         )
       }
       tags$div(
