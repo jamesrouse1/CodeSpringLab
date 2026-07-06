@@ -699,7 +699,7 @@ pdf_render_relpath <- function(resource_rel) {
 }
 
 js_string <- function(x) {
-  x <- gsub("\\", "\\\\", x)
+  x <- gsub("\\", "\\\\", x, fixed = TRUE)
   x <- gsub("'", "\\'", x, fixed = TRUE)
   paste0("'", x, "'")
 }
