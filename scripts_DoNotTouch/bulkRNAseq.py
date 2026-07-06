@@ -277,7 +277,7 @@ def _maybe_launch_results_explorer_from_setup():
 
     shiny_dir, outpath_shiny, shiny_config_path = shiny_Prep(data_dir=data_dir, inpath_design=design_matrix)
     _ = shiny_OutsideOneLiner(shiny_dir, shiny_config_path, start_server_here=True)
-    print("Results Explorer launch commands printed above. You can skip the analysis cells below unless you need to rerun them.")
+    print("Results Explorer launch instructions printed above. You can skip the analysis cells below unless you need to rerun them.")
 
     design_dir = os.path.dirname(design_matrix) if len(design_matrix) > 0 else getattr(config, "inpath_design", "")
     read_path_destination = getattr(config, "read_path_destination", os.path.join(data_dir, "fastq"))
@@ -1600,10 +1600,20 @@ def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_ho
             remote=shlex.quote(_shiny_cleanup_shell_command(port=port))
         )
 
-    print(one_liner)
-    print("http://localhost:{}/".format(port))
+    red = "\033[91m"
+    blue = "\033[94m"
+    reset = "\x1b[0m"
+    browser_url = "http://localhost:{}/".format(port)
+
+    print("==================================")
+    print(red+"In your local terminal, run this SSH tunnel command:"+reset)
+    print(blue+one_liner+reset)
+    print("==================================")
+    print(red+"Then open this in your browser:"+reset)
+    print(blue+browser_url+reset)
     if print_stop:
-        print(stop_cmd)
+        print("==================================")
+        print(red+"To close the viewer, press Ctrl+C in the terminal running the SSH tunnel. Old RNA-seq Shiny sessions are cleaned automatically the next time you launch the viewer."+reset)
 
     return {
         "port": port,
