@@ -297,55 +297,140 @@ def _normalize_yes_no(value):
         return "n"
     return value
 
+_FASTQ_SUFFIXES = [".fastq.gz", ".fq.gz", ".fastq", ".fq"]
+
 def _fastq_files(folder):
     folder = os.path.abspath(os.path.expanduser(str(folder).strip()))
     if not os.path.isdir(folder):
         raise ValueError("FASTQ folder does not exist: "+folder)
     files = sorted([
         f for f in os.listdir(folder)
-        if f.lower().endswith((".fastq.gz", ".fq.gz", ".fastq", ".fq"))
+        if f.lower().endswith(tuple(_FASTQ_SUFFIXES))
     ])
     return files
 
+def _split_fastq_suffix(filename):
+    filename = os.path.basename(str(filename).strip())
+    lower = filename.lower()
+    for suffix in _FASTQ_SUFFIXES:
+        if lower.endswith(suffix):
+            return filename[:-len(suffix)], filename[-len(suffix):]
+    return filename, ""
+
 def _fastq_sample_stem(filename):
-    stem = os.path.basename(str(filename))
-    for suffix in [".fastq.gz", ".fq.gz", ".fastq", ".fq"]:
-        if stem.lower().endswith(suffix):
-            stem = stem[:-len(suffix)]
-            break
-    patterns = [
-        r"(_R[12]_001)$",
-        r"(_R[12])$"
-    ]
-    for pattern in patterns:
-        stem = re.sub(pattern, "", stem)
+    stem, suffix = _split_fastq_suffix(filename)
+    stem = re.sub(r"([._-]R)[12]([._-]?\d*)$", "", stem, flags=re.IGNORECASE)
+    stem = re.sub(r"([._-])[12]$", "", stem)
     stem = re.sub(r"[^A-Za-z0-9_]+", "_", stem).strip("_")
     return stem or "sample"
 
+def _fastq_read_suffix(filename):
+    stem, suffix = _split_fastq_suffix(filename)
+    match = re.search(r"([._-]R[12]([._-]?\d*)?|[._-][12])$", stem, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)+suffix
+    return suffix
+
+def _mate_fastq_name(filename, mate):
+    stem, suffix = _split_fastq_suffix(filename)
+    if str(mate) == "2":
+        replacements = [
+            (r"([._-]R)1([._-]?\d*)$", r"\g<1>2\2"),
+            (r"([._-])1$", r"\g<1>2")
+        ]
+    else:
+        replacements = [
+            (r"([._-]R)2([._-]?\d*)$", r"\g<1>1\2"),
+            (r"([._-])2$", r"\g<1>1")
+        ]
+    for pattern, repl in replacements:
+        new_stem, n = re.subn(pattern, repl, stem, flags=re.IGNORECASE)
+        if n > 0:
+            return new_stem+suffix
+    return None
+
 def _paired_fastq_rows(files):
-    r1_files = [f for f in files if re.search(r"(_R1_001|_R1)(\.f(ast)?q(\.gz)?)$", f, flags=re.IGNORECASE)]
+    file_set = set(files)
     rows = []
     missing = []
-    for r1 in r1_files:
-        r2 = re.sub(r"_R1_001", "_R2_001", r1, flags=re.IGNORECASE)
-        if r2 == r1:
-            r2 = re.sub(r"_R1", "_R2", r1, flags=re.IGNORECASE)
-        if r2 in files:
+    for r1 in files:
+        r2 = _mate_fastq_name(r1, "2")
+        if r2 is None:
+            continue
+        if r2 in file_set:
             rows.append((_fastq_sample_stem(r1), r1+","+r2))
         else:
             missing.append(r1)
     if len(rows) == 0:
-        raise ValueError("No paired FASTQ files were detected. Expected names containing _R1/_R2, for example sample_R1_001.fastq.gz and sample_R2_001.fastq.gz.")
+        raise ValueError("No paired FASTQ files were detected. Expected read-pair names like sample_R1.fastq.gz/sample_R2.fastq.gz, sample_R1_001.fastq.gz/sample_R2_001.fastq.gz, or sample_1.fq.gz/sample_2.fq.gz.")
     if len(missing) > 0:
         print("\033[91m"+"WARNING: These R1 files did not have matching R2 files and were skipped:"+"\x1b[0m")
         print(pd.Series(missing).to_string(index=False))
     return rows
 
 def _single_fastq_rows(files):
-    keep = [f for f in files if not re.search(r"(_R2_001|_R2)(\.f(ast)?q(\.gz)?)$", f, flags=re.IGNORECASE)]
+    file_set = set(files)
+    keep = []
+    for f in files:
+        r1 = _mate_fastq_name(f, "1")
+        if r1 is not None and r1 in file_set:
+            continue
+        keep.append(f)
     if len(keep) == 0:
         raise ValueError("No single-end FASTQ files were detected.")
     return [(_fastq_sample_stem(f), f) for f in keep]
+
+def _clean_sample_name(sample):
+    sample = re.sub(r"[^A-Za-z0-9_]+", "_", str(sample).strip()).strip("_")
+    return sample or "sample"
+
+def _unique_sample_name(sample, used_samples):
+    sample = _clean_sample_name(sample)
+    if sample not in used_samples:
+        used_samples[sample] = 1
+        return sample
+    used_samples[sample] += 1
+    unique_sample = sample+"_"+str(used_samples[sample])
+    print("\033[91m"+"WARNING: sample name "+sample+" was duplicated; using "+unique_sample+" instead."+"\x1b[0m")
+    return unique_sample
+
+def _read_names_from_design_value(value, pairing):
+    parts = [x.strip() for x in str(value).split(",") if len(x.strip()) > 0]
+    if len(parts) == 0:
+        raise ValueError("A design matrix filename entry is blank.")
+    read1 = parts[0]
+    if pairing == "y":
+        if len(parts) > 1:
+            read2 = parts[1]
+        else:
+            read2 = _mate_fastq_name(read1, "2")
+            if read2 is None:
+                raise ValueError("Could not infer read2 filename from design matrix entry: "+read1)
+    else:
+        read2 = read1
+    return read1, read2
+
+def _read_path_from_name(read_dir, filename, use_trimmed=False):
+    filename = str(filename).strip()
+    if use_trimmed:
+        filename = os.path.basename(filename)
+    if os.path.isabs(filename):
+        return filename
+    return os.path.join(str(read_dir).rstrip("/"), filename)
+
+def _design_fastq_lists(inpath_design, read_dir, pairing, use_trimmed=False):
+    design_path = _design_matrix_path(inpath_design)
+    des = pd.read_table(design_path)
+    filename = des.iloc[:,len(des.columns)-1].astype(str)
+    read1_names = []
+    read2_names = []
+    for value in filename:
+        read1, read2 = _read_names_from_design_value(value, pairing)
+        read1_names.append(read1)
+        read2_names.append(read2)
+    read1_list = pd.Series([_read_path_from_name(read_dir, x, use_trimmed=use_trimmed) for x in read1_names])
+    read2_list = pd.Series([_read_path_from_name(read_dir, x, use_trimmed=use_trimmed) for x in read2_names])
+    return read1_list, read2_list
 
 def _display_design_matrix(design_path):
     des = pd.read_table(design_path)
@@ -408,22 +493,31 @@ def _prompt_design_matrix_for_new_rna_project(read_path_original, pairing):
     records = []
     used_samples = {}
     for sample_base, filename in rows:
-        sample = sample_base
-        if sample in used_samples:
-            used_samples[sample] += 1
-            sample = sample+"_"+str(used_samples[sample])
-        else:
-            used_samples[sample] = 1
-        row = {"sample": sample}
+        inferred_sample = _clean_sample_name(sample_base)
         print("==================================")
-        print("Sample: "+blue+sample+reset)
+        print("Detected sample: "+blue+inferred_sample+reset)
         print("FASTQ: "+filename)
+        print("Include this sample in design_matrix.txt? (y/n)")
+        include_sample = _normalize_yes_no(input())
+        if include_sample == "":
+            include_sample = "y"
+        if include_sample != "y":
+            print("Skipping "+inferred_sample)
+            continue
+        print("Sample name:")
+        print(red+"Press Enter to use inferred sample name: "+blue+inferred_sample+reset)
+        sample_input = input().strip()
+        sample = _unique_sample_name(sample_input if len(sample_input) > 0 else inferred_sample, used_samples)
+        row = {"sample": sample}
         for col in metadata_cols:
             print("Enter "+col+" for "+sample+":")
             value = input().strip()
             row[col] = re.sub(r"\s+", "_", value) if len(value) > 0 else "NA"
         row["filename"] = filename
         records.append(row)
+
+    if len(records) == 0:
+        raise ValueError("No samples were included in design_matrix.txt.")
 
     des = pd.DataFrame(records, columns=["sample"]+metadata_cols+["filename"])
     design_path = os.path.join(default_design_dir, "design_matrix.txt")
@@ -559,10 +653,10 @@ def filetransfer_ListDir(read_path_original):
         print("Here's the list of files in the original folder:")
         print("Index")
         listori = pd.read_csv(res_dir+project_name+"/log/output_listFastq.txt",header=None)
-        listori = listori[listori[0].str.endswith('fastq.gz')]
+        listori = listori[listori[0].str.lower().str.endswith(tuple(_FASTQ_SUFFIXES))]
         print(listori)
 
-        dirfileset = read_path_original + listori[listori[0].str.endswith('fastq.gz')]
+        dirfileset = read_path_original + listori[listori[0].str.lower().str.endswith(tuple(_FASTQ_SUFFIXES))]
     except OSError:
         print("Access to view files in original directory is still pending")
     
@@ -607,7 +701,7 @@ def filetransfer_ListDest(directory):
     print("Index")
     dirlist = pd.Series(os.listdir(directory))
     
-    dirlist = dirlist[dirlist.str.endswith('fastq.gz')]
+    dirlist = dirlist[dirlist.str.lower().str.endswith(tuple(_FASTQ_SUFFIXES))]
     print(dirlist)
     
     dirfileset = directory + dirlist
@@ -618,30 +712,25 @@ def filetransfer_ListDest(directory):
 
 def filetransfer_Convert(directory,inpath_design):
     
-    des=pd.read_table(inpath_design+"/design_matrix.txt")
-    filename=des.iloc[:,len(des.columns)-1]
+    des=pd.read_table(_design_matrix_path(inpath_design))
+    filename=des.iloc[:,len(des.columns)-1].astype(str)
 
     dirlist = pd.Series(os.listdir(directory))    
-    dirlist = dirlist[dirlist.str.endswith('fastq.gz')]
+    dirlist = dirlist[dirlist.str.lower().str.endswith(tuple(_FASTQ_SUFFIXES))]
     dirlist.index = range(len(dirlist))
     
     for i in range(len(dirlist)):
         for j in range(len(filename)):
             if dirlist[i] in filename[j]:
-                #newname=des.iloc[j,0]+re.sub(r'^.*?_R', '_R', dirlist[i])
-                #os.rename(directory+dirlist[i],directory+newname)
-                if dirlist.str.contains("_R1_")[i]:
-                    newname=des.iloc[j,0]+re.sub(r'^.*?_R1', '_R1', dirlist[i])
-                    os.rename(directory+dirlist[i],directory+newname)
-                elif dirlist.str.contains("_R2_")[i]:
-                    newname=des.iloc[j,0]+re.sub(r'^.*?_R2', '_R2', dirlist[i])
-                    os.rename(directory+dirlist[i],directory+newname)
+                newname=_clean_sample_name(des.iloc[j,0])+_fastq_read_suffix(dirlist[i])
+                if dirlist[i] != newname:
+                    os.rename(os.path.join(directory,dirlist[i]),os.path.join(directory,newname))
      
     print("Here's the list of name-converted read files:")
     print("Index")
     dirlist = pd.Series(os.listdir(directory))
     
-    dirlist = dirlist[dirlist.str.endswith('fastq.gz')]
+    dirlist = dirlist[dirlist.str.lower().str.endswith(tuple(_FASTQ_SUFFIXES))]
     print(dirlist)
     
     dirfileset = directory + dirlist
@@ -756,28 +845,30 @@ def cutadapt_Prep(directory,pairing):
         os.remove(res_dir+project_name+"/log/output_cutadapt.txt")
         os.remove(res_dir+project_name+"/log/error_cutadapt.txt")
     
-    readlist = pd.Series(os.listdir(directory))
-    readlist = readlist[readlist.str.endswith('fastq.gz')]
-    
-    prefix = readlist.str.replace('_R1_001.fastq.gz','',regex=False).str.replace('_R2_001.fastq.gz','',regex=False).unique()
+    files = _fastq_files(directory)
+    rows = _paired_fastq_rows(files) if pairing == "y" else _single_fastq_rows(files)
     
     outdir_cutadapt = res_dir+project_name+"/data/cutadapt/"
     os.makedirs(outdir_cutadapt,exist_ok=True)
     
     print("Trimmed reads results will be stored in "+res_dir+project_name+"/data/cutadapt/")
     
+    read1_names = []
+    read2_names = []
+    for sample_base, filename in rows:
+        read1, read2 = _read_names_from_design_value(filename, pairing)
+        read1_names.append(read1)
+        read2_names.append(read2)
+    
+    read1_list = pd.Series([_read_path_from_name(directory, x) for x in read1_names])
+    read2_list = pd.Series([_read_path_from_name(directory, x) for x in read2_names])
+    trimmed1_list = pd.Series([os.path.join(outdir_cutadapt, os.path.basename(x)) for x in read1_names])
+    trimmed2_list = pd.Series([os.path.join(outdir_cutadapt, os.path.basename(x)) for x in read2_names])
+    
     if pairing == "y":
         scriptpath_cutadapt = '../scripts_DoNotTouch/cutadapt_PE/qsub_cutadapt_PE.sh'
-        read1_list = directory+'/'+prefix+'_R1_001.fastq.gz'
-        read2_list = directory +'/'+prefix+'_R2_001.fastq.gz'
-        trimmed1_list = outdir_cutadapt+'/'+prefix+'_R1_001.fastq.gz'
-        trimmed2_list = outdir_cutadapt+'/'+prefix+'_R2_001.fastq.gz'
     else:
         scriptpath_cutadapt = '../scripts_DoNotTouch/cutadapt_SE/qsub_cutadapt_SE.sh'
-        read1_list = directory+'/'+prefix+'_R1_001.fastq.gz'
-        read2_list = directory +'/'+prefix+'_R2_001.fastq.gz'
-        trimmed1_list = outdir_cutadapt+'/'+prefix+'_R1_001.fastq.gz'
-        trimmed2_list = outdir_cutadapt+'/'+prefix+'_R2_001.fastq.gz'
         
     print("========================================")
     print("Specify the adapter for R1/read1:")
@@ -843,17 +934,8 @@ def star_Prep(genome,pairing,read_dir,inpath_design):
         read_dir = res_dir+project_name+"/data/cutadapt/"
     print("========================================")
     
-    des = pd.read_table(inpath_design+"/design_matrix.txt")
-    prefix = des.iloc[:,0]
-    prefix = pd.Series(prefix)
-    prefix_filename = des.iloc[:,len(des.columns)-1]   
-    prefix_filename = prefix_filename.str.replace('_R1_001.fastq.gz','',regex=False)
-    prefix_filename = [x.split(",")[0] if "," in x else x for x in prefix_filename]
-    prefix_filename = pd.Series(prefix_filename)
-    
-    #prefix = pd.Series(os.listdir(read_dir))
-    #prefix = prefix[prefix.str.endswith('fastq.gz')]
-    #prefix = prefix.str.replace('_R1_001.fastq.gz','',regex=False).str.replace('_R2_001.fastq.gz','',regex=False).unique()
+    des = pd.read_table(_design_matrix_path(inpath_design))
+    prefix = pd.Series(des.iloc[:,0].astype(str))
     
     out_dir = res_dir+project_name+"/data/star/"
    
@@ -867,11 +949,7 @@ def star_Prep(genome,pairing,read_dir,inpath_design):
     elif genome == 'human':
         genome_index_path = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/hg38_p13_gencode_rel42_all_starindex"
     
-    #read1_list = read_dir+'/'+prefix+'_R1_001.fastq.gz'
-    #read2_list = read_dir+'/'+prefix+'_R2_001.fastq.gz'
-    #out_prefix_list = out_dir+prefix+'/'+prefix
-    read1_list = read_dir+'/'+prefix_filename+'_R1_001.fastq.gz'
-    read2_list = read_dir+'/'+prefix_filename+'_R2_001.fastq.gz'
+    read1_list, read2_list = _design_fastq_lists(inpath_design, read_dir, pairing, use_trimmed=(usetrim == 'y'))
     out_prefix_list = out_dir+prefix+'/'+prefix
     
     if pairing == 'y':
@@ -955,17 +1033,8 @@ def kallisto_Prep(genome,pairing,read_dir,inpath_design):
         read_dir = res_dir+project_name+"/data/cutadapt/"
     print("========================================")
 
-    des = pd.read_table(inpath_design+"/design_matrix.txt")
-    prefix = des.iloc[:,0]
-    prefix = pd.Series(prefix)
-    prefix_filename = des.iloc[:,len(des.columns)-1]   
-    prefix_filename = prefix_filename.str.replace('_R1_001.fastq.gz','',regex=False)
-    prefix_filename = [x.split(",")[0] if "," in x else x for x in prefix_filename]
-    prefix_filename = pd.Series(prefix_filename)
-
-    #prefix = pd.Series(os.listdir(read_dir))
-    #prefix = prefix[prefix.str.endswith('fastq.gz')]
-    #prefix = prefix.str.replace('_R1_001.fastq.gz','',regex=False).str.replace('_R2_001.fastq.gz','',regex=False).unique()
+    des = pd.read_table(_design_matrix_path(inpath_design))
+    prefix = pd.Series(des.iloc[:,0].astype(str))
     
     out_dir_kal = res_dir+project_name+"/data/kallisto/"
    
@@ -979,11 +1048,7 @@ def kallisto_Prep(genome,pairing,read_dir,inpath_design):
     elif genome == 'human':
         genome_index_path = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v45.transcripts.idx"
     
-    #read1_list = read_dir+'/'+prefix+'_R1_001.fastq.gz'
-    #read2_list = read_dir+'/'+prefix+'_R2_001.fastq.gz'
-    #out_prefix_list = out_dir_kal+prefix+'/'
-    read1_list = read_dir+'/'+prefix_filename+'_R1_001.fastq.gz'
-    read2_list = read_dir+'/'+prefix_filename+'_R2_001.fastq.gz'
+    read1_list, read2_list = _design_fastq_lists(inpath_design, read_dir, pairing, use_trimmed=(usetrim == 'y'))
     out_prefix_list = out_dir_kal+prefix+'/'
     
     if pairing == 'y':
