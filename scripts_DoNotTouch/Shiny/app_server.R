@@ -106,7 +106,37 @@ design_df <- safe_read_delim(design_matrix_path, check.names = FALSE, stringsAsF
 if (is.null(design_df)) {
   design_df <- data.frame(sample = character(0), filename = character(0), stringsAsFactors = FALSE)
 }
+if (ncol(design_df) > 0 && !("sample" %in% colnames(design_df))) {
+  colnames(design_df)[1] <- "sample"
+}
+if (ncol(design_df) > 1 && !("filename" %in% colnames(design_df))) {
+  colnames(design_df)[ncol(design_df)] <- "filename"
+}
+if (!("sample" %in% colnames(design_df))) {
+  design_df$sample <- character(0)
+}
+design_df$sample <- trimws(as.character(design_df$sample))
+if (!("filename" %in% colnames(design_df))) {
+  design_df$filename <- design_df$sample
+}
 comparison_columns <- setdiff(colnames(design_df), c("sample", "filename"))
+sample_sort_choices <- c("Alphabetical" = "__alpha__", setNames(comparison_columns, comparison_columns))
+
+fastq_stem <- function(x) {
+  if (is.null(x) || length(x) == 0 || is.na(x)) x <- ""
+  x <- trimws(as.character(x))
+  if (grepl(",", x, fixed = TRUE)) x <- strsplit(x, ",", fixed = TRUE)[[1]][1]
+  x <- basename(x)
+  x <- sub("_R[12]_001\\.f(ast)?q\\.gz$", "", x, ignore.case = TRUE)
+  x <- sub("_R[12]\\.f(ast)?q\\.gz$", "", x, ignore.case = TRUE)
+  x <- sub("\\.f(ast)?q\\.gz$", "", x, ignore.case = TRUE)
+  x
+}
+
+sample_fastq_stems <- setNames(
+  vapply(design_df$filename, fastq_stem, character(1)),
+  design_df$sample
+)
 
 star_raw <- safe_read_delim(
   star_summary_path,
@@ -174,8 +204,9 @@ rsem_available <- dir.exists(rsem_dir) && length(list.files(rsem_dir, pattern = 
 deseq2_available <- dir.exists(deseq2_dir) && length(list.files(deseq2_dir, pattern = "^normalized_counts_.*\\.txt$", recursive = FALSE)) > 0
 gseapy_available <- dir.exists(gseapy_dir) && length(list.files(gseapy_dir, pattern = "report\\.gseapy\\..*\\.csv$", recursive = TRUE)) > 0
 
-sample_sources <- unique(c(
-  as.character(design_df$sample),
+design_samples <- unique(as.character(design_df$sample))
+design_samples <- design_samples[!is.na(design_samples) & nzchar(design_samples)]
+fallback_sample_sources <- unique(c(
   setdiff(colnames(star_summary_df), "metric"),
   setdiff(colnames(count_matrix_df), "Geneid"),
   available_qc_samples(fastqc_dir),
@@ -183,7 +214,12 @@ sample_sources <- unique(c(
   if (kallisto_available) list.files(kallisto_dir, full.names = FALSE) else character(0),
   if (rsem_available) list.files(rsem_dir, full.names = FALSE) else character(0)
 ))
-samples <- sort(unique(sample_sources[!is.na(sample_sources) & nzchar(sample_sources)]))
+fallback_sample_sources <- fallback_sample_sources[
+  !is.na(fallback_sample_sources) &
+    nzchar(fallback_sample_sources) &
+    !grepl("\\.(txt|tsv|csv|html|png|pdf)$", fallback_sample_sources, ignore.case = TRUE)
+]
+samples <- if (length(design_samples)) design_samples else sort(unique(fallback_sample_sources))
 default_show_trimmed <- if (fastqc_trim_available && !fastqc_raw_available) TRUE else if (fastqc_raw_available && !fastqc_trim_available) FALSE else fastqc_trim_available
 
 if (dir.exists(fastqc_dir)) addResourcePath("fastqc_results", fastqc_dir)
@@ -196,21 +232,27 @@ if (!is.null(logo_path)) addResourcePath("logo_asset", dirname(logo_path))
 qc_file_map <- function(sample_name, read_name = c("R1", "R2"), trimmed = FALSE) {
   read_name <- match.arg(read_name)
   base_dir <- if (trimmed) fastqc_cutadapt_dir else fastqc_dir
-  prefix <- paste0(sample_name, "_", read_name, "_001")
+  sample_stem <- sample_fastq_stems[[sample_name]]
+  if (is.null(sample_stem) || is.na(sample_stem) || !nzchar(sample_stem)) {
+    sample_stem <- sample_name
+  }
+  prefix <- paste0(sample_stem, "_", read_name, "_001")
   list(
     fastqc = file.path(base_dir, paste0(prefix, "_fastqc.html")),
     screen = file.path(base_dir, paste0(prefix, "_screen.html"))
   )
 }
 
-iframe_or_message <- function(path, resource_prefix, height = 650, missing_message = NULL) {
+iframe_or_message <- function(path, resource_prefix, height = "calc(100vh - 260px)", missing_message = NULL) {
   if (!file.exists(path)) {
     return(tags$p(value_or(missing_message, sprintf("Missing file: %s", basename(path)))))
   }
   rel <- basename(path)
+  height_css <- if (is.numeric(height)) paste0(height, "px") else height
   tags$iframe(
+    class = "qc-report-frame",
     src = file.path(resource_prefix, rel),
-    style = sprintf("width: 100%%; height: %spx; border: 1px solid #ddd;", height)
+    style = sprintf("width: 100%%; height: %s; min-height: 760px; border: 1px solid #d7e0ea;", height_css)
   )
 }
 
@@ -333,13 +375,21 @@ read_gtf_gene_map <- function(gtf_path) {
   map
 }
 
+looks_like_gene_id <- function(ids) {
+  ids <- as.character(ids)
+  ids <- ids[!is.na(ids) & nzchar(ids)]
+  if (!length(ids)) return(FALSE)
+  ids <- head(ids, 500)
+  mean(grepl("^(ENSG|ENSMUSG|ENS[A-Z]*G)[0-9]+", ids)) >= 0.5
+}
+
 convert_gene_labels <- function(ids, map_df) {
   ids <- as.character(ids)
   if (is.null(map_df) || !length(ids)) {
     return(list(values = ids, from = NA_character_, to = NA_character_))
   }
   current_species <- detect_species_from_ids(ids)
-  current_type <- if (sum(grepl("^ENS", ids[!is.na(ids)])) > 0) "gene_id" else "gene_name"
+  current_type <- if (looks_like_gene_id(ids)) "gene_id" else "gene_name"
   if (identical(current_type, "gene_id")) {
     idx <- match(strip_version(ids), map_df$gene_id_stripped)
     converted <- map_df$gene_name[idx]
@@ -394,17 +444,19 @@ sort_df_by_col <- function(df, sort_col, sort_dir = "asc") {
   df[ord, , drop = FALSE]
 }
 
-order_sample_columns <- function(df, annotation_col, mode = "original", design_df = NULL, id_cols = character(0)) {
+order_sample_columns <- function(df, annotation_col = "__alpha__", design_df = NULL, id_cols = character(0)) {
   if (is.null(df) || !nrow(df)) return(df)
-  if (!identical(mode, "group") || is.null(design_df) || is.null(annotation_col) || !nzchar(annotation_col) || !(annotation_col %in% colnames(design_df))) {
-    return(df)
-  }
+  id_cols <- intersect(id_cols, colnames(df))
   sample_cols <- setdiff(colnames(df), id_cols)
   if (!length(sample_cols)) return(df)
-  ann_vals <- as.character(design_df[[annotation_col]][match(sample_cols, design_df$sample)])
-  ann_vals[is.na(ann_vals) | !nzchar(ann_vals)] <- "~"
-  ord <- order(ann_vals, sample_cols)
-  df[, c(intersect(id_cols, colnames(df)), sample_cols[ord]), drop = FALSE]
+  if (!is.null(design_df) && !is.null(annotation_col) && nzchar(annotation_col) && !identical(annotation_col, "__alpha__") && annotation_col %in% colnames(design_df)) {
+    ann_vals <- as.character(design_df[[annotation_col]][match(sample_cols, design_df$sample)])
+    ann_vals[is.na(ann_vals) | !nzchar(ann_vals)] <- "~"
+    ord <- order(ann_vals, sample_cols)
+  } else {
+    ord <- order(sample_cols)
+  }
+  df[, c(id_cols, sample_cols[ord]), drop = FALSE]
 }
 
 build_group_header_container <- function(df, id_cols = character(0), annotation_col = NULL, design_df = NULL) {
@@ -500,6 +552,23 @@ pathway_pdf_relpath <- function(treatment_value, control_value, pathway_name, he
   full <- file.path(gseapy_dir, rel)
   if (!file.exists(full)) return(NULL)
   file.path("gseapy_results", rel)
+}
+
+pdf_preview_relpath <- function(resource_rel) {
+  if (is.null(resource_rel)) return(NULL)
+  rel <- sub("^gseapy_results/", "", resource_rel)
+  full_pdf <- file.path(gseapy_dir, rel)
+  if (!file.exists(full_pdf)) return(NULL)
+  png_rel <- paste0(tools::file_path_sans_ext(rel), ".preview.png")
+  full_png <- file.path(gseapy_dir, png_rel)
+  if (!file.exists(full_png) && requireNamespace("pdftools", quietly = TRUE)) {
+    dir.create(dirname(full_png), recursive = TRUE, showWarnings = FALSE)
+    tryCatch(
+      pdftools::pdf_convert(full_pdf, format = "png", pages = 1, dpi = 150, filenames = full_png),
+      error = function(e) NULL
+    )
+  }
+  if (file.exists(full_png)) file.path("gseapy_results", png_rel) else NULL
 }
 
 normalized_counts_path <- function(treatment_value, control_value) {
@@ -599,13 +668,14 @@ qc_subtabs <- list(
     sidebarLayout(
       sidebarPanel(
         selectInput("star_sample", "STAR sample", choices = samples, selected = first_or_null(samples)),
+        selectInput("star_sample_sort_col", "Sort sample columns by", choices = sample_sort_choices, selected = if ("treatment" %in% comparison_columns) "treatment" else "__alpha__"),
         tags$hr(),
         helpText("Compact alignment metrics pulled from STAR summary output.")
       ),
       mainPanel(
         uiOutput("star_status_ui"),
         h4("Alignment Summary Across Samples"),
-        tableOutput("star_summary_table"),
+        table_widget("star_summary_table"),
         tags$hr(),
         h4("Selected Sample"),
         tableOutput("star_sample_table")
@@ -616,20 +686,7 @@ qc_subtabs <- list(
     "FeatureCounts QC",
     sidebarLayout(
       sidebarPanel(
-        selectInput(
-          "featurecounts_qc_column_order_mode",
-          "Column order",
-          choices = c("Original sample order" = "original", "By group value" = "group"),
-          selected = "group"
-        ),
-        selectInput(
-          "featurecounts_qc_group_col",
-          "Group header by",
-          choices = comparison_columns,
-          selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns)
-        ),
-        selectInput("featurecounts_qc_sort_col", "Sort rows by", choices = c("Status")),
-        selectInput("featurecounts_qc_sort_dir", "Sort direction", choices = c("Ascending" = "asc", "Descending" = "desc"), selected = "asc")
+        selectInput("featurecounts_qc_sample_sort_col", "Sort sample columns by", choices = sample_sort_choices, selected = if ("treatment" %in% comparison_columns) "treatment" else "__alpha__")
       ),
       mainPanel(
         uiOutput("featurecounts_qc_status_ui"),
@@ -646,21 +703,8 @@ counts_subtabs <- list(
     sidebarLayout(
       sidebarPanel(
         selectizeInput("gene_query", "Search gene", choices = NULL, selected = NULL, multiple = FALSE),
-        actionButton("featurecounts_convert_btn", "Try gene ID/name conversion"),
-        selectInput(
-          "raw_counts_column_order_mode",
-          "Column order",
-          choices = c("Original sample order" = "original", "By group value" = "group"),
-          selected = "group"
-        ),
-        selectInput(
-          "raw_counts_group_col",
-          "Group header by",
-          choices = comparison_columns,
-          selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns)
-        ),
-        selectInput("raw_counts_sort_col", "Sort rows by", choices = c("Geneid")),
-        selectInput("raw_counts_sort_dir", "Sort direction", choices = c("Ascending" = "asc", "Descending" = "desc"), selected = "asc"),
+        uiOutput("featurecounts_convert_ui"),
+        selectInput("raw_counts_sample_sort_col", "Sort sample columns by", choices = sample_sort_choices, selected = if ("treatment" %in% comparison_columns) "treatment" else "__alpha__"),
         tags$hr(),
         helpText("Search the raw featureCounts matrix and optionally flip between gene_id and gene_name using the local GTF.")
       ),
@@ -683,21 +727,8 @@ counts_subtabs <- c(
           selectInput("rsem_type", "Show", choices = c("Genes" = "genes", "Isoforms" = "isoforms"), selected = "genes"),
           selectInput("rsem_metric", "Metric", choices = c("TPM", "expected_count", "FPKM"), selected = "TPM"),
           selectizeInput("rsem_query", "Select gene/transcript of interest", choices = NULL, selected = NULL, multiple = FALSE),
-          actionButton("rsem_convert_btn", "Try gene ID/name conversion"),
-          selectInput(
-            "rsem_column_order_mode",
-            "Column order",
-            choices = c("Original sample order" = "original", "By group value" = "group"),
-            selected = "group"
-          ),
-          selectInput(
-            "rsem_group_col",
-            "Group header by",
-            choices = comparison_columns,
-            selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns)
-          ),
-          selectInput("rsem_sort_col", "Sort rows by", choices = c("gene_id")),
-          selectInput("rsem_sort_dir", "Sort direction", choices = c("Ascending" = "asc", "Descending" = "desc"), selected = "asc"),
+          uiOutput("rsem_convert_ui"),
+          selectInput("rsem_sample_sort_col", "Sort sample columns by", choices = sample_sort_choices, selected = if ("treatment" %in% comparison_columns) "treatment" else "__alpha__"),
           tags$hr(),
           helpText("Shows an RSEM matrix across all samples. Choose genes or isoforms, then optionally flip displayed gene labels using the local GTF.")
         ),
@@ -721,20 +752,8 @@ counts_subtabs <- c(
           uiOutput("deseq_treatment_ui"),
           uiOutput("deseq_control_ui"),
           selectizeInput("deseq_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE),
-          selectInput(
-            "deseq_column_order_mode",
-            "Column order",
-            choices = c("Original sample order" = "original", "By group value" = "group"),
-            selected = "group"
-          ),
-          selectInput(
-            "deseq_group_col",
-            "Group header by",
-            choices = comparison_columns,
-            selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns)
-          ),
-          selectInput("deseq_sort_col", "Sort rows by", choices = c("gene_label")),
-          selectInput("deseq_sort_dir", "Sort direction", choices = c("Ascending" = "asc", "Descending" = "desc"), selected = "asc"),
+          uiOutput("deseq_convert_ui"),
+          selectInput("deseq_sample_sort_col", "Sort sample columns by", choices = sample_sort_choices, selected = if ("treatment" %in% comparison_columns) "treatment" else "__alpha__"),
           tags$hr(),
           helpText("Shows DESeq2 normalized counts for an available treatment vs control comparison.")
         ),
@@ -766,20 +785,7 @@ counts_subtabs <- c(
             selectizeInput("kallisto_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE),
             actionButton("build_kallisto_matrix_btn", "Build transcript matrix")
           ),
-          selectInput(
-            "kallisto_column_order_mode",
-            "Column order",
-            choices = c("Original sample order" = "original", "By group value" = "group"),
-            selected = "group"
-          ),
-          selectInput(
-            "kallisto_group_col",
-            "Group header by",
-            choices = comparison_columns,
-            selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns)
-          ),
-          selectInput("kallisto_sort_col", "Sort rows by", choices = c("gene_symbol")),
-          selectInput("kallisto_sort_dir", "Sort direction", choices = c("Ascending" = "asc", "Descending" = "desc"), selected = "asc"),
+          selectInput("kallisto_sample_sort_col", "Sort sample columns by", choices = sample_sort_choices, selected = if ("treatment" %in% comparison_columns) "treatment" else "__alpha__"),
           tags$hr(),
           helpText("Single sample matrix shows transcript-level abundance for one sample. Transcript matrix view shows matching transcripts across all samples.")
         ),
@@ -811,18 +817,19 @@ app_tabs <- list(
             conditionalPanel(
               "input.deg_subtab == 'DEGs'",
               selectizeInput("deg_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE),
+              uiOutput("deg_convert_ui"),
               selectInput("deg_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj"),
               numericInput("deg_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
               numericInput("deg_lfc_cutoff", "Absolute log2FC cutoff", value = 0, min = 0, step = 0.1),
+              helpText("These cutoffs only build the Enrichr up/down gene lists below; they do not filter the DEG table."),
               selectInput(
                 "deg_sort_mode",
                 "Sort DEGs",
                 choices = c(
-                  "Original order" = "original",
-                  "Downregulated genes at top" = "down",
-                  "Upregulated genes at top" = "up"
+                  "Upregulated genes at top" = "up",
+                  "Downregulated genes at top" = "down"
                 ),
-                selected = "original"
+                selected = "up"
               )
             ),
             conditionalPanel(
@@ -880,7 +887,7 @@ app_tabs <- list(
                 "DEGs",
                 tags$div(
                   style = "max-height: 520px; overflow-y: auto; overflow-x: auto;",
-                  tableOutput("deg_table")
+                  table_widget("deg_table")
                 ),
                 tags$hr(),
                 tags$div(
@@ -939,12 +946,12 @@ app_tabs <- list(
                 "All Pathways",
                 tags$div(
                   style = "max-height: 520px; overflow-y: auto; overflow-x: auto;",
-                  tableOutput("gsea_all_pathways_table")
+                  table_widget("gsea_all_pathways_table")
                 )
               ),
               tabPanel(
                 "Individual Pathway",
-                tableOutput("gsea_pathway_table"),
+                table_widget("gsea_pathway_table"),
                 tags$hr(),
                 uiOutput("gsea_pathway_plots_ui")
               )
@@ -1234,6 +1241,14 @@ ui <- fluidPage(
         background: white;
         box-shadow: 0 8px 22px rgba(32, 56, 84, 0.10);
       }
+      .qc-report-frame {
+        display: block;
+        width: 100%;
+      }
+      .dataTables_wrapper {
+        width: 100%;
+        overflow-x: auto;
+      }
       .shiny-notification {
         border-radius: 14px;
         box-shadow: 0 10px 30px rgba(26, 49, 78, 0.18);
@@ -1367,13 +1382,25 @@ server <- function(input, output, session) {
     NULL
   })
 
-  output$star_summary_table <- renderTable({
-    req(star_available)
-    df <- star_summary_df
-    rownames(df) <- df$metric
-    df$metric <- NULL
-    format_numeric_commas(df)
-  }, rownames = TRUE, striped = TRUE, bordered = TRUE, spacing = "s")
+  if (DT_AVAILABLE) {
+    output$star_summary_table <- DT::renderDT({
+      req(star_available)
+      df <- order_sample_columns(star_summary_df, annotation_col = value_or(input$star_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("metric"))
+      DT::datatable(
+        format_numeric_commas(df),
+        rownames = FALSE,
+        options = list(scrollX = TRUE, scrollY = "520px", pageLength = 25, fixedHeader = TRUE, autoWidth = TRUE, dom = "tip")
+      )
+    })
+  } else {
+    output$star_summary_table <- renderTable({
+      req(star_available)
+      df <- order_sample_columns(star_summary_df, annotation_col = value_or(input$star_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("metric"))
+      rownames(df) <- df$metric
+      df$metric <- NULL
+      format_numeric_commas(df)
+    }, rownames = TRUE, striped = TRUE, bordered = TRUE, spacing = "s")
+  }
 
   output$star_sample_table <- renderTable({
     req(star_available)
@@ -1414,17 +1441,15 @@ server <- function(input, output, session) {
       df <- featurecounts_summary_df
       df <- order_sample_columns(
         df,
-        annotation_col = value_or(input$featurecounts_qc_group_col, ""),
-        mode = value_or(input$featurecounts_qc_column_order_mode, "original"),
+        annotation_col = value_or(input$featurecounts_qc_sample_sort_col, "__alpha__"),
         design_df = design_df,
         id_cols = c("Status")
       )
-      df <- sort_df_by_col(df, value_or(input$featurecounts_qc_sort_col, "Status"), value_or(input$featurecounts_qc_sort_dir, "asc"))
+      df <- sort_df_by_col(df, "Status", "asc")
       df <- format_numeric_commas(df)
       DT::datatable(
         df,
         rownames = FALSE,
-        container = build_group_header_container(df, id_cols = c("Status"), annotation_col = value_or(input$featurecounts_qc_group_col, ""), design_df = design_df),
         options = list(scrollX = TRUE, scrollY = "520px", pageLength = 25, fixedHeader = TRUE, autoWidth = TRUE, dom = "tip")
       )
     })
@@ -1434,21 +1459,26 @@ server <- function(input, output, session) {
       df <- featurecounts_summary_df
       df <- order_sample_columns(
         df,
-        annotation_col = value_or(input$featurecounts_qc_group_col, ""),
-        mode = value_or(input$featurecounts_qc_column_order_mode, "original"),
+        annotation_col = value_or(input$featurecounts_qc_sample_sort_col, "__alpha__"),
         design_df = design_df,
         id_cols = c("Status")
       )
-      df <- sort_df_by_col(df, value_or(input$featurecounts_qc_sort_col, "Status"), value_or(input$featurecounts_qc_sort_dir, "asc"))
+      df <- sort_df_by_col(df, "Status", "asc")
       rownames(df) <- df$Status
       df$Status <- NULL
       format_numeric_commas(df)
     }, rownames = TRUE, striped = TRUE, bordered = TRUE, spacing = "s")
   }
 
+  output$featurecounts_convert_ui <- renderUI({
+    if (count_matrix_available && "Geneid" %in% colnames(count_matrix_nonzero_df) && looks_like_gene_id(count_matrix_nonzero_df$Geneid)) {
+      actionButton("featurecounts_convert_btn", "Convert Ensembl IDs to gene names")
+    }
+  })
+
   featurecounts_display_df <- reactive({
     df <- count_matrix_nonzero_df
-    if ((value_or(input$featurecounts_convert_btn, 0)) %% 2 == 1) {
+    if ("Geneid" %in% colnames(df) && looks_like_gene_id(df$Geneid) && (value_or(input$featurecounts_convert_btn, 0)) %% 2 == 1) {
       species <- detect_species_from_ids(df$Geneid)
       map_df <- get_gtf_map(species)
       conv <- convert_gene_labels(df$Geneid, map_df)
@@ -1462,7 +1492,7 @@ server <- function(input, output, session) {
     if (!count_matrix_available) {
       return(status_box("Raw count matrix has not been generated yet.", "warning"))
     }
-    if ((value_or(input$featurecounts_convert_btn, 0)) %% 2 == 1) {
+    if ("Geneid" %in% colnames(count_matrix_nonzero_df) && looks_like_gene_id(count_matrix_nonzero_df$Geneid) && (value_or(input$featurecounts_convert_btn, 0)) %% 2 == 1) {
       species <- detect_species_from_ids(count_matrix_nonzero_df$Geneid)
       map_df <- get_gtf_map(species)
       conv <- convert_gene_labels(head(count_matrix_nonzero_df$Geneid, 100), map_df)
@@ -1509,12 +1539,11 @@ server <- function(input, output, session) {
     }
     show_df <- order_sample_columns(
       show_df,
-      annotation_col = value_or(input$raw_counts_group_col, ""),
-      mode = value_or(input$raw_counts_column_order_mode, "original"),
+      annotation_col = value_or(input$raw_counts_sample_sort_col, "__alpha__"),
       design_df = design_df,
       id_cols = c("Geneid")
     )
-    sort_df_by_col(show_df, value_or(input$raw_counts_sort_col, "Geneid"), value_or(input$raw_counts_sort_dir, "asc"))
+    sort_df_by_col(show_df, "Geneid", "asc")
   })
 
   if (DT_AVAILABLE) {
@@ -1524,7 +1553,6 @@ server <- function(input, output, session) {
       DT::datatable(
         show_df,
         rownames = FALSE,
-        container = build_group_header_container(show_df, id_cols = c("Geneid"), annotation_col = value_or(input$raw_counts_group_col, ""), design_df = design_df),
         options = list(scrollX = TRUE, scrollY = "520px", pageLength = 50, fixedHeader = TRUE, autoWidth = TRUE, dom = "tip")
       )
     })
@@ -1552,13 +1580,20 @@ server <- function(input, output, session) {
       cached
     })
 
+    output$rsem_convert_ui <- renderUI({
+      raw_df <- get_rsem_matrix()
+      if (!is.null(raw_df) && "gene_id" %in% colnames(raw_df) && looks_like_gene_id(raw_df$gene_id)) {
+        actionButton("rsem_convert_btn", "Convert Ensembl IDs to gene names")
+      }
+    })
+
     rsem_display_df <- reactive({
       raw_df <- get_rsem_matrix()
       req(!is.null(raw_df))
       cache_key <- paste(
         input$rsem_type,
         input$rsem_metric,
-        value_or(input$rsem_convert_btn, 0) %% 2,
+        if ("gene_id" %in% colnames(raw_df) && looks_like_gene_id(raw_df$gene_id)) value_or(input$rsem_convert_btn, 0) %% 2 else 0,
         sep = "::"
       )
       cached <- rsem_display_cache[[cache_key]]
@@ -1566,7 +1601,7 @@ server <- function(input, output, session) {
         return(cached)
       }
       df <- raw_df
-      if ((value_or(input$rsem_convert_btn, 0)) %% 2 == 1 && "gene_id" %in% colnames(df)) {
+      if ("gene_id" %in% colnames(df) && looks_like_gene_id(df$gene_id) && (value_or(input$rsem_convert_btn, 0)) %% 2 == 1) {
         species <- detect_species_from_ids(df$gene_id)
         map_df <- get_gtf_map(species)
         conv <- convert_gene_labels(df$gene_id, map_df)
@@ -1584,7 +1619,7 @@ server <- function(input, output, session) {
       if (is.null(raw_df)) {
         return(status_box("RSEM results have not been generated yet.", "warning"))
       }
-      if ((value_or(input$rsem_convert_btn, 0)) %% 2 == 1) {
+      if ("gene_id" %in% colnames(raw_df) && looks_like_gene_id(raw_df$gene_id) && (value_or(input$rsem_convert_btn, 0)) %% 2 == 1) {
         species <- detect_species_from_ids(raw_df$gene_id)
         map_df <- get_gtf_map(species)
         conv <- convert_gene_labels(head(raw_df$gene_id, 100), map_df)
@@ -1632,12 +1667,11 @@ server <- function(input, output, session) {
       }
       show_df <- order_sample_columns(
         show_df,
-        annotation_col = value_or(input$rsem_group_col, ""),
-        mode = value_or(input$rsem_column_order_mode, "original"),
+        annotation_col = value_or(input$rsem_sample_sort_col, "__alpha__"),
         design_df = design_df,
         id_cols = c("gene_id", "transcript_id")
       )
-      sort_df_by_col(show_df, value_or(input$rsem_sort_col, id_col), value_or(input$rsem_sort_dir, "asc"))
+      sort_df_by_col(show_df, id_col, "asc")
     })
 
     if (DT_AVAILABLE) {
@@ -1647,7 +1681,6 @@ server <- function(input, output, session) {
         DT::datatable(
           show_df,
           rownames = FALSE,
-          container = build_group_header_container(show_df, id_cols = c("gene_id", "transcript_id"), annotation_col = value_or(input$rsem_group_col, ""), design_df = design_df),
           options = list(scrollX = TRUE, scrollY = "520px", pageLength = 50, fixedHeader = TRUE, autoWidth = TRUE, dom = "tip")
         )
       })
@@ -1686,7 +1719,7 @@ server <- function(input, output, session) {
       selectInput("deseq_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals)
     })
 
-    deseq_counts_df <- reactive({
+    deseq_counts_raw_df <- reactive({
       req(input$deseq_compare_col)
       if (identical(input$deseq_compare_col, "NA")) return(NULL)
       req(input$deseq_treatment, input$deseq_control)
@@ -1696,6 +1729,26 @@ server <- function(input, output, session) {
       keep_samples <- design_df$sample[design_df[[input$deseq_compare_col]] %in% c(input$deseq_treatment, input$deseq_control)]
       keep_cols <- c("gene_label", intersect(keep_samples, colnames(df)))
       df[, keep_cols, drop = FALSE]
+    })
+
+    output$deseq_convert_ui <- renderUI({
+      df <- deseq_counts_raw_df()
+      if (!is.null(df) && "gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label)) {
+        actionButton("deseq_convert_btn", "Convert Ensembl IDs to gene names")
+      }
+    })
+
+    deseq_counts_df <- reactive({
+      df <- deseq_counts_raw_df()
+      if (is.null(df)) return(NULL)
+      if ("gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label) && (value_or(input$deseq_convert_btn, 0)) %% 2 == 1) {
+        species <- detect_species_from_ids(df$gene_label)
+        map_df <- get_gtf_map(species)
+        conv <- convert_gene_labels(df$gene_label, map_df)
+        df$gene_label <- conv$values
+        df <- aggregate_display_matrix(df, "gene_label")
+      }
+      df
     })
 
     output$deseq_status_ui <- renderUI({
@@ -1754,12 +1807,11 @@ server <- function(input, output, session) {
       }
       show_df <- order_sample_columns(
         show_df,
-        annotation_col = value_or(input$deseq_group_col, ""),
-        mode = value_or(input$deseq_column_order_mode, "original"),
+        annotation_col = value_or(input$deseq_sample_sort_col, "__alpha__"),
         design_df = design_df,
         id_cols = c("gene_label")
       )
-      sort_df_by_col(show_df, value_or(input$deseq_sort_col, "gene_label"), value_or(input$deseq_sort_dir, "asc"))
+      sort_df_by_col(show_df, "gene_label", "asc")
     })
 
     if (DT_AVAILABLE) {
@@ -1768,7 +1820,6 @@ server <- function(input, output, session) {
         DT::datatable(
           show_df,
           rownames = FALSE,
-          container = build_group_header_container(show_df, id_cols = c("gene_label"), annotation_col = value_or(input$deseq_group_col, ""), design_df = design_df),
           options = list(scrollX = TRUE, scrollY = "520px", pageLength = 50, fixedHeader = TRUE, autoWidth = TRUE, dom = "tip")
         )
       })
@@ -1799,11 +1850,30 @@ server <- function(input, output, session) {
       selectInput("deg_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals)
     })
 
-    deg_df <- reactive({
+    deg_raw_df <- reactive({
       req(input$deg_compare_col)
       if (identical(input$deg_compare_col, "NA")) return(NULL)
       req(input$deg_treatment, input$deg_control)
       read_deg_table(deg_table_path(input$deg_treatment, input$deg_control))
+    })
+
+    output$deg_convert_ui <- renderUI({
+      df <- deg_raw_df()
+      if (!is.null(df) && "gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label)) {
+        actionButton("deg_convert_btn", "Convert Ensembl IDs to gene names")
+      }
+    })
+
+    deg_df <- reactive({
+      df <- deg_raw_df()
+      if (is.null(df)) return(NULL)
+      if ("gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label) && (value_or(input$deg_convert_btn, 0)) %% 2 == 1) {
+        species <- detect_species_from_ids(df$gene_label)
+        map_df <- get_gtf_map(species)
+        conv <- convert_gene_labels(df$gene_label, map_df)
+        df$gene_label <- conv$values
+      }
+      df
     })
 
     output$deg_status_ui <- renderUI({
@@ -1935,21 +2005,37 @@ server <- function(input, output, session) {
       unique(c(up_genes, down_genes))
     })
 
-    output$deg_table <- renderTable({
-      df <- deg_df()
-      req(!is.null(df))
-      df <- sort_deg_table(df, sort_mode = input$deg_sort_mode, p_col = input$deg_p_col)
-      q <- input$deg_gene_query
-      if (is.null(q) || !nzchar(trimws(q))) {
-        show_df <- head(format_deg_table(df), 100)
-      } else {
-        hits <- df[tolower(df$gene_label) == tolower(trimws(q)), , drop = FALSE]
-        show_df <- if (nrow(hits) == 0) head(format_deg_table(df), 100) else format_deg_table(hits)
-      }
-      rownames(show_df) <- make.unique(as.character(show_df$gene_label))
-      show_df$gene_label <- NULL
-      show_df
-    }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = TRUE)
+    if (DT_AVAILABLE) {
+      output$deg_table <- DT::renderDT({
+        df <- deg_df()
+        req(!is.null(df))
+        df <- sort_deg_table(df, sort_mode = value_or(input$deg_sort_mode, "up"), p_col = input$deg_p_col)
+        q <- input$deg_gene_query
+        if (is.null(q) || !nzchar(trimws(q))) {
+          show_df <- head(format_deg_table(df), 500)
+        } else {
+          hits <- df[tolower(df$gene_label) == tolower(trimws(q)), , drop = FALSE]
+          show_df <- if (nrow(hits) == 0) head(format_deg_table(df), 500) else format_deg_table(hits)
+        }
+        DT::datatable(show_df, rownames = FALSE, options = list(scrollX = TRUE, scrollY = "520px", pageLength = 50, fixedHeader = TRUE, autoWidth = TRUE, dom = "tip"))
+      })
+    } else {
+      output$deg_table <- renderTable({
+        df <- deg_df()
+        req(!is.null(df))
+        df <- sort_deg_table(df, sort_mode = value_or(input$deg_sort_mode, "up"), p_col = input$deg_p_col)
+        q <- input$deg_gene_query
+        if (is.null(q) || !nzchar(trimws(q))) {
+          show_df <- head(format_deg_table(df), 100)
+        } else {
+          hits <- df[tolower(df$gene_label) == tolower(trimws(q)), , drop = FALSE]
+          show_df <- if (nrow(hits) == 0) head(format_deg_table(df), 100) else format_deg_table(hits)
+        }
+        rownames(show_df) <- make.unique(as.character(show_df$gene_label))
+        show_df$gene_label <- NULL
+        show_df
+      }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = TRUE)
+    }
 
     output$deg_pca_ui <- renderUI({
       if (!deseq2_available) return(tags$p("PCA has not been generated yet."))
@@ -2053,7 +2139,7 @@ server <- function(input, output, session) {
     output$deg_status_ui <- renderUI({
       status_box("Differential expression results have not been generated yet.", "warning")
     })
-    output$deg_table <- renderTable({ NULL })
+    output$deg_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
     output$deg_pca_ui <- renderUI({
       tags$p("PCA has not been generated yet.")
     })
@@ -2142,19 +2228,35 @@ server <- function(input, output, session) {
       )
     })
 
-    output$gsea_pathway_table <- renderTable({
-      df <- gsea_report_df()
-      req(!is.null(df), input$gsea_pathway)
-      hit <- df[df$Term == input$gsea_pathway, , drop = FALSE]
-      if (!nrow(hit)) return(NULL)
-      format_gsea_table(hit)
-    }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = FALSE)
+    if (DT_AVAILABLE) {
+      output$gsea_pathway_table <- DT::renderDT({
+        df <- gsea_report_df()
+        req(!is.null(df), input$gsea_pathway)
+        hit <- df[df$Term == input$gsea_pathway, , drop = FALSE]
+        if (!nrow(hit)) return(NULL)
+        DT::datatable(format_gsea_table(hit), rownames = FALSE, options = list(scrollX = TRUE, pageLength = 5, dom = "t"))
+      })
 
-    output$gsea_all_pathways_table <- renderTable({
-      df <- gsea_report_df()
-      req(!is.null(df))
-      format_gsea_table(df)
-    }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = FALSE)
+      output$gsea_all_pathways_table <- DT::renderDT({
+        df <- gsea_report_df()
+        req(!is.null(df))
+        DT::datatable(format_gsea_table(df), rownames = FALSE, options = list(scrollX = TRUE, scrollY = "520px", pageLength = 25, fixedHeader = TRUE, dom = "tip"))
+      })
+    } else {
+      output$gsea_pathway_table <- renderTable({
+        df <- gsea_report_df()
+        req(!is.null(df), input$gsea_pathway)
+        hit <- df[df$Term == input$gsea_pathway, , drop = FALSE]
+        if (!nrow(hit)) return(NULL)
+        format_gsea_table(hit)
+      }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = FALSE)
+
+      output$gsea_all_pathways_table <- renderTable({
+        df <- gsea_report_df()
+        req(!is.null(df))
+        format_gsea_table(df)
+      }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = FALSE)
+    }
 
     output$gsea_summary_plots_ui <- renderUI({
       req(input$gsea_treatment, input$gsea_control, input$gsea_collection)
@@ -2176,15 +2278,21 @@ server <- function(input, output, session) {
       if (is.null(pdf_rel) && is.null(heatmap_rel)) {
         return(tags$p("No pathway-specific plot files found for this pathway."))
       }
-      tags$div(
-        if (!is.null(pdf_rel)) tags$div(
-          tags$h5("Enrichment Plot"),
-          tags$embed(src = pdf_rel, type = "application/pdf", style = "width: 100%; height: 700px; border: 1px solid #ddd; margin-bottom: 16px;")
-        ),
-        if (!is.null(heatmap_rel)) tags$div(
-          tags$h5("Pathway Heatmap"),
-          tags$embed(src = heatmap_rel, type = "application/pdf", style = "width: 100%; height: 700px; border: 1px solid #ddd;")
+      plot_block <- function(title, rel) {
+        if (is.null(rel)) return(NULL)
+        png_rel <- pdf_preview_relpath(rel)
+        tags$div(
+          tags$h5(title),
+          if (!is.null(png_rel)) {
+            tags$img(src = png_rel, style = "max-width: 100%; border: 1px solid #ddd; margin-bottom: 16px;")
+          } else {
+            tags$iframe(src = rel, style = "width: 100%; height: 900px; border: 1px solid #ddd; margin-bottom: 16px;")
+          }
         )
+      }
+      tags$div(
+        plot_block("Enrichment Plot", pdf_rel),
+        plot_block("Pathway Heatmap", heatmap_rel)
       )
     })
   } else {
@@ -2195,8 +2303,8 @@ server <- function(input, output, session) {
     output$gsea_status_ui <- renderUI({
       status_box("GSEA results have not been generated yet.", "warning")
     })
-    output$gsea_pathway_table <- renderTable({ NULL })
-    output$gsea_all_pathways_table <- renderTable({ NULL })
+    output$gsea_pathway_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
+    output$gsea_all_pathways_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
     output$gsea_summary_plots_ui <- renderUI({ tags$p("GSEA summary plots are not available yet.") })
     output$gsea_pathway_plots_ui <- renderUI({ tags$p("No pathway-specific GSEA plots are available yet.") })
   }
@@ -2321,12 +2429,11 @@ server <- function(input, output, session) {
       }
       show_df <- order_sample_columns(
         show_df,
-        annotation_col = value_or(input$kallisto_group_col, ""),
-        mode = value_or(input$kallisto_column_order_mode, "original"),
+        annotation_col = value_or(input$kallisto_sample_sort_col, "__alpha__"),
         design_df = design_df,
         id_cols = c("gene_symbol", "transcript_name", "transcript_id", "gene_id", "biotype")
       )
-      sort_df_by_col(show_df, value_or(input$kallisto_sort_col, colnames(show_df)[1]), value_or(input$kallisto_sort_dir, "asc"))
+      sort_df_by_col(show_df, colnames(show_df)[1], "asc")
     })
 
     observe({
@@ -2346,7 +2453,6 @@ server <- function(input, output, session) {
         DT::datatable(
           show_df,
           rownames = FALSE,
-          container = build_group_header_container(show_df, id_cols = c("gene_symbol", "transcript_name", "transcript_id", "gene_id", "biotype"), annotation_col = value_or(input$kallisto_group_col, ""), design_df = design_df),
           options = list(scrollX = TRUE, scrollY = "520px", pageLength = 50, fixedHeader = TRUE, autoWidth = TRUE, dom = "tip")
         )
       })
