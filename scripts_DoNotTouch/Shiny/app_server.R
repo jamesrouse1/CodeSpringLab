@@ -651,9 +651,15 @@ pathway_pdf_relpath <- function(treatment_value, control_value, pathway_name, he
 pdf_render_relpath <- function(resource_rel) {
   if (is.null(resource_rel)) return(NULL)
   rel <- sub("^gseapy_results/", "", resource_rel)
+  base_rel <- tools::file_path_sans_ext(rel)
+  for (ext in c(".png", ".jpg", ".jpeg", ".svg")) {
+    existing_rel <- paste0(base_rel, ext)
+    if (file.exists(file.path(gseapy_dir, existing_rel))) return(file.path("gseapy_results", existing_rel))
+  }
+
   full_pdf <- file.path(gseapy_dir, rel)
   if (!file.exists(full_pdf)) return(NULL)
-  png_rel <- paste0(tools::file_path_sans_ext(rel), ".rendered.png")
+  png_rel <- paste0(base_rel, ".rendered.png")
   full_png <- file.path(gseapy_dir, png_rel)
   if (!file.exists(full_png)) {
     dir.create(dirname(full_png), recursive = TRUE, showWarnings = FALSE)
@@ -675,6 +681,19 @@ pdf_render_relpath <- function(resource_rel) {
       system2("pdftoppm", c("-png", "-r", "300", "-singlefile", full_pdf, tools::file_path_sans_ext(full_png))),
       error = function(e) NULL
     )
+  }
+  if (!file.exists(full_png) && nzchar(Sys.which("python3"))) {
+    py <- paste(
+      "import sys",
+      "pdf, out = sys.argv[1], sys.argv[2]",
+      "def done():\n    sys.exit(0)",
+      "try:\n    import fitz\n    doc = fitz.open(pdf)\n    page = doc.load_page(0)\n    pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)\n    pix.save(out)\n    done()\nexcept Exception:\n    pass",
+      "try:\n    import pypdfium2 as pdfium\n    doc = pdfium.PdfDocument(pdf)\n    page = doc[0]\n    bitmap = page.render(scale=3)\n    bitmap.to_pil().save(out)\n    done()\nexcept Exception:\n    pass",
+      "try:\n    from pdf2image import convert_from_path\n    imgs = convert_from_path(pdf, dpi=300, first_page=1, last_page=1)\n    imgs[0].save(out)\n    done()\nexcept Exception:\n    pass",
+      "sys.exit(1)",
+      sep = "\n"
+    )
+    tryCatch(system2("python3", c("-c", py, full_pdf, full_png), stdout = FALSE, stderr = FALSE), error = function(e) NULL)
   }
   if (file.exists(full_png)) file.path("gseapy_results", png_rel) else NULL
 }
@@ -1070,7 +1089,24 @@ app_tabs <- list(
               ),
               checkboxInput("heatmap_show_row_names", "Show gene labels", value = TRUE),
               checkboxInput("heatmap_show_col_names", "Show sample labels", value = TRUE),
-              checkboxInput("heatmap_show_annotation_names", "Show annotation track labels", value = FALSE)
+              checkboxInput("heatmap_show_annotation_names", "Show annotation track labels", value = FALSE),
+              selectInput(
+                "heatmap_distance",
+                "Clustering distance",
+                choices = c("Euclidean" = "euclidean", "Correlation" = "correlation", "Manhattan" = "manhattan"),
+                selected = "euclidean"
+              ),
+              selectInput(
+                "heatmap_cluster_method",
+                "Clustering method",
+                choices = c("Complete" = "complete", "Average" = "average", "Single" = "single", "Ward D2" = "ward.D2"),
+                selected = "complete"
+              ),
+              numericInput("heatmap_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
+              numericInput("heatmap_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
+              numericInput("heatmap_save_width", "Saved width (px)", value = 2400, min = 600, max = 8000, step = 100),
+              numericInput("heatmap_save_height", "Saved height (px)", value = 1900, min = 600, max = 8000, step = 100),
+              numericInput("heatmap_save_res", "Saved resolution", value = 220, min = 72, max = 600, step = 10)
             ),
             tags$hr(),
             helpText("Shows DEGs, PCA, and a custom heatmap for an available treatment vs control comparison.")
@@ -1917,13 +1953,9 @@ server <- function(input, output, session) {
           sprintf("This comparison has not been tested: %s vs %s.", input$deseq_treatment, input$deseq_control)
         ))
       }
-      raw_df <- read_normalized_counts(path)
-      shown_df <- deseq_counts_df()
-      raw_n <- if (is.null(raw_df)) 0 else nrow(raw_df)
-      shown_n <- if (is.null(shown_df)) 0 else nrow(shown_df)
       tags$div(
         style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-        sprintf("Showing normalized counts for %s vs %s using %s. File has %s genes; display has %s genes. DESeq2.R writes normalized counts after keep <- rowSums(counts(dds)) >= 10.", input$deseq_treatment, input$deseq_control, input$deseq_compare_col, raw_n, shown_n)
+        sprintf("Showing normalized counts for %s vs %s using %s.", input$deseq_treatment, input$deseq_control, input$deseq_compare_col)
       )
     })
 
@@ -2235,9 +2267,16 @@ server <- function(input, output, session) {
         show_rownames = isTRUE(input$heatmap_show_row_names),
         show_colnames = isTRUE(input$heatmap_show_col_names),
         annotation_names_col = isTRUE(input$heatmap_show_annotation_names),
+        clustering_distance_rows = value_or(input$heatmap_distance, "euclidean"),
+        clustering_distance_cols = value_or(input$heatmap_distance, "euclidean"),
+        clustering_method = value_or(input$heatmap_cluster_method, "complete"),
         border_color = heatmap_border_color(input$heatmap_border_style, heatmap_theme),
         color = heatmap_palette_colors(input$heatmap_palette, heatmap_theme)
       )
+    }, width = function() {
+      as.numeric(value_or(input$heatmap_plot_width, 900))
+    }, height = function() {
+      as.numeric(value_or(input$heatmap_plot_height, 700))
     })
 
     observeEvent(input$save_heatmap_btn, {
@@ -2252,7 +2291,12 @@ server <- function(input, output, session) {
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
       out_path <- file.path(deseq2_dir, filename)
-      png(out_path, width = 2400, height = 1900, res = 220)
+      png(
+        out_path,
+        width = as.numeric(value_or(input$heatmap_save_width, 2400)),
+        height = as.numeric(value_or(input$heatmap_save_height, 1900)),
+        res = as.numeric(value_or(input$heatmap_save_res, 220))
+      )
       heatmap_theme <- value_or(input$heatmap_theme, "publication")
       pheatmap::pheatmap(
         hp$mat,
@@ -2268,6 +2312,9 @@ server <- function(input, output, session) {
         show_rownames = isTRUE(input$heatmap_show_row_names),
         show_colnames = isTRUE(input$heatmap_show_col_names),
         annotation_names_col = isTRUE(input$heatmap_show_annotation_names),
+        clustering_distance_rows = value_or(input$heatmap_distance, "euclidean"),
+        clustering_distance_cols = value_or(input$heatmap_distance, "euclidean"),
+        clustering_method = value_or(input$heatmap_cluster_method, "complete"),
         border_color = heatmap_border_color(input$heatmap_border_style, heatmap_theme),
         color = heatmap_palette_colors(input$heatmap_palette, heatmap_theme)
       )
@@ -2437,7 +2484,7 @@ server <- function(input, output, session) {
           if (!is.null(rendered_rel)) {
             tags$img(src = rendered_rel, style = "width: 100%; max-width: 100%; border: 1px solid #ddd; margin-bottom: 12px;")
           } else {
-            status_box("This server could not render the PDF to an image. Open the PDF link below.", "warning")
+            tags$object(data = rel, type = "application/pdf", style = "width: 100%; height: 900px; border: 1px solid #ddd; margin-bottom: 12px;")
           },
           tags$p(tags$a(href = rel, target = "_blank", "Open original PDF"))
         )
