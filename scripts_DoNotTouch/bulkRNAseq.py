@@ -1584,6 +1584,30 @@ def _packaged_mouse_human_ortholog_table():
         "mouse_human_orthologs_MGI.tsv"
     )
 
+def _mouse_human_ortholog_table_candidates(cache_dir=None):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cwd = os.getcwd()
+    candidates = [
+        os.environ.get("CSL_MOUSE_HUMAN_ORTHOLOGS", ""),
+        _packaged_mouse_human_ortholog_table(),
+        os.path.join(cwd, "..", "scripts_DoNotTouch", "reference", "mouse_human_orthologs_MGI.tsv"),
+        os.path.join(cwd, "scripts_DoNotTouch", "reference", "mouse_human_orthologs_MGI.tsv"),
+        os.path.join(script_dir, "..", "scripts_DoNotTouch", "reference", "mouse_human_orthologs_MGI.tsv"),
+    ]
+    if cache_dir is not None:
+        candidates.append(os.path.join(cache_dir, "mouse_human_orthologs_MGI.tsv"))
+    seen = set()
+    out = []
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        candidate = os.path.abspath(os.path.expanduser(str(candidate)))
+        if len(candidate.strip()) == 0 or candidate in seen:
+            continue
+        seen.add(candidate)
+        out.append(candidate)
+    return out
+
 def _clean_ensembl_ids(values):
     return pd.Series(values, dtype="object").astype(str).str.replace(r"\.\d+$", "", regex=True)
 
@@ -1664,7 +1688,8 @@ def _filter_gsea_orthologs(orth):
     return filtered
 
 def _read_mouse_human_ortholog_table(cache_dir):
-    candidates = [_packaged_mouse_human_ortholog_table()]
+    candidates = _mouse_human_ortholog_table_candidates(cache_dir)
+    missing_candidates = []
     mouse_symbol_names = [
         "mouse_gene_symbol", "mouse_symbol", "mgi_symbol", "marker_symbol",
         "external_gene_name", "mouse_gene_name"
@@ -1683,6 +1708,7 @@ def _read_mouse_human_ortholog_table(cache_dir):
             continue
         table_path = os.path.expanduser(table_path)
         if not os.path.exists(table_path):
+            missing_candidates.append(table_path)
             continue
         try:
             if table_path.endswith(".csv"):
@@ -1712,6 +1738,10 @@ def _read_mouse_human_ortholog_table(cache_dir):
             return _filter_gsea_orthologs(out)
         except Exception as exc:
             print("WARNING: Could not read mouse-human ortholog table "+table_path+": "+str(exc))
+    if missing_candidates:
+        print("WARNING: Mouse-human ortholog table was not found. Checked:")
+        for candidate in missing_candidates:
+            print("  "+candidate)
     return None
 
 def _mouse_expression_with_symbols(gene_exp, feature):
