@@ -1978,23 +1978,46 @@ def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
     print("WARNING: Genome '"+str(genome)+"' not recognized for pathway gene mapping; using input gene labels directly.")
     return _collapse_gsea_expression(gene_exp_conv, sample_cols)
 
-def _gseapy_gene_set_prompt():
-    saved = _config_value("geneset", "")
+GSEAPY_GENESET_OPTIONS = [
+    "MSigDB_Hallmark_2020",
+    "KEGG_2021_Human",
+    "GO_Biological_Process_2025",
+    "Reactome_Pathways_2024",
+    "ARCHS4_TFs_Coexp",
+    "ENCODE_TF_ChIP-seq_2015",
+    "ENCODE_Histone_Modifications_2015",
+    "FANTOM6_lncRNA_KD_DEGs",
+    "miRTarBase_2017",
+    "TRANSFAC_and_JASPAR_PWMs",
+    "GTEx_Tissues_V8_2023",
+    "CellMarker_2024",
+    "Cancer_Cell_Line_Encyclopedia",
+    "ClinVar_2019",
+    "GTEx_Aging_Signatures_2021",
+    "Proteomics_Drug_Atlas_2023",
+]
 
-    print("========================================")
-    print("Specify gene set database or full path to a local .gmt file:")
-    print("MSigDB_Hallmark_2020, KEGG_2021_Human, GO_Biological_Process_2025, Reactome_Pathways_2024")
-    print("ARCHS4_TFs_Coexp, ENCODE_TF_ChIP-seq_2015, ENCODE_Histone_Modifications_2015")
-    print("FANTOM6_lncRNA_KD_DEGs, miRTarBase_2017, TRANSFAC_and_JASPAR_PWMs")
-    print("GTEx_Tissues_V8_2023, CellMarker_2024, Cancer_Cell_Line_Encyclopedia")
-    print("ClinVar_2019, GTEx_Aging_Signatures_2021, Proteomics_Drug_Atlas_2023")
-    if len(str(saved).strip()) > 0:
-        print("Press enter/return to use saved geneset: "+str(saved))
-    geneset = os.path.expanduser(input().strip())
-    if len(geneset) == 0:
-        geneset = str(saved).strip()
-    _save_config_updates(geneset=geneset)
-    return geneset
+def _gseapy_gene_set_prompt():
+    options = pd.Series(GSEAPY_GENESET_OPTIONS, name="Gene set database")
+
+    while True:
+        print("========================================")
+        print("Specify gene set database or full path to a local .gmt file:")
+        print("Index")
+        print(options)
+        print("========================================")
+        print("Type an index from the list above, or type a gene set database / full path to a local .gmt file:")
+        geneset = os.path.expanduser(input().strip())
+        if len(geneset) == 0:
+            print("Please type a gene set index, gene set database name, or local .gmt path.")
+            continue
+        if geneset.isdigit():
+            geneset_index = int(geneset)
+            if geneset_index >= 0 and geneset_index < len(GSEAPY_GENESET_OPTIONS):
+                return GSEAPY_GENESET_OPTIONS[geneset_index]
+            print("Please choose an index between 0 and "+str(len(GSEAPY_GENESET_OPTIONS)-1)+".")
+            continue
+        return geneset
     
 def _gseapy_comparison_from_config():
     refcond_saved = str(_config_value("refcond", "")).strip()
@@ -2069,8 +2092,7 @@ def gseapy_PrepDirect():
                          inpath_design=inpath_design,
                          outpath_deseq2=outpath,
                          refcond=refcond,
-                         compared=compared,
-                         geneset=geneset)
+                         compared=compared)
 
     return geneset,genome,feature,_with_slash(inpath_design),_with_slash(outpath),outpath_pathway,refcond,compared
 
@@ -2141,12 +2163,32 @@ def gseapy_DotPlot(outpath_pathway,pathways,geneset):
     
     return dot
 
+def _gseapy_pathway_index_prompt(pathways, plot_type):
+    if pathways is None or len(pathways) == 0:
+        raise ValueError("No GSEA pathways are available to plot.")
+    display_cols = [col for col in ["Term", "NES", "FDR q-val"] if col in pathways.columns]
+    pathway_index = pathways.loc[:, display_cols].reset_index(drop=True)
+
+    while True:
+        print("Here's the list of GSEA pathways:")
+        print("Index")
+        print(pathway_index)
+        print("========================================")
+        print("Specify index to visualize "+plot_type+" plot of a selected pathway:(e.g 0)")
+        index_raw = input().strip()
+        try:
+            index_files = int(index_raw)
+        except ValueError:
+            print("Please type a numeric pathway index.")
+            continue
+        if index_files >= 0 and index_files < len(pathway_index):
+            return index_files
+        print("Please choose an index between 0 and "+str(len(pathway_index)-1)+".")
+
 def gseapy_EnrichPlot(pathways,gs):
 
-    terms = pathways.Term
-
-    print("Specify index to visualize Enrichment plot of a selected pathway:(e.g 0)")
-    index_files = int(input())
+    terms = pathways.Term.reset_index(drop=True)
+    index_files = _gseapy_pathway_index_prompt(pathways, "Enrichment")
 
     enrich = gs.plot(terms[index_files]) # If choosing only 1 pathway
 
@@ -2154,12 +2196,10 @@ def gseapy_EnrichPlot(pathways,gs):
 
 def gseapy_heatmap(pathways,gs):
 
-    terms = pathways.Term
-    
-    print("Specify index to visualize Heatmap plot of a selected pathway:(e.g 0)")
-    index_files = int(input())
+    terms = pathways.Term.reset_index(drop=True)
+    index_files = _gseapy_pathway_index_prompt(pathways, "Heatmap")
 
-    genes = pathways.Lead_genes[index_files].split(";")
+    genes = pathways.Lead_genes.reset_index(drop=True)[index_files].split(";")
     # Make sure that ``ofname`` is not None, if you want to save your figure to disk
     heatgsea = heatmap(df = gs.heatmat.loc[genes], z_score=0, title=terms[index_files], figsize=(14,4))
 
