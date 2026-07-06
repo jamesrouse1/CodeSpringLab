@@ -1623,6 +1623,14 @@ def _mouse_human_ortholog_table_candidates(cache_dir=None):
 def _clean_ensembl_ids(values):
     return pd.Series(values, dtype="object").astype(str).str.replace(r"\.\d+$", "", regex=True)
 
+def _looks_like_ensembl_gene_ids(values):
+    labels = pd.Series(values, dtype="object").astype(str).str.strip()
+    labels = labels[labels != ""]
+    if labels.empty:
+        return False
+    ensembl_hits = labels.str.match(r"^ENS[A-Z]*G[0-9]+(\.\d+)?$").sum()
+    return int(ensembl_hits) >= max(10, int(0.5 * len(labels)))
+
 def _default_gtf_paths(genome):
     genome = str(genome).lower()
     paths = []
@@ -1806,8 +1814,7 @@ def _collapse_gsea_expression(gene_exp_conv, sample_cols):
 def _apply_description_gene_labels(gene_exp, description_labels, feature, genome=None, outpath_pathway=None):
     if description_labels is None:
         return gene_exp, feature
-    index_values = gene_exp.index.to_series().astype(str)
-    if not index_values.str.startswith("ENS").any():
+    if not _looks_like_ensembl_gene_ids(gene_exp.index):
         return gene_exp, feature
 
     labels = description_labels.reindex(gene_exp.index)
@@ -1849,12 +1856,13 @@ def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
     sample_cols = list(gene_exp.columns)
     gene_exp = gene_exp.copy()
     gene_exp.index = gene_exp.index.astype(str)
-    if feature == "gene_id" or gene_exp.index.to_series().str.startswith("ENS").any():
+    index_is_ensembl = _looks_like_ensembl_gene_ids(gene_exp.index)
+    if index_is_ensembl:
         gene_exp.index = _clean_ensembl_ids(gene_exp.index).values
-
-    if gene_exp.index.to_series().astype(str).str.startswith("ENS").any():
         feature = "gene_id"
-    elif feature in ["", "auto"]:
+    else:
+        if feature == "gene_id":
+            print("GSEA gene labels: normalized-counts row labels do not look like Ensembl IDs; using them as gene symbols.")
         feature = "gene_name"
 
     if genome == "human" and feature == "gene_name":
