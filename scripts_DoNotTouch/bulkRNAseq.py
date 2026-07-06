@@ -1588,7 +1588,7 @@ def _packaged_mouse_human_ortholog_table():
 def _mouse_human_ortholog_table_candidates(cache_dir=None):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     cwd = os.getcwd()
-    candidates = [
+    raw_candidates = [
         os.environ.get("CSL_MOUSE_HUMAN_ORTHOLOGS", ""),
         _packaged_mouse_human_ortholog_table(),
         os.path.join(cwd, "..", "scripts_DoNotTouch", "reference", "mouse_human_orthologs_MGI.tsv"),
@@ -1596,17 +1596,28 @@ def _mouse_human_ortholog_table_candidates(cache_dir=None):
         os.path.join(script_dir, "..", "scripts_DoNotTouch", "reference", "mouse_human_orthologs_MGI.tsv"),
     ]
     if cache_dir is not None:
-        candidates.append(os.path.join(cache_dir, "mouse_human_orthologs_MGI.tsv"))
+        raw_candidates.append(os.path.join(cache_dir, "mouse_human_orthologs_MGI.tsv"))
     seen = set()
     out = []
-    for candidate in candidates:
+    for candidate in raw_candidates:
         if candidate is None:
             continue
         candidate = os.path.abspath(os.path.expanduser(str(candidate)))
-        if len(candidate.strip()) == 0 or candidate in seen:
+        if len(candidate.strip()) == 0:
             continue
-        seen.add(candidate)
-        out.append(candidate)
+        expanded = [candidate]
+        if os.path.isdir(candidate):
+            expanded = [
+                os.path.join(candidate, "mouse_human_orthologs_MGI.tsv"),
+                os.path.join(candidate, "reference", "mouse_human_orthologs_MGI.tsv"),
+                os.path.join(candidate, "..", "scripts_DoNotTouch", "reference", "mouse_human_orthologs_MGI.tsv"),
+            ]
+        for item in expanded:
+            item = os.path.abspath(os.path.expanduser(str(item)))
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
     return out
 
 def _clean_ensembl_ids(values):
@@ -1792,7 +1803,7 @@ def _collapse_gsea_expression(gene_exp_conv, sample_cols):
     gene_exp_conv.insert(1, "NAME", "na")
     return gene_exp_conv[["GENE", "NAME"] + sample_cols]
 
-def _apply_description_gene_labels(gene_exp, description_labels, feature):
+def _apply_description_gene_labels(gene_exp, description_labels, feature, genome=None, outpath_pathway=None):
     if description_labels is None:
         return gene_exp, feature
     index_values = gene_exp.index.to_series().astype(str)
@@ -1808,6 +1819,23 @@ def _apply_description_gene_labels(gene_exp, description_labels, feature):
     if usable_count < 10:
         print("WARNING: DESCRIPTION column was present but had too few usable gene labels for GSEA.")
         return gene_exp, feature
+
+    if str(genome).strip().lower() == "mouse":
+        cache_dir = _gseapy_cache_dir(outpath_pathway) if outpath_pathway is not None else None
+        orth = _read_mouse_human_ortholog_table(cache_dir)
+        if orth is None or "mouse_gene_symbol" not in orth.columns:
+            print("WARNING: Could not validate DESCRIPTION labels against the mouse ortholog table; keeping Ensembl IDs for GTF conversion.")
+            return gene_exp, feature
+        mouse_symbols = set(orth["mouse_gene_symbol"].astype(str))
+        overlap = int(labels.loc[usable].isin(mouse_symbols).sum())
+        if overlap < 10:
+            print(
+                "WARNING: DESCRIPTION labels matched only "
+                + str(overlap)
+                + " mouse ortholog symbols; keeping Ensembl IDs for GTF conversion."
+            )
+            return gene_exp, feature
+        print("GSEA gene labels: DESCRIPTION column matched "+str(overlap)+" mouse ortholog symbols.")
 
     out = gene_exp.loc[usable].copy()
     out.index = labels.loc[usable]
@@ -1975,7 +2003,7 @@ def gseapy_RunPathway(geneset,genome,feature,inpath_design,outpath,outpath_pathw
     if missing_samples:
         raise ValueError("Normalized counts file is missing samples from design matrix: "+", ".join(missing_samples))
     gene_exp = gene_exp[list(design.index)]
-    gene_exp, feature = _apply_description_gene_labels(gene_exp, description_labels, feature)
+    gene_exp, feature = _apply_description_gene_labels(gene_exp, description_labels, feature, genome, outpath_pathway)
     gene_exp_conv = _prepare_gseapy_expression(gene_exp,genome,feature,outpath_pathway)
 
     if gene_exp_conv.shape[0] < 10:
