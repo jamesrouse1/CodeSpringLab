@@ -1508,6 +1508,10 @@ def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_ho
         print("Enter your CSHL username:")
         username = input().strip()
 
+    if start_server_here:
+        _cleanup_local_shiny_processes(None)
+        print("Stopped previous RNA-seq Shiny sessions before starting a new viewer.")
+
     if port is None:
         port = _pick_available_port(start_port=port_min, end_port=port_max)
     port = int(port)
