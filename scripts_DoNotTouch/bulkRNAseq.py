@@ -132,11 +132,68 @@ def ListDir(directory):
     return dirlist
 
 
+def _maybe_launch_results_explorer_from_setup():
+
+    global project_name
+    global res_dir
+
+    print("==================================")
+    print("Have you already run the analysis and only want to launch the RNA-Seq Results Explorer? (y/n)")
+    jump = input().strip().lower()
+    if not jump.startswith("y"):
+        return None
+
+    default_data_dir = os.path.abspath(os.path.expanduser(res_dir+project_name+"/data"))
+    default_design = getattr(config, "inpath_design", "")
+    if len(default_design) > 0:
+        default_design = os.path.abspath(os.path.expanduser(default_design))
+        if not default_design.endswith("design_matrix.txt"):
+            default_design = os.path.join(default_design, "design_matrix.txt")
+
+    print("==================================")
+    print("Data folder for the visualizer:")
+    print(default_data_dir)
+    data_dir = input("Press Enter to use this, or paste a different data folder: ").strip()
+    if len(data_dir) == 0:
+        data_dir = default_data_dir
+    data_dir = os.path.abspath(os.path.expanduser(data_dir))
+
+    print("==================================")
+    print("Design matrix path for the visualizer:")
+    if len(default_design) > 0:
+        print(default_design)
+    else:
+        print("No previous design matrix path was saved in config.py.")
+    design_matrix = input("Press Enter to use this, or paste design_matrix.txt / its folder: ").strip()
+    if len(design_matrix) == 0:
+        design_matrix = default_design
+    design_matrix = os.path.abspath(os.path.expanduser(design_matrix)) if len(design_matrix) > 0 else design_matrix
+    if len(design_matrix) > 0 and not design_matrix.endswith("design_matrix.txt"):
+        design_matrix = os.path.join(design_matrix, "design_matrix.txt")
+
+    shiny_dir, outpath_shiny, shiny_config_path = shiny_Prep(data_dir=data_dir, inpath_design=design_matrix)
+    _ = shiny_OutsideOneLiner(shiny_dir, shiny_config_path, start_server_here=True)
+    print("Results Explorer launch commands printed above. You can skip the analysis cells below unless you need to rerun them.")
+
+    design_dir = os.path.dirname(design_matrix) if len(design_matrix) > 0 else getattr(config, "inpath_design", "")
+    read_path_destination = getattr(config, "read_path_destination", os.path.join(data_dir, "fastq"))
+    read_path_original = getattr(config, "read_path_original", read_path_destination)
+    genome = getattr(config, "genome", "")
+    pairing = getattr(config, "pairing", "")
+    scriptpath_copy = getattr(config, "scriptpath_copy", "../scripts_DoNotTouch/fastq/qsub_copy.sh")
+    return read_path_original, read_path_destination, scriptpath_copy, genome, pairing, design_dir
+
+
 def filetransfer_Prep():
         
     global project_name
     global param
     global res_dir
+
+    jump_results = _maybe_launch_results_explorer_from_setup()
+    if jump_results is not None:
+        read_path_original,read_path_destination,scriptpath_copy,genome,pairing,inpath_design = jump_results
+        return read_path_original+"/",read_path_destination+"/",scriptpath_copy,genome,pairing,inpath_design+"/"
 
     os.makedirs(res_dir+project_name+"/data/",exist_ok=True)
     #os.makedirs(res_dir+project_name+"/data/manifest/",exist_ok=True)
