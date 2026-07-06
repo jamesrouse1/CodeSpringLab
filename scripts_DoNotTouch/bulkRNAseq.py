@@ -9,6 +9,8 @@ import importlib
 import shlex
 import socket
 import subprocess
+import urllib.parse
+import urllib.request
 from IPython.display import IFrame,clear_output,HTML,Image
 import shutil
 import gzip
@@ -1595,6 +1597,66 @@ def _gseapy_cache_dir(outpath_pathway):
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
 
+def _safe_gsea_name(value):
+    value = os.path.basename(str(value).strip()) if os.path.exists(os.path.expanduser(str(value).strip())) else str(value).strip()
+    value = re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
+    return value.strip("_") or "gene_set"
+
+def _parse_gmt_text(gmt_text, source_name):
+    gene_sets = {}
+    skipped = 0
+    for line in str(gmt_text).splitlines():
+        if len(line.strip()) == 0:
+            continue
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) < 3:
+            skipped += 1
+            continue
+        term = parts[0].strip()
+        genes = [gene.strip() for gene in parts[2:] if len(gene.strip()) > 0]
+        if len(term) == 0 or len(genes) == 0:
+            skipped += 1
+            continue
+        gene_sets[term] = genes
+    if skipped > 0:
+        print("WARNING: Skipped "+str(skipped)+" malformed gene-set lines from "+str(source_name)+".")
+    return gene_sets
+
+def _load_gsea_gene_sets(geneset, outpath_pathway):
+    geneset = str(geneset).strip()
+    local_path = os.path.expanduser(geneset)
+    if os.path.exists(local_path):
+        with _open_text_maybe_gzip(local_path) as handle:
+            gene_sets = _parse_gmt_text(handle.read(), local_path)
+        if len(gene_sets) == 0:
+            raise ValueError("No usable gene sets were found in "+local_path)
+        print("Using local GMT gene set file: "+local_path+" ("+str(len(gene_sets))+" gene sets)")
+        return gene_sets
+
+    cache_dir = os.path.join(_gseapy_cache_dir(outpath_pathway), "gene_sets")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, _safe_gsea_name(geneset)+".gmt")
+    if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+        with open(cache_path, "r") as handle:
+            gene_sets = _parse_gmt_text(handle.read(), cache_path)
+        if len(gene_sets) > 0:
+            print("Using cached gene set library: "+cache_path+" ("+str(len(gene_sets))+" gene sets)")
+            return gene_sets
+
+    url = "https://maayanlab.cloud/Enrichr/geneSetLibrary?mode=text&libraryName="+urllib.parse.quote(geneset)
+    try:
+        with urllib.request.urlopen(url, timeout=120) as response:
+            gmt_text = response.read().decode("utf-8")
+    except Exception as exc:
+        raise ValueError("Could not download gene set library '"+geneset+"' from Enrichr: "+str(exc))
+    gene_sets = _parse_gmt_text(gmt_text, geneset)
+    if len(gene_sets) == 0:
+        raise ValueError("No usable gene sets were downloaded for '"+geneset+"'. Check the gene set name.")
+    with open(cache_path, "w") as handle:
+        handle.write(gmt_text)
+    print("Using Enrichr gene set library: "+geneset+" ("+str(len(gene_sets))+" gene sets)")
+    return gene_sets
+
 def _packaged_mouse_human_ortholog_table():
     return os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -2036,8 +2098,11 @@ def gseapy_RunPathway(geneset,genome,feature,inpath_design,outpath,outpath_pathw
 
     #############################
     
+    gene_sets_for_gsea = _load_gsea_gene_sets(geneset, outpath_pathway)
+    geneset_label = _safe_gsea_name(geneset)
+
     gs = GSEA(data=gene_exp_conv,
-         gene_sets=geneset,
+         gene_sets=gene_sets_for_gsea,
          classes = class_vector, # cls=class_vector
          # set permutation_type to phenotype if samples >=15
          permutation_type='gene_set',
@@ -2052,7 +2117,7 @@ def gseapy_RunPathway(geneset,genome,feature,inpath_design,outpath,outpath_pathw
 
     pathways = pd.read_csv(outpath_pathway+'/gseapy.gene_set.gsea.report.csv',index_col=None)
     pathways = pathways.sort_values(by=['FDR q-val'])
-    pathways.to_csv(outpath_pathway+'/report.gseapy.'+geneset+'.csv',index=None)
+    pathways.to_csv(outpath_pathway+'/report.gseapy.'+geneset_label+'.csv',index=None)
     terms = pathways.Term
 
     return gs,gs_res,pathways,terms,project_name
