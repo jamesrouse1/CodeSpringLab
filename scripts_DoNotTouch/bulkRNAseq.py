@@ -17,9 +17,12 @@ import gseapy as gp
 from gseapy import GSEA,Biomart,dotplot,heatmap
 import imgkit
 
-project_name=config.project_name
-param=config.parameters_exist
-res_dir=config.results_directory
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.py")
+
+project_name=getattr(config, "project_name", "example_dataset")
+param=getattr(config, "parameters_exist", "n")
+res_dir=getattr(config, "results_directory", "../../csl_results/")
 
 def Tree():
     
@@ -132,6 +135,69 @@ def ListDir(directory):
     return dirlist
 
 
+def _write_config(values):
+
+    with open(CONFIG_PATH, "w") as conf:
+        for key, value in values.items():
+            conf.write(key+"='"+str(value)+"'\n")
+            setattr(config, key, str(value))
+
+
+def _run_initial_config_prompt():
+
+    global project_name
+    global param
+    global res_dir
+
+    print("Do you want to use your most recent project name, genome, design matrix, and reads folders:(e.g y/n)")
+    print("\033[91m"+"If this is your first time, type"+"\033[94m"+" n"+"\x1b[0m")
+    param = input().strip()
+    if len(param) == 0:
+        param = "n"
+
+    recent_keys = ["read_path_original", "read_path_destination", "genome", "pairing", "inpath_design"]
+    if param != "n" and not all(len(str(getattr(config, key, ""))) > 0 for key in recent_keys):
+        print("No complete previous settings found; starting a new setup.")
+        param = "n"
+
+    if param == "n":
+        print("========================================")
+        print("Provide any unique project name:")
+        print("\033[91m"+"If you want to use our example dataset, type"+"\033[94m"+" example_dataset"+"\x1b[0m")
+        project_name = input().strip() or project_name
+
+        print("========================================")
+        print("Provide a path/location where to store your analysis results:(Sometimes your home has limited space)")
+        print("\033[91m"+"If not sure, leave it blank and press enter. Results will be stored in the same location"+"\033[94m")
+        res_dir_input = input().strip()
+        if len(res_dir_input) == 0:
+            res_dir = "../../csl_results/"
+        else:
+            res_dir = os.path.join(os.path.expanduser(res_dir_input), "csl_results")+"/"
+
+        _write_config({
+            "project_name": project_name,
+            "parameters_exist": param,
+            "results_directory": res_dir
+        })
+    else:
+        values = {
+            "project_name": project_name,
+            "parameters_exist": param,
+            "results_directory": res_dir,
+            "read_path_original": getattr(config, "read_path_original", ""),
+            "read_path_destination": getattr(config, "read_path_destination", ""),
+            "genome": getattr(config, "genome", ""),
+            "pairing": getattr(config, "pairing", ""),
+            "inpath_design": getattr(config, "inpath_design", ""),
+            "scriptpath_listdir": getattr(config, "scriptpath_listdir", "../scripts_DoNotTouch/fastq/qsub_listdir.sh"),
+            "scriptpath_copy": getattr(config, "scriptpath_copy", "../scripts_DoNotTouch/fastq/qsub_copy.sh")
+        }
+        _write_config(values)
+
+    return param
+
+
 def _maybe_launch_existing_results_explorer():
 
     global project_name
@@ -184,6 +250,12 @@ def filetransfer_Prep():
     if existing_results is not None:
         read_path_original,read_path_destination,scriptpath_copy,genome,pairing,inpath_design = existing_results
         return read_path_original+"/",read_path_destination+"/",scriptpath_copy,genome,pairing,inpath_design+"/"
+
+    _run_initial_config_prompt()
+    importlib.reload(config)
+    project_name = getattr(config, "project_name", project_name)
+    param = getattr(config, "parameters_exist", param)
+    res_dir = getattr(config, "results_directory", res_dir)
     
     os.makedirs(res_dir+project_name+"/data/",exist_ok=True)
     #os.makedirs(res_dir+project_name+"/data/manifest/",exist_ok=True)
