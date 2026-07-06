@@ -79,10 +79,17 @@ logo_path <- find_first_existing("Logo.png", logo_search_dirs)
 
 safe_read_delim <- function(path, ...) {
   if (!file.exists(path)) return(NULL)
-  tryCatch(
-    read.delim(path, ...),
-    error = function(e) NULL
-  )
+  args <- list(...)
+  tryCatch({
+    if (requireNamespace("data.table", quietly = TRUE) && is.null(args$row.names)) {
+      args$file <- path
+      args$data.table <- FALSE
+      args$showProgress <- FALSE
+      if (is.null(args$check.names)) args$check.names <- FALSE
+      return(do.call(data.table::fread, args))
+    }
+    do.call(read.delim, c(list(file = path), args))
+  }, error = function(e) NULL)
 }
 
 first_or_null <- function(x) {
@@ -488,7 +495,11 @@ simple_dt <- function(df, page_length = 25, scroll_y = "520px", dom = "tip") {
       scrollX = TRUE,
       scrollY = scroll_y,
       pageLength = page_length,
-      dom = dom
+      dom = dom,
+      deferRender = TRUE,
+      processing = TRUE,
+      searchDelay = 350,
+      autoWidth = FALSE
     )
   )
 }
@@ -2006,7 +2017,7 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$star_summary_table <- DT::renderDT({
       simple_dt(star_summary_table_df(), page_length = 25)
-    })
+    }, server = TRUE)
   } else {
     output$star_summary_table <- renderTable({
       df <- star_summary_table_df()
@@ -2057,7 +2068,7 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$featurecounts_summary_table <- DT::renderDT({
       simple_dt(featurecounts_summary_table_df(), page_length = 25)
-    })
+    }, server = TRUE)
   } else {
     output$featurecounts_summary_table <- renderTable({
       df <- featurecounts_summary_table_df()
@@ -2116,21 +2127,17 @@ server <- function(input, output, session) {
   })
 
   observe({
+    req(identical(input$main_tabs, "Counts"))
+    req(identical(input$counts_subtab, "Raw Counts"))
     if (!count_matrix_available) {
       updateSelectizeInput(session, "gene_query", choices = character(0), selected = character(0), server = TRUE)
-      updateSelectInput(session, "raw_counts_sort_col", choices = c("Geneid"), selected = "Geneid")
       return()
     }
-    updateSelectInput(
-      session,
-      "raw_counts_sort_col",
-      choices = colnames(featurecounts_display_df()),
-      selected = if ("Geneid" %in% colnames(featurecounts_display_df())) "Geneid" else colnames(featurecounts_display_df())[1]
-    )
+    df <- featurecounts_display_df()
     updateSelectizeInput(
       session,
       "gene_query",
-      choices = featurecounts_display_df()$Geneid,
+      choices = df$Geneid,
       selected = character(0),
       server = TRUE
     )
@@ -2154,7 +2161,7 @@ server <- function(input, output, session) {
     output$gene_search_table <- DT::renderDT({
       df <- raw_counts_table_df()
       simple_dt(df, page_length = 50)
-    })
+    }, server = TRUE)
   } else {
     output$gene_search_table <- renderTable({
       df <- raw_counts_table_df()
@@ -2253,6 +2260,8 @@ server <- function(input, output, session) {
     })
 
     observe({
+      req(identical(input$main_tabs, "Counts"))
+      req(identical(input$counts_subtab, "RSEM"))
       req(input$rsem_type, input$rsem_metric)
       df <- rsem_display_df()
       req(!is.null(df))
@@ -2292,7 +2301,7 @@ server <- function(input, output, session) {
       output$rsem_table <- DT::renderDT({
         df <- rsem_table_df()
         simple_dt(df, page_length = 50)
-      })
+      }, server = TRUE)
     } else {
       output$rsem_table <- renderTable({
         df <- rsem_table_df()
@@ -2397,6 +2406,8 @@ server <- function(input, output, session) {
     })
 
     observe({
+      req(identical(input$main_tabs, "Counts"))
+      req(identical(input$counts_subtab, "DESeq2 Normalized Counts"))
       df <- deseq_counts_df()
       if (is.null(df)) {
         updateSelectizeInput(session, "deseq_gene_query", choices = character(0), selected = character(0), server = TRUE)
@@ -2428,7 +2439,7 @@ server <- function(input, output, session) {
     if (DT_AVAILABLE) {
       output$deseq_counts_table <- DT::renderDT({
         simple_dt(deseq_counts_table_df(), page_length = 50)
-      })
+      }, server = TRUE)
     } else {
       output$deseq_counts_table <- renderTable({
         show_df <- deseq_counts_table_df()
@@ -2549,6 +2560,8 @@ server <- function(input, output, session) {
     })
 
     observe({
+      req(identical(input$main_tabs, "Differential Expression"))
+      req(identical(input$deg_subtab, "DEGs"))
       df <- deg_df()
       if (is.null(df)) {
         updateSelectizeInput(session, "deg_gene_query", choices = character(0), selected = character(0), server = TRUE)
@@ -2558,6 +2571,8 @@ server <- function(input, output, session) {
     })
 
     observe({
+      req(identical(input$main_tabs, "Differential Expression"))
+      req(identical(input$deg_subtab, "DEGs"))
       df <- deg_df()
       if (is.null(df)) {
         updateTextAreaInput(session, "deg_up_genes", value = "")
@@ -2575,6 +2590,8 @@ server <- function(input, output, session) {
     })
 
     observe({
+      req(identical(input$main_tabs, "Differential Expression"))
+      req(identical(input$deg_subtab, "Heatmap"))
       df <- heatmap_source_df()
       if (is.null(df)) {
         updateSelectizeInput(session, "heatmap_genes", choices = character(0), selected = character(0), server = TRUE)
@@ -2584,6 +2601,8 @@ server <- function(input, output, session) {
     })
 
     observe({
+      req(identical(input$main_tabs, "Differential Expression"))
+      req(identical(input$deg_subtab, "Volcano"))
       df <- deg_df()
       if (is.null(df)) {
         updateSelectizeInput(session, "volcano_label_genes", choices = character(0), selected = character(0), server = TRUE)
@@ -2727,7 +2746,7 @@ server <- function(input, output, session) {
           show_df <- if (nrow(hits) == 0) df else hits
         }
         simple_dt(show_df, page_length = 50)
-      })
+      }, server = TRUE)
     } else {
       output$deg_table <- renderTable({
         df <- deg_df()
@@ -2943,6 +2962,7 @@ server <- function(input, output, session) {
     })
 
     output$gsea_collection_ui <- renderUI({
+      req(identical(input$main_tabs, "GSEA"))
       comp_dir <- gsea_comp_dir()
       collections <- list_gseapy_collections(comp_dir)
       selectInput("gsea_collection", "Pathway collection", choices = collections, selected = if (length(collections)) collections[1] else character(0))
@@ -2955,6 +2975,7 @@ server <- function(input, output, session) {
     })
 
     output$gsea_pathway_ui <- renderUI({
+      req(identical(input$main_tabs, "GSEA"))
       df <- gsea_report_df()
       pathways <- if (is.null(df)) character(0) else df$Term
       selectizeInput("gsea_pathway", "Pathway", choices = pathways, selected = if (length(pathways)) pathways[1] else character(0), multiple = FALSE)
@@ -2995,13 +3016,13 @@ server <- function(input, output, session) {
         hit <- df[df$Term == input$gsea_pathway, , drop = FALSE]
         if (!nrow(hit)) return(NULL)
         simple_dt(hit, page_length = 5, scroll_y = "180px", dom = "t")
-      })
+      }, server = TRUE)
 
       output$gsea_all_pathways_table <- DT::renderDT({
         df <- gsea_report_df()
         req(!is.null(df))
         simple_dt(df, page_length = 25)
-      })
+      }, server = TRUE)
     } else {
       output$gsea_pathway_table <- renderTable({
         df <- gsea_report_df()
@@ -3231,7 +3252,7 @@ server <- function(input, output, session) {
     if (DT_AVAILABLE) {
       output$kallisto_table <- DT::renderDT({
         simple_dt(kallisto_table_df(), page_length = 50)
-      })
+      }, server = TRUE)
     } else {
       output$kallisto_table <- renderTable({
         format_numeric_commas(kallisto_table_df())
