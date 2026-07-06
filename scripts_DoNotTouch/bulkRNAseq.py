@@ -17,12 +17,9 @@ import gseapy as gp
 from gseapy import GSEA,Biomart,dotplot,heatmap
 import imgkit
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.py")
-
-project_name=getattr(config, "project_name", "example_dataset")
-param=getattr(config, "parameters_exist", "n")
-res_dir=getattr(config, "results_directory", "../../csl_results/")
+project_name=config.project_name
+param=config.parameters_exist
+res_dir=config.results_directory
 
 def Tree():
     
@@ -135,128 +132,12 @@ def ListDir(directory):
     return dirlist
 
 
-def _write_config(values):
-
-    with open(CONFIG_PATH, "w") as conf:
-        for key, value in values.items():
-            conf.write(key+"='"+str(value)+"'\n")
-            setattr(config, key, str(value))
-
-
-def _run_initial_config_prompt():
-
-    global project_name
-    global param
-    global res_dir
-
-    print("Do you want to use your most recent project name, genome, design matrix, and reads folders:(e.g y/n)")
-    print("\033[91m"+"If this is your first time, type"+"\033[94m"+" n"+"\x1b[0m")
-    param = input().strip()
-    if len(param) == 0:
-        param = "n"
-
-    recent_keys = ["read_path_original", "read_path_destination", "genome", "pairing", "inpath_design"]
-    if param != "n" and not all(len(str(getattr(config, key, ""))) > 0 for key in recent_keys):
-        print("No complete previous settings found; starting a new setup.")
-        param = "n"
-
-    if param == "n":
-        print("========================================")
-        print("Provide any unique project name:")
-        print("\033[91m"+"If you want to use our example dataset, type"+"\033[94m"+" example_dataset"+"\x1b[0m")
-        project_name = input().strip() or project_name
-
-        print("========================================")
-        print("Provide a path/location where to store your analysis results:(Sometimes your home has limited space)")
-        print("\033[91m"+"If not sure, leave it blank and press enter. Results will be stored in the same location"+"\033[94m")
-        res_dir_input = input().strip()
-        if len(res_dir_input) == 0:
-            res_dir = "../../csl_results/"
-        else:
-            res_dir = os.path.join(os.path.expanduser(res_dir_input), "csl_results")+"/"
-
-        _write_config({
-            "project_name": project_name,
-            "parameters_exist": param,
-            "results_directory": res_dir
-        })
-    else:
-        values = {
-            "project_name": project_name,
-            "parameters_exist": param,
-            "results_directory": res_dir,
-            "read_path_original": getattr(config, "read_path_original", ""),
-            "read_path_destination": getattr(config, "read_path_destination", ""),
-            "genome": getattr(config, "genome", ""),
-            "pairing": getattr(config, "pairing", ""),
-            "inpath_design": getattr(config, "inpath_design", ""),
-            "scriptpath_listdir": getattr(config, "scriptpath_listdir", "../scripts_DoNotTouch/fastq/qsub_listdir.sh"),
-            "scriptpath_copy": getattr(config, "scriptpath_copy", "../scripts_DoNotTouch/fastq/qsub_copy.sh")
-        }
-        _write_config(values)
-
-    return param
-
-
-def _maybe_launch_existing_results_explorer():
-
-    global project_name
-    global res_dir
-
-    print("==================================")
-    print("Have you already run the analysis and only want to visualize results? (y/n)")
-    visualize_existing_results = input().strip().lower()
-    if not visualize_existing_results.startswith("y"):
-        return None
-
-    project_name_existing = input("Project name used in csl_results: ").strip() or project_name
-    results_root_existing = input("Results root folder (example: /path/to/csl_results/): ").strip() or res_dir
-    design_matrix_existing = input("Full path to design_matrix.txt or its containing folder: ").strip()
-    data_dir_existing = input("Existing data folder (press Enter for <results_root>/<project_name>/data): ").strip()
-
-    if not results_root_existing.endswith("/"):
-        results_root_existing += "/"
-    if design_matrix_existing and not design_matrix_existing.endswith("design_matrix.txt"):
-        design_matrix_existing = os.path.join(design_matrix_existing, "design_matrix.txt")
-    if not data_dir_existing:
-        data_dir_existing = os.path.join(results_root_existing, project_name_existing, "data")
-
-    project_name = project_name_existing
-    res_dir = results_root_existing
-
-    design_dir = os.path.dirname(design_matrix_existing) if design_matrix_existing else getattr(config, "inpath_design", "")
-    read_path_destination = getattr(config, "read_path_destination", os.path.join(data_dir_existing, "fastq"))
-    read_path_original = getattr(config, "read_path_original", read_path_destination)
-    genome = getattr(config, "genome", "mouse")
-    pairing = getattr(config, "pairing", "y")
-    scriptpath_copy = getattr(config, "scriptpath_copy", "../scripts_DoNotTouch/fastq/qsub_copy.sh")
-
-    shiny_dir, outpath_shiny, shiny_config_path = shiny_Prep(
-        data_dir=data_dir_existing,
-        inpath_design=design_matrix_existing
-    )
-    _ = shiny_OutsideOneLiner(shiny_dir, shiny_config_path, start_server_here=True)
-    print("Results Explorer launch commands printed above. Skip the analysis cells below unless you need to rerun them.")
-
-    return read_path_original, read_path_destination, scriptpath_copy, genome, pairing, design_dir
-
 def filetransfer_Prep():
         
     global project_name
     global param
     global res_dir
 
-    existing_results = _maybe_launch_existing_results_explorer()
-    if existing_results is not None:
-        read_path_original,read_path_destination,scriptpath_copy,genome,pairing,inpath_design = existing_results
-        return read_path_original+"/",read_path_destination+"/",scriptpath_copy,genome,pairing,inpath_design+"/"
-
-    _run_initial_config_prompt()
-    importlib.reload(config)
-    project_name = getattr(config, "project_name", project_name)
-    param = getattr(config, "parameters_exist", param)
-    res_dir = getattr(config, "results_directory", res_dir)
-    
     os.makedirs(res_dir+project_name+"/data/",exist_ok=True)
     #os.makedirs(res_dir+project_name+"/data/manifest/",exist_ok=True)
     os.makedirs(res_dir+project_name+"/log/",exist_ok=True)
