@@ -150,21 +150,28 @@ def _maybe_launch_results_explorer_from_setup():
         if not default_design.endswith("design_matrix.txt"):
             default_design = os.path.join(default_design, "design_matrix.txt")
 
+    example_data_dir = "~/csl_results/example_dataset/data"
     print("==================================")
-    print("Data folder for the visualizer:")
+    print("Copy the path to the completed data folder for the visualizer:")
+    print("\033[91m"+"If you want to use our example dataset and it is stored in your home folder, copy and paste this path below,"+"\x1b[0m")
+    print("\033[94m"+example_data_dir+"\x1b[0m")
+    print("Current saved/default data folder:")
     print(default_data_dir)
-    data_dir = input("Press Enter to use this, or paste a different data folder: ").strip()
+    data_dir = input().strip()
     if len(data_dir) == 0:
         data_dir = default_data_dir
     data_dir = os.path.abspath(os.path.expanduser(data_dir))
 
     print("==================================")
-    print("Design matrix path for the visualizer:")
+    print("Copy the path to design_matrix.txt used for the visualizer:")
+    print("\033[91m"+"If you want to use our example dataset and it is stored in your home folder, copy and paste this path below,"+"\x1b[0m")
+    print("\033[94m"+"~/csl_results/example_dataset/data/design_matrix.txt"+"\x1b[0m")
     if len(default_design) > 0:
+        print("Current saved/default design matrix path:")
         print(default_design)
     else:
         print("No previous design matrix path was saved in config.py.")
-    design_matrix = input("Press Enter to use this, or paste design_matrix.txt / its folder: ").strip()
+    design_matrix = input().strip()
     if len(design_matrix) == 0:
         design_matrix = default_design
     design_matrix = os.path.abspath(os.path.expanduser(design_matrix)) if len(design_matrix) > 0 else design_matrix

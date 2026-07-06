@@ -199,7 +199,9 @@ fastqc_trim_available <- dir.exists(fastqc_cutadapt_dir) && length(list.files(fa
 star_available <- nrow(star_summary_df) > 0
 count_matrix_available <- nrow(count_matrix_df) > 0
 featurecounts_available <- nrow(featurecounts_summary_df) > 0
-kallisto_available <- dir.exists(kallisto_dir) && length(list.files(kallisto_dir, pattern = "abundance.tsv", recursive = TRUE)) > 0
+kallisto_abundance_files <- if (dir.exists(kallisto_dir)) list.files(kallisto_dir, pattern = "abundance.tsv", recursive = TRUE, full.names = TRUE) else character(0)
+kallisto_sample_names <- sort(unique(basename(dirname(kallisto_abundance_files))))
+kallisto_available <- length(kallisto_sample_names) > 0
 rsem_available <- dir.exists(rsem_dir) && length(list.files(rsem_dir, pattern = "\\.(genes|isoforms)\\.results$", recursive = TRUE)) > 0
 deseq2_available <- dir.exists(deseq2_dir) && length(list.files(deseq2_dir, pattern = "^normalized_counts_.*\\.txt$", recursive = FALSE)) > 0
 gseapy_available <- dir.exists(gseapy_dir) && length(list.files(gseapy_dir, pattern = "report\\.gseapy\\..*\\.csv$", recursive = TRUE)) > 0
@@ -211,7 +213,7 @@ fallback_sample_sources <- unique(c(
   setdiff(colnames(count_matrix_df), "Geneid"),
   available_qc_samples(fastqc_dir),
   available_qc_samples(fastqc_cutadapt_dir),
-  if (kallisto_available) list.files(kallisto_dir, full.names = FALSE) else character(0),
+  if (kallisto_available) kallisto_sample_names else character(0),
   if (rsem_available) list.files(rsem_dir, full.names = FALSE) else character(0)
 ))
 fallback_sample_sources <- fallback_sample_sources[
@@ -275,8 +277,20 @@ iframe_or_message <- function(path, resource_prefix, height = "calc(100vh - 260p
   )
 }
 
+kallisto_abundance_path <- function(sample_name) {
+  direct <- file.path(kallisto_dir, sample_name, "abundance.tsv")
+  if (file.exists(direct)) return(direct)
+  sample_key <- normalize_sample_token(sample_name)
+  idx <- match(sample_key, normalize_sample_token(kallisto_sample_names), nomatch = 0)
+  if (idx > 0) {
+    candidate <- file.path(kallisto_dir, kallisto_sample_names[idx], "abundance.tsv")
+    if (file.exists(candidate)) return(candidate)
+  }
+  direct
+}
+
 read_kallisto_abundance <- function(sample_name) {
-  file_path <- file.path(kallisto_dir, sample_name, "abundance.tsv")
+  file_path <- kallisto_abundance_path(sample_name)
   if (!file.exists(file_path)) {
     return(NULL)
   }
@@ -289,6 +303,19 @@ read_kallisto_abundance <- function(sample_name) {
   df$biotype <- vapply(parts, function(x) if (length(x) >= 8) x[8] else NA_character_, character(1))
   df <- df[order(-df$tpm, -df$est_counts, df$gene_symbol, df$transcript_name), , drop = FALSE]
   df[, c("gene_symbol", "transcript_name", "transcript_id", "gene_id", "biotype", "tpm", "est_counts", "length", "eff_length")]
+}
+
+kallisto_matrix_path <- file.path(kallisto_dir, "kallisto_transcript_matrix.tsv")
+
+read_kallisto_matrix <- function() {
+  if (!file.exists(kallisto_matrix_path)) return(NULL)
+  safe_read_delim(kallisto_matrix_path, check.names = FALSE, stringsAsFactors = FALSE)
+}
+
+write_kallisto_matrix <- function(df) {
+  if (is.null(df)) return(invisible(FALSE))
+  write.table(df, kallisto_matrix_path, sep = "\t", quote = FALSE, row.names = FALSE)
+  invisible(TRUE)
 }
 
 build_kallisto_matrix <- function(sample_names) {
@@ -404,22 +431,25 @@ looks_like_gene_id <- function(ids) {
 
 convert_gene_labels <- function(ids, map_df) {
   ids <- as.character(ids)
-  if (is.null(map_df) || !length(ids)) {
-    return(list(values = ids, from = NA_character_, to = NA_character_))
-  }
   current_species <- detect_species_from_ids(ids)
   current_type <- if (looks_like_gene_id(ids)) "gene_id" else "gene_name"
+  target_type <- if (identical(current_type, "gene_id")) "gene_name" else "gene_id"
+  if (is.null(map_df) || !length(ids)) {
+    return(list(values = ids, from = current_type, to = target_type, species = current_species, changed = FALSE, mapped = 0))
+  }
   if (identical(current_type, "gene_id")) {
     idx <- match(strip_version(ids), map_df$gene_id_stripped)
     converted <- map_df$gene_name[idx]
+    mapped <- sum(!is.na(converted) & nzchar(converted))
     converted[is.na(converted) | !nzchar(converted)] <- ids[is.na(converted) | !nzchar(converted)]
-    return(list(values = converted, from = "gene_id", to = "gene_name", species = current_species))
+    return(list(values = converted, from = "gene_id", to = "gene_name", species = current_species, changed = mapped > 0, mapped = mapped))
   }
   name_map <- map_df[!duplicated(map_df$gene_name), c("gene_name", "gene_id"), drop = FALSE]
   idx <- match(ids, name_map$gene_name)
   converted <- name_map$gene_id[idx]
+  mapped <- sum(!is.na(converted) & nzchar(converted))
   converted[is.na(converted) | !nzchar(converted)] <- ids[is.na(converted) | !nzchar(converted)]
-  list(values = converted, from = "gene_name", to = "gene_id", species = current_species)
+  list(values = converted, from = "gene_name", to = "gene_id", species = current_species, changed = mapped > 0, mapped = mapped)
 }
 
 value_or <- function(x, default) {
@@ -549,11 +579,33 @@ sanitize_filename <- function(x) {
 }
 
 gseapy_comparison_dir <- function(treatment_value, control_value) {
-  file.path(gseapy_dir, sprintf("%s_vs_%s", treatment_value, control_value))
+  if (!dir.exists(gseapy_dir)) return(NULL)
+  candidates <- unique(c(
+    sprintf("%s_vs_%s", treatment_value, control_value),
+    sprintf("%s_vs_%s", sanitize_filename(treatment_value), sanitize_filename(control_value)),
+    sprintf("%s_vs_%s", control_value, treatment_value),
+    sprintf("%s_vs_%s", sanitize_filename(control_value), sanitize_filename(treatment_value))
+  ))
+  paths <- file.path(gseapy_dir, candidates)
+  hits <- paths[dir.exists(paths) & vapply(paths, function(p) length(list.files(p, pattern = "^report\\.gseapy\\..*\\.csv$", recursive = FALSE)) > 0, logical(1))]
+  if (length(hits)) return(hits[1])
+  dirs <- list.dirs(gseapy_dir, recursive = FALSE, full.names = TRUE)
+  dirs_with_reports <- dirs[vapply(dirs, function(p) length(list.files(p, pattern = "^report\\.gseapy\\..*\\.csv$", recursive = FALSE)) > 0, logical(1))]
+  if (length(dirs_with_reports) == 1) return(dirs_with_reports[1])
+  paths[1]
+}
+
+gseapy_comparison_rel <- function(treatment_value, control_value) {
+  comp_dir <- gseapy_comparison_dir(treatment_value, control_value)
+  if (is.null(comp_dir)) return(sprintf("%s_vs_%s", treatment_value, control_value))
+  root <- normalizePath(gseapy_dir, winslash = "/", mustWork = FALSE)
+  full <- normalizePath(comp_dir, winslash = "/", mustWork = FALSE)
+  prefix <- paste0(root, "/")
+  if (startsWith(full, prefix)) substring(full, nchar(prefix) + 1) else basename(full)
 }
 
 list_gseapy_collections <- function(comp_dir) {
-  if (!dir.exists(comp_dir)) return(character(0))
+  if (is.null(comp_dir) || !dir.exists(comp_dir)) return(character(0))
   files <- list.files(comp_dir, pattern = "^report\\.gseapy\\..*\\.csv$", full.names = FALSE)
   sub("^report\\.gseapy\\.(.*)\\.csv$", "\\1", files)
 }
@@ -581,7 +633,7 @@ format_gsea_table <- function(df) {
 
 pathway_pdf_relpath <- function(treatment_value, control_value, pathway_name, heatmap = FALSE) {
   fname <- if (heatmap) paste0(pathway_name, ".heatmap.pdf") else paste0(pathway_name, ".pdf")
-  rel <- file.path(sprintf("%s_vs_%s", treatment_value, control_value), "gsea", fname)
+  rel <- file.path(gseapy_comparison_rel(treatment_value, control_value), "gsea", fname)
   full <- file.path(gseapy_dir, rel)
   if (!file.exists(full)) return(NULL)
   file.path("gseapy_results", rel)
@@ -701,6 +753,7 @@ qc_subtabs <- list(
     sidebarLayout(
       sidebarPanel(
         selectInput("star_sample", "STAR sample", choices = samples, selected = first_or_null(samples)),
+        selectInput("star_sort_col", "Sort rows by", choices = colnames(star_summary_df), selected = if ("metric" %in% colnames(star_summary_df)) "metric" else first_or_null(colnames(star_summary_df))),
         tags$hr(),
         helpText("Compact alignment metrics pulled from STAR summary output.")
       ),
@@ -718,6 +771,7 @@ qc_subtabs <- list(
     "FeatureCounts QC",
     sidebarLayout(
       sidebarPanel(
+        selectInput("featurecounts_qc_sort_col", "Sort rows by", choices = colnames(featurecounts_summary_df), selected = if ("Status" %in% colnames(featurecounts_summary_df)) "Status" else first_or_null(colnames(featurecounts_summary_df)))
       ),
       mainPanel(
         uiOutput("featurecounts_qc_status_ui"),
@@ -803,7 +857,7 @@ counts_subtabs <- c(
           ),
           conditionalPanel(
             "input.kallisto_view_mode == 'sample'",
-            selectInput("kallisto_sample", "Kallisto sample", choices = samples, selected = first_or_null(samples)),
+            selectInput("kallisto_sample", "Kallisto sample", choices = kallisto_sample_names, selected = first_or_null(kallisto_sample_names)),
             selectInput("kallisto_sample_filter_col", "Filter by", choices = c("All transcripts" = "all", kallisto_filter_columns), selected = "all"),
             selectizeInput("kallisto_sample_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE)
           ),
@@ -811,7 +865,7 @@ counts_subtabs <- c(
             "input.kallisto_view_mode == 'matrix'",
             selectInput("kallisto_filter_col", "Filter by", choices = kallisto_filter_columns, selected = "gene_symbol"),
             selectizeInput("kallisto_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE),
-            actionButton("build_kallisto_matrix_btn", "Build transcript matrix")
+            uiOutput("kallisto_build_ui")
           ),
           tags$hr(),
           helpText("Single sample matrix shows transcript-level abundance for one sample. Transcript matrix view shows matching transcripts across all samples.")
@@ -1412,13 +1466,13 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$star_summary_table <- DT::renderDT({
       req(star_available)
-      df <- star_summary_df
+      df <- sort_df_by_col(star_summary_df, value_or(input$star_sort_col, "metric"), "asc")
       simple_dt(format_numeric_commas(df), page_length = 25)
     })
   } else {
     output$star_summary_table <- renderTable({
       req(star_available)
-      df <- star_summary_df
+      df <- sort_df_by_col(star_summary_df, value_or(input$star_sort_col, "metric"), "asc")
       rownames(df) <- df$metric
       df$metric <- NULL
       format_numeric_commas(df)
@@ -1462,7 +1516,7 @@ server <- function(input, output, session) {
     output$featurecounts_summary_table <- DT::renderDT({
       req(featurecounts_available)
       df <- featurecounts_summary_df
-      df <- sort_df_by_col(df, "Status", "asc")
+      df <- sort_df_by_col(df, value_or(input$featurecounts_qc_sort_col, "Status"), "asc")
       df <- format_numeric_commas(df)
       simple_dt(df, page_length = 25)
     })
@@ -1470,7 +1524,7 @@ server <- function(input, output, session) {
     output$featurecounts_summary_table <- renderTable({
       req(featurecounts_available)
       df <- featurecounts_summary_df
-      df <- sort_df_by_col(df, "Status", "asc")
+      df <- sort_df_by_col(df, value_or(input$featurecounts_qc_sort_col, "Status"), "asc")
       rownames(df) <- df$Status
       df$Status <- NULL
       format_numeric_commas(df)
@@ -1622,7 +1676,11 @@ server <- function(input, output, session) {
         conv <- convert_gene_labels(head(raw_df$gene_id, 100), map_df)
         tags$div(
           style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-          sprintf("RSEM display converted from %s to %s using %s GTF.", conv$from, conv$to, value_or(species, "detected"))
+          if (isTRUE(conv$changed)) {
+            sprintf("RSEM display converted from %s to %s using %s GTF (%s IDs mapped).", conv$from, conv$to, value_or(species, "detected"), conv$mapped)
+          } else {
+            sprintf("RSEM conversion requested, but no %s labels were found in the %s GTF map.", conv$from, value_or(species, "detected"))
+          }
         )
       } else {
         NULL
@@ -1989,10 +2047,10 @@ server <- function(input, output, session) {
         df <- sort_deg_table(df, sort_mode = value_or(input$deg_sort_mode, "up"), p_col = input$deg_p_col)
         q <- input$deg_gene_query
         if (is.null(q) || !nzchar(trimws(q))) {
-          show_df <- head(format_deg_table(df), 500)
+          show_df <- format_deg_table(df)
         } else {
           hits <- df[tolower(df$gene_label) == tolower(trimws(q)), , drop = FALSE]
-          show_df <- if (nrow(hits) == 0) head(format_deg_table(df), 500) else format_deg_table(hits)
+          show_df <- if (nrow(hits) == 0) format_deg_table(df) else format_deg_table(hits)
         }
         simple_dt(show_df, page_length = 50)
       })
@@ -2003,10 +2061,10 @@ server <- function(input, output, session) {
         df <- sort_deg_table(df, sort_mode = value_or(input$deg_sort_mode, "up"), p_col = input$deg_p_col)
         q <- input$deg_gene_query
         if (is.null(q) || !nzchar(trimws(q))) {
-          show_df <- head(format_deg_table(df), 100)
+          show_df <- format_deg_table(df)
         } else {
           hits <- df[tolower(df$gene_label) == tolower(trimws(q)), , drop = FALSE]
-          show_df <- if (nrow(hits) == 0) head(format_deg_table(df), 100) else format_deg_table(hits)
+          show_df <- if (nrow(hits) == 0) format_deg_table(df) else format_deg_table(hits)
         }
         rownames(show_df) <- make.unique(as.character(show_df$gene_label))
         show_df$gene_label <- NULL
@@ -2162,7 +2220,7 @@ server <- function(input, output, session) {
     output$gsea_collection_ui <- renderUI({
       comp_dir <- gsea_comp_dir()
       collections <- list_gseapy_collections(comp_dir)
-      selectInput("gsea_collection", "Pathway collection", choices = collections, selected = collections[1])
+      selectInput("gsea_collection", "Pathway collection", choices = collections, selected = if (length(collections)) collections[1] else character(0))
     })
 
     gsea_report_df <- reactive({
@@ -2237,7 +2295,7 @@ server <- function(input, output, session) {
 
     output$gsea_summary_plots_ui <- renderUI({
       req(input$gsea_treatment, input$gsea_control, input$gsea_collection)
-      comp_rel <- sprintf("%s_vs_%s", input$gsea_treatment, input$gsea_control)
+      comp_rel <- gseapy_comparison_rel(input$gsea_treatment, input$gsea_control)
       dotplot_rel <- file.path("gseapy_results", comp_rel, sprintf("DotPlot_Top10.%s.png", input$gsea_collection))
       enrich_rel <- file.path("gseapy_results", comp_rel, sprintf("EnrichmentPlot_Top10.%s.png", input$gsea_collection))
       tags$div(
@@ -2287,14 +2345,23 @@ server <- function(input, output, session) {
   }
 
   if (kallisto_available) {
-    kallisto_matrix_cache <- reactiveVal(NULL)
+    kallisto_matrix_cache <- reactiveVal(read_kallisto_matrix())
     kallisto_filter_cache <- reactiveValues()
     kallisto_building <- reactiveVal(FALSE)
+
+    output$kallisto_build_ui <- renderUI({
+      if (is.null(kallisto_matrix_cache())) {
+        actionButton("build_kallisto_matrix_btn", "Build transcript matrix")
+      } else {
+        tags$span("Using saved transcript matrix.")
+      }
+    })
 
     observeEvent(input$build_kallisto_matrix_btn, {
       kallisto_building(TRUE)
       showModal(modalDialog("Building transcript matrix...", footer = NULL, easyClose = FALSE))
-      built <- build_kallisto_matrix(samples)
+      built <- build_kallisto_matrix(kallisto_sample_names)
+      if (!is.null(built)) write_kallisto_matrix(built)
       kallisto_matrix_cache(built)
       kallisto_building(FALSE)
       removeModal()
@@ -2303,6 +2370,9 @@ server <- function(input, output, session) {
     output$kallisto_status_ui <- renderUI({
       if (!kallisto_available) {
         return(status_box("Kallisto transcript abundance has not been generated yet.", "warning"))
+      }
+      if (identical(input$kallisto_view_mode, "matrix") && !is.null(kallisto_matrix_cache())) {
+        return(status_box(sprintf("Using Kallisto transcript matrix: %s", kallisto_matrix_path), "info"))
       }
       if (identical(input$kallisto_view_mode, "matrix") && is.null(kallisto_matrix_cache())) {
         tags$div(
@@ -2392,7 +2462,7 @@ server <- function(input, output, session) {
         kallisto_matrix_df <- kallisto_matrix_cache()
         req(!is.null(kallisto_matrix_df))
         if (is.null(input$kallisto_filter_value) || !nzchar(trimws(input$kallisto_filter_value))) {
-          show_df <- head(kallisto_matrix_df, 100)
+          show_df <- kallisto_matrix_df
         } else {
           show_df <- kallisto_matrix_df[
             tolower(kallisto_matrix_df[[input$kallisto_filter_col]]) == tolower(trimws(input$kallisto_filter_value)),
@@ -2400,7 +2470,7 @@ server <- function(input, output, session) {
             drop = FALSE
           ]
           if (nrow(show_df) == 0) {
-            show_df <- head(kallisto_matrix_df, 100)
+            show_df <- kallisto_matrix_df
           }
         }
       }
