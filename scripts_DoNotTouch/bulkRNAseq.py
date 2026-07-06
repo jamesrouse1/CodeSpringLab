@@ -35,7 +35,10 @@ def _config_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.py")
 
 def _config_value(key, default=""):
-    return getattr(config, key, default)
+    value = getattr(config, key, default)
+    if default != "" and len(str(value).strip()) == 0:
+        return default
+    return value
 
 def _as_config_dir(path):
     if path is None:

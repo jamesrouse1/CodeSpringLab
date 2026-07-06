@@ -27,7 +27,10 @@ def _analysis_type():
     return config_store.infer_analysis_type(ANALYSIS_TYPE)
 
 def _config_value(key, default=""):
-    return getattr(config, key, default)
+    value = getattr(config, key, default)
+    if default != "" and len(str(value).strip()) == 0:
+        return default
+    return value
 
 def _as_config_dir(path):
     if path is None:
@@ -343,13 +346,11 @@ def filetransfer_ListDir(read_path_original):
 
 def filetransfer_PrepDirect():
     
-    print("========================================")
-    print("Specify the path to fastq folder used for QC:")
-    read_path_destination = input()
-    read_path_destination = os.path.expanduser(read_path_destination)
-    print("========================================")
-    
-    return read_path_destination+"/"
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for QC:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(read_path_destination=read_path_destination)
+    return _with_slash(read_path_destination)
 
 def filetransfer_Copy(read_path_original,scriptpath_copy):
     
