@@ -1,5 +1,7 @@
 
 import config
+import config_store
+import importlib
 import pandas as pd
 import os
 import time
@@ -11,9 +13,98 @@ import matplotlib.pyplot as plt
 from pandas import DataFrame
 import imgkit
 
-project_name=config.project_name
-param=config.parameters_exist
-res_dir=config.results_directory
+ANALYSIS_TYPE='atac'
+project_name=getattr(config, 'project_name', 'example_dataset')
+param=getattr(config, 'parameters_exist', 'n')
+res_dir=getattr(config, 'results_directory', '../../csl_results/')
+
+
+CONFIG_KEYS = config_store.CONFIG_KEYS
+
+def _analysis_type():
+    return config_store.infer_analysis_type(ANALYSIS_TYPE)
+
+def _config_value(key, default=""):
+    return getattr(config, key, default)
+
+def _as_config_dir(path):
+    if path is None:
+        return ""
+    path = os.path.expanduser(str(path).strip())
+    if len(path) == 0:
+        return ""
+    return path.rstrip("/")
+
+def _with_slash(path):
+    path = _as_config_dir(path)
+    if len(path) == 0:
+        return path
+    return path+"/"
+
+def _config_snapshot():
+    values = {}
+    for key in CONFIG_KEYS:
+        if hasattr(config, key):
+            values[key] = getattr(config, key)
+    values.setdefault("analysis_type", _analysis_type())
+    values.setdefault("project_name", project_name)
+    values.setdefault("parameters_exist", param)
+    values.setdefault("results_directory", res_dir)
+    return values
+
+def _save_config_updates(**updates):
+    global project_name
+    global param
+    global res_dir
+
+    values = _config_snapshot()
+    for key, value in updates.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = os.path.expanduser(value.strip())
+        values[key] = value
+    config_store.save_config_values(values, analysis_type=_analysis_type())
+    importlib.invalidate_caches()
+    cfg = importlib.reload(config)
+    project_name = getattr(cfg, "project_name", project_name)
+    param = getattr(cfg, "parameters_exist", param)
+    res_dir = getattr(cfg, "results_directory", res_dir)
+    return cfg
+
+def _saved_or_prompt(key, prompt, default="", example=None):
+    value = _config_value(key, default)
+    if value is not None and len(str(value).strip()) > 0:
+        value = str(value).strip()
+        print("Using saved "+key+": "+value)
+        return value
+    print("========================================")
+    print(prompt)
+    if example is not None:
+        print("\033[91m"+"If you want to use our example dataset, use:"+"\x1b[0m")
+        print("\033[94m"+example+"\x1b[0m")
+    value = os.path.expanduser(input().strip())
+    _save_config_updates(**{key: value})
+    return value
+
+def _comparison_from_config(ref_example, comp_example):
+    refcond = _config_value("refcond", "")
+    compared = _config_value("compared", "")
+    if len(str(refcond).strip()) == 0:
+        print("========================================")
+        print("Which phenotype/condition/replicate/batch should be the reference/baseline?(e.g "+ref_example+")")
+        refcond = input().strip()
+    else:
+        print("Using saved reference/baseline: "+str(refcond))
+    if len(str(compared).strip()) == 0:
+        print("========================================")
+        print("Which phenotype/condition/replicate/batch to compare?(e.g "+comp_example+")")
+        compared = input().strip()
+    else:
+        print("Using saved comparison: "+str(compared))
+    _save_config_updates(refcond=refcond, compared=compared)
+    return str(refcond), str(compared)
+
 
 def Tree():
 
@@ -186,28 +277,35 @@ def filetransfer_Prep():
         else:
             pairing = 'n'
 
-        conf = open("../scripts_DoNotTouch/config.py", "w")
-        conf.write("project_name="+"'"+project_name+"'"+"\n")
-        conf.write("parameters_exist="+"'"+param+"'"+"\n")
-        conf.write("results_directory="+"'"+res_dir+"'"+"\n")
-        conf.write("read_path_original="+"'"+read_path_original+"'"+"\n")
-        conf.write("read_path_destination="+"'"+read_path_destination+"'"+"\n")
-        conf.write("genome="+"'"+genome+"'"+"\n")
-        conf.write("pairing="+"'"+pairing+"'"+"\n")
-        conf.write("inpath_design="+"'"+inpath_design+"'"+"\n")
-        conf.write("scriptpath_listdir="+"'"+scriptpath_listdir+"'"+"\n")
-        conf.write("scriptpath_copy="+"'"+scriptpath_copy+"'")
-        conf.close()
+        _save_config_updates(project_name=project_name,
+                             parameters_exist=param,
+                             results_directory=res_dir,
+                             read_path_original=read_path_original,
+                             read_path_destination=read_path_destination,
+                             genome=genome,
+                             pairing=pairing,
+                             inpath_design=inpath_design,
+                             scriptpath_listdir=scriptpath_listdir,
+                             scriptpath_copy=scriptpath_copy)
 
     else:
     
-        read_path_original=config.read_path_original
-        read_path_destination=config.read_path_destination
-        genome=config.genome
-        pairing=config.pairing
-        inpath_design=config.inpath_design
-        scriptpath_listdir=config.scriptpath_listdir
-        scriptpath_copy=config.scriptpath_copy
+        required = ["read_path_original", "read_path_destination", "genome", "pairing", "inpath_design", "scriptpath_listdir", "scriptpath_copy"]
+        missing = [key for key in required if len(str(_config_value(key, "")).strip()) == 0]
+        if missing:
+            print("Saved project setup is missing: "+", ".join(missing))
+            print("Please answer the setup prompts once; the values will be saved for the next tools.")
+            param = "n"
+            return filetransfer_Prep()
+
+        read_path_original=_config_value("read_path_original")
+        read_path_destination=_config_value("read_path_destination")
+        genome=_config_value("genome")
+        pairing=_config_value("pairing")
+        inpath_design=_config_value("inpath_design")
+        scriptpath_listdir=_config_value("scriptpath_listdir")
+        scriptpath_copy=_config_value("scriptpath_copy")
+        print("Using saved project setup from config.py.")
     
     #command = "sbatch "+scriptpath_listdir+" "+read_path_original+" "+project_name
     ##command = "source "+scriptpath_listdir+" "+read_path_original+" "+project_name
@@ -215,7 +313,7 @@ def filetransfer_Prep():
     ##print(joblist)
     
     #return read_path_original,read_path_destination,scriptpath_copy,scriptpath_listdir,genome,pairing,inpath_design
-    return read_path_original+"/",read_path_destination+"/",scriptpath_copy,genome,pairing,inpath_design+"/"
+    return _with_slash(read_path_original),_with_slash(read_path_destination),scriptpath_copy,genome,pairing,_with_slash(inpath_design)
 
 def filetransfer_ListDir(read_path_original):
     
@@ -355,13 +453,11 @@ def fastqc_Prep(directory):
 
 def fastqc_PrepDirect():
     
-    print("========================================")
-    print("Specify the path to fastq folder used for QC:")
-    read_path_destination = input()
-    read_path_destination = os.path.expanduser(read_path_destination)
-    print("========================================")
-    
-    return read_path_destination+"/"
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for QC:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(read_path_destination=read_path_destination)
+    return _with_slash(read_path_destination)
 
 def fastqc_RunQC(readlist,outdir_fastqc,read_path_destination,scriptpath_fastqc):
             
@@ -478,13 +574,11 @@ def cutadapt_Prep(directory,pairing):
 
 def cutadapt_PrepDirect():
     
-    print("========================================")
-    print("Specify the path to fastq folder used for adapter trimming:")
-    read_path_destination = input()
-    read_path_destination = os.path.expanduser(read_path_destination)
-    print("========================================")
-    
-    return read_path_destination+"/"
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for adapter trimming:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(read_path_destination=read_path_destination)
+    return _with_slash(read_path_destination)
 
 def cutadapt_RunTrimming(adapter,adapter2,minlen,read1_list,read2_list,trimmed1_list,trimmed2_list,scriptpath_cutadapt):
             
@@ -562,23 +656,18 @@ def bowtie2_Prep(genome,pairing,read_dir,inpath_design):
     else:
         scriptpath_bowtie2 = '../scripts_DoNotTouch/bowtie2/qsub_bowtie2_SE.sh'
 
+    _save_config_updates(genome=genome, pairing=pairing, read_path_destination=read_dir, inpath_design=inpath_design, out_dir_bowtie2=out_dir)
     return genome_index_path,read1_list,read2_list,out_prefix_list,out_dir,effgenomesize,chromsize,scriptpath_bowtie2
 
 def bowtie2_PrepDirect():
     
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    print("========================================")
-    print("Are the reads paired-end:(e.g y/n)")
-    pairing = input()
-    print("========================================")
-    print("Specify the path to fastq folder used for alignment:")
-    read_path_destination = input()
-    read_path_destination = os.path.expanduser(read_path_destination)
-    print("========================================")
-    
-    return genome,pairing,read_path_destination+"/"
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for alignment:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(genome=genome, pairing=pairing, read_path_destination=read_path_destination)
+    return genome,pairing,_with_slash(read_path_destination)
 
 def bowtie2_RunAlignment(genome_index_path,read1_list,read2_list,out_prefix_list,out_dir,effgenomesize,chromsize,scriptpath_bowtie2):
         
@@ -698,23 +787,18 @@ def macs2_Prep(genome,out_dir,pairing):
     
     macs2_prefix_list = macs2_dir+prefix+'/'
 
+    _save_config_updates(genome=genome, pairing=pairing, out_dir_bowtie2=out_dir, out_peak_macs2=macs2_dir, qval=qval, removeDup=removeDup)
     return scriptpath_macs2,genomesize,chromsize,bed_list,macs2_prefix_list,prefix,anno_onlyChrNoMito,macs2_dir,qval,homerspecies
 
 def macs2_PrepDirect():
     
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    print("========================================")
-    print("Are the reads paired-end:(e.g y/n)")
-    pairing = input()
-    print("========================================")
-    print("Specify the path to alignment folder used for peak calling:")
-    out_dir = input()
-    out_dir = os.path.expanduser(out_dir)
-    print("========================================")
-    
-    return genome,pairing,out_dir+"/"
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
+    out_dir = _saved_or_prompt("out_dir_bowtie2",
+                               "Specify the path to alignment folder used for peak calling:",
+                               default=res_dir+project_name+"/data/bowtie2/")
+    _save_config_updates(genome=genome, pairing=pairing, out_dir_bowtie2=out_dir)
+    return genome,pairing,_with_slash(out_dir)
 
 def macs2_RunPeakCalling(scriptpath_macs2,genomesize,chromsize,bed_list,macs2_prefix_list,prefix,anno_onlyChrNoMito,qval,homerspecies,out_dir):
      
@@ -789,28 +873,23 @@ def diffbind_Prep(inpath_design):
     scriptpath_diffbind = '../scripts_DoNotTouch/DiffBind/qsub_diffbind.sh'
     Rpath_diffbind = '../scripts_DoNotTouch/DiffBind/DiffBind.R'
 
+    _save_config_updates(inpath_design=inpath_design, outpath_diffbind=outpath, refcond=refcond, compared=compared)
     return scriptpath_diffbind,Rpath_diffbind,outpath,refcond,compared
 
 def diffbind_PrepDirect():
 
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    print("========================================")
-    print("Specify the path to alignment folder used for Differential Peaks:")
-    out_dir = input()
-    out_dir = os.path.expanduser(out_dir)
-    print("========================================")
-    print("Specify the path to folder containing .narrowPeak used for Differential Peaks:")
-    outpath_peak = input()
-    outpath_peak = os.path.expanduser(outpath_peak)
-    print("========================================")
-    print("Specify the path to folder containing design_matrix.txt used for Differential Peaks:")
-    inpath_design = input()
-    inpath_design = os.path.expanduser(inpath_design)
-    print("========================================")
-
-    return genome,out_dir+"/",outpath_peak+"/",inpath_design+"/"
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    out_dir = _saved_or_prompt("out_dir_bowtie2",
+                               "Specify the path to alignment folder used for Differential Peaks:",
+                               default=res_dir+project_name+"/data/bowtie2/")
+    outpath_peak = _saved_or_prompt("out_peak_macs2",
+                                    "Specify the path to folder containing .narrowPeak used for Differential Peaks:",
+                                    default=res_dir+project_name+"/data/macs2/")
+    inpath_design = _saved_or_prompt("inpath_design",
+                                     "Specify the path to folder containing design_matrix.txt used for Differential Peaks:",
+                                     example="../scripts_DoNotTouch/test/manifest_atac/")
+    _save_config_updates(genome=genome, out_dir_bowtie2=out_dir, out_peak_macs2=outpath_peak, inpath_design=inpath_design)
+    return genome,_with_slash(out_dir),_with_slash(outpath_peak),_with_slash(inpath_design)
 
 def diffbind_RunDiffPeak(scriptpath_diffbind,Rpath_diffbind,outpath_peak,inpath_design,outpath,refcond,compared,genome,out_dir):
 
@@ -886,16 +965,12 @@ def diffbind_PlotProfileHeatByMergedContrast(outpath):
     
 def visualization_PrepDirect():
     
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    print("========================================")
-    print("Specify the path to MACS2/BED folder from peak calling:")
-    out_peak = input()
-    out_peak = os.path.expanduser(out_peak)
-    print("========================================")
-    
-    return genome,out_peak+"/"
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    out_peak = _saved_or_prompt("out_peak_macs2",
+                                "Specify the path to MACS2/BED folder from peak calling:",
+                                default=res_dir+project_name+"/data/macs2/")
+    _save_config_updates(genome=genome, out_peak_macs2=out_peak)
+    return genome,_with_slash(out_peak)
     
 def visualization_Prep(genome,out_peak):
 
@@ -924,6 +999,7 @@ def visualization_Prep(genome,out_peak):
     elif genome == 'human':
         genome_index_path = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf"
     
+    _save_config_updates(genome=genome, out_peak_macs2=out_peak, tracks_dir=tracks_dir)
     return genome_index_path,scriptpath_tracks,tracks_dir,macs2_prefix_list,region
     
 def visualization_MakeTracks(genome_index_path,scriptpath_tracks,tracks_dir,macs2_prefix_list,region):

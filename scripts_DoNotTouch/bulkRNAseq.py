@@ -1,5 +1,6 @@
 
 import config
+import config_store
 import pandas as pd
 import os
 import time
@@ -23,14 +24,10 @@ param=getattr(config, 'parameters_exist', 'n')
 res_dir=getattr(config, 'results_directory', '../../csl_results/')
 
 
-CONFIG_KEYS = [
-    "project_name", "parameters_exist", "results_directory",
-    "read_path_original", "read_path_destination", "genome", "pairing",
-    "inpath_design", "scriptpath_listdir", "scriptpath_copy",
-    "feature", "outpath_counts", "outpath_deseq2",
-    "refcond", "compared", "redundant", "geneset",
-    "visualizer_data_dir"
-]
+CONFIG_KEYS = config_store.CONFIG_KEYS
+
+def _analysis_type():
+    return config_store.infer_analysis_type('rna')
 
 def _config_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.py")
@@ -89,9 +86,7 @@ def _save_config_updates(**updates):
     ordered_keys = [key for key in CONFIG_KEYS if key in values]
     ordered_keys += sorted([key for key in values if key not in ordered_keys])
 
-    with open(_config_path(), "w") as conf:
-        for key in ordered_keys:
-            conf.write(key+"="+repr(str(values[key]))+"\n")
+    config_store.save_config_values(values, analysis_type=_analysis_type())
 
     importlib.invalidate_caches()
     cfg = importlib.reload(config)
@@ -415,12 +410,11 @@ def filetransfer_ListDir(read_path_original):
 
 def filetransfer_PrepDirect():
     
-    print("========================================")
-    print("Specify the path to fastq folder used for QC:")
-    read_path_destination = input()
-    print("========================================")
-    
-    return read_path_destination+"/"
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for QC:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(read_path_destination=read_path_destination)
+    return _with_slash(read_path_destination)
 
 def filetransfer_Copy(read_path_original,scriptpath_copy):
     
@@ -526,13 +520,11 @@ def fastqc_Prep(directory):
 
 def fastqc_PrepDirect():
     
-    print("========================================")
-    print("Specify the path to fastq folder used for QC:")
-    read_path_destination = input()
-    read_path_destination = os.path.expanduser(read_path_destination)
-    print("========================================")
-    
-    return read_path_destination+"/"
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for QC:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(read_path_destination=read_path_destination)
+    return _with_slash(read_path_destination)
 
 def fastqc_RunQC(readlist,outdir_fastqc,read_path_destination,scriptpath_fastqc):
             
@@ -649,13 +641,11 @@ def cutadapt_Prep(directory,pairing):
 
 def cutadapt_PrepDirect():
     
-    print("========================================")
-    print("Specify the path to fastq folder used for adapter trimming:")
-    read_path_destination = input()
-    read_path_destination = os.path.expanduser(read_path_destination)
-    print("========================================")
-    
-    return read_path_destination+"/"
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for adapter trimming:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(read_path_destination=read_path_destination)
+    return _with_slash(read_path_destination)
 
 def cutadapt_RunTrimming(adapter,adapter2,minlen,read1_list,read2_list,trimmed1_list,trimmed2_list,scriptpath_cutadapt):
             
@@ -729,23 +719,18 @@ def star_Prep(genome,pairing,read_dir,inpath_design):
     else:
         scriptpath_star = '../scripts_DoNotTouch/STAR/qsub_star_SE.sh'
 
+    _save_config_updates(genome=genome, pairing=pairing, inpath_design=inpath_design, read_path_destination=read_dir, out_dir_star=out_dir)
     return genome_index_path,read1_list,read2_list,out_prefix_list,out_dir,scriptpath_star
 
 def star_PrepDirect():
     
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    print("========================================")
-    print("Are the reads paired-end:(e.g y/n)")
-    pairing = input()
-    print("========================================")
-    print("Specify the path to fastq folder used for alignment:")
-    read_path_destination = input()
-    read_path_destination = os.path.expanduser(read_path_destination)
-    print("========================================")
-    
-    return genome,pairing,read_path_destination+"/"
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for alignment:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(genome=genome, pairing=pairing, read_path_destination=read_path_destination)
+    return genome,pairing,_with_slash(read_path_destination)
 
 def star_RunAlignment(genome_index_path,read1_list,read2_list,out_prefix_list,out_dir,scriptpath_star):
         
@@ -846,24 +831,18 @@ def kallisto_Prep(genome,pairing,read_dir,inpath_design):
     else:
         scriptpath_kallisto = '../scripts_DoNotTouch/Kallisto/qsub_kallisto_SE.sh'
 
-    _save_config_updates(genome=genome, pairing=pairing, inpath_design=inpath_design, feature='gene_id')
+    _save_config_updates(genome=genome, pairing=pairing, inpath_design=inpath_design, read_path_destination=read_dir, out_dir_kallisto=out_dir_kal, feature='gene_id')
     return genome_index_path,read1_list,read2_list,out_prefix_list,out_dir_kal,scriptpath_kallisto
 
 def kallisto_PrepDirect():
     
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    print("========================================")
-    print("Are the reads paired-end:(e.g y/n)")
-    pairing = input()
-    print("========================================")
-    print("Specify the path to fastq folder used for alignment:")
-    read_path_destination = input()
-    read_path_destination = os.path.expanduser(read_path_destination)
-    print("========================================")
-    
-    return genome,pairing,read_path_destination+"/"
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
+    read_path_destination = _saved_or_prompt("read_path_destination",
+                                             "Specify the path to fastq folder used for alignment:",
+                                             default=res_dir+project_name+"/data/fastq/")
+    _save_config_updates(genome=genome, pairing=pairing, read_path_destination=read_path_destination)
+    return genome,pairing,_with_slash(read_path_destination)
 
 def kallisto_RunAlignment(genome_index_path,read1_list,read2_list,out_prefix_list,out_dir_kal,scriptpath_kallisto):
         
@@ -939,29 +918,28 @@ def featurecounts_Prep(genome,out_dir,pairing):
     else:
         scriptpath_featurecounts = '../scripts_DoNotTouch/featureCounts/qsub_featurecounts_SE.sh'
 
-    print("Specify the genomic feature to quantify (e.g gene_name, gene_id, etc):")
-    feature = input() 
+    feature = _config_value("feature", "")
+    if len(str(feature).strip()) > 0:
+        print("Using saved feature: "+str(feature))
+    else:
+        print("Specify the genomic feature to quantify (e.g gene_name, gene_id, etc):")
+        feature = input()
     
     count_prefix_list = count_dir+prefix+'/'+prefix
     bam_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bam'
 
+    _save_config_updates(genome=genome, pairing=pairing, out_dir_star=out_dir, out_dir_featurecounts=count_dir, feature=feature)
     return scriptpath_featurecounts,GTF,bam_list,count_prefix_list,prefix,feature,strandBED
 
 def featurecounts_PrepDirect():
     
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    print("========================================")
-    print("Are the reads paired-end:(e.g y/n)")
-    pairing = input()
-    print("========================================")
-    print("Specify the path to alignment folder used for quantification:")
-    out_dir = input()
-    out_dir = os.path.expanduser(out_dir)
-    print("========================================")
-    
-    return genome,pairing,out_dir+"/"
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
+    out_dir = _saved_or_prompt("out_dir_star",
+                               "Specify the path to alignment folder used for quantification:",
+                               default=res_dir+project_name+"/data/star/")
+    _save_config_updates(genome=genome, pairing=pairing, out_dir_star=out_dir)
+    return genome,pairing,_with_slash(out_dir)
 
 def featurecounts_RunQuantification(scriptpath_featurecounts,GTF,bam_list,count_prefix_list,feature,strandBED):
      
@@ -1008,6 +986,7 @@ def featurecounts_CreateCountMatrix():
     count_matrix.columns=count_matrix.columns.str.rstrip('_counts.txt')
     count_matrix.to_csv(outpath_counts+'count_matrix.txt',sep='\t')
 
+    _save_config_updates(outpath_counts=outpath_counts)
     return outpath_counts,count_matrix
 
 def rsem_Prep(genome,out_dir,pairing):
@@ -1044,24 +1023,18 @@ def rsem_Prep(genome,out_dir,pairing):
     bam_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bam'
     bamTranscript_list = out_dir+prefix+'/'+prefix+'Aligned.toTranscriptome.out.bam'
 
-    _save_config_updates(genome=genome, pairing=pairing, feature=feature)
+    _save_config_updates(genome=genome, pairing=pairing, out_dir_star=out_dir, out_dir_rsem=count_dir, feature=feature)
     return scriptpath_rsem,rsem_index,bam_list,count_prefix_list,prefix,feature,strandBED,bamTranscript_list
 
 def rsem_PrepDirect():
     
-    print("========================================")
-    print("Specify genome:(e.g human, mouse, etc)")
-    genome = input()
-    print("========================================")
-    print("Are the reads paired-end:(e.g y/n)")
-    pairing = input()
-    print("========================================")
-    print("Specify the path to alignment folder used for quantification:")
-    out_dir = input()
-    out_dir = os.path.expanduser(out_dir)
-    print("========================================")
-    
-    return genome,pairing,out_dir+"/"
+    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
+    out_dir = _saved_or_prompt("out_dir_star",
+                               "Specify the path to alignment folder used for quantification:",
+                               default=res_dir+project_name+"/data/star/")
+    _save_config_updates(genome=genome, pairing=pairing, out_dir_star=out_dir)
+    return genome,pairing,_with_slash(out_dir)
 
 def rsem_RunQuantification(scriptpath_rsem,rsem_index,bam_list,count_prefix_list,feature,strandBED,bamTranscript_list):
      
@@ -1183,16 +1156,12 @@ def deseq2_Prep(inpath_design):
     
 def deseq2_PrepDirect():
     
-    print("========================================")
-    print("Specify the path to folder containing count_matrix.txt used for DE:")
-    outpath_counts = input()
-    outpath_counts = os.path.expanduser(outpath_counts)
-    print("========================================")
-    print("Specify the path to folder containing design_matrix.txt used for DE:")
-    inpath_design = input()
-    inpath_design = os.path.expanduser(inpath_design)
-    print("========================================")
-    
+    outpath_counts = _saved_or_prompt("outpath_counts",
+                                      "Specify the path to folder containing count_matrix.txt used for DE:",
+                                      default=res_dir+project_name+"/data/counts/")
+    inpath_design = _saved_or_prompt("inpath_design",
+                                     "Specify the path to folder containing design_matrix.txt used for DE:",
+                                     example="../scripts_DoNotTouch/test/manifest/")
     _save_config_updates(outpath_counts=outpath_counts, inpath_design=inpath_design)
     return _with_slash(outpath_counts),_with_slash(inpath_design)
 
@@ -2018,22 +1987,15 @@ def gseapy_heatmap(pathways,gs):
 
 def visualization_PrepDirect():
     
-    print("========================================")
-    print("Specify the path to folder containing design_matrix.txt used for DE:")
-    inpath_design = input()
-    inpath_design = os.path.expanduser(inpath_design)
-    print("========================================")
-    print("Specify the path to folder containing DESeq2 results:")
-    outpath = input()
-    outpath = os.path.expanduser(outpath)
-    print("========================================")
-    print("Which phenotype/condition/replicate/batch should be the reference/baseline?(e.g control)")
-    refcond = input()
-    print("========================================")
-    print("Which phenotype/condition/replicate/batch to compare?(e.g treated)")
-    compared = input()
-    
-    return inpath_design+"/",outpath+"/",refcond,compared
+    inpath_design = _saved_or_prompt("inpath_design",
+                                     "Specify the path to folder containing design_matrix.txt used for DE:",
+                                     example="../scripts_DoNotTouch/test/manifest/")
+    outpath = _saved_or_prompt("outpath_deseq2",
+                               "Specify the path to folder containing DESeq2 results:",
+                               default=res_dir+project_name+"/data/deseq2/")
+    refcond, compared = _gseapy_comparison_from_config()
+    _save_config_updates(inpath_design=inpath_design, outpath_deseq2=outpath, refcond=refcond, compared=compared)
+    return _with_slash(inpath_design),_with_slash(outpath),refcond,compared
     
 def visualization_heatmap(inpath_design,outpath,refcond,compared):
 

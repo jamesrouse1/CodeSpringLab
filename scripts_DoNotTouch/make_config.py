@@ -1,68 +1,56 @@
-import importlib.util
 import os
+import config_store
 
 
-CONFIG_KEYS = [
-    "project_name", "parameters_exist", "results_directory",
-    "read_path_original", "read_path_destination", "genome", "pairing",
-    "inpath_design", "scriptpath_listdir", "scriptpath_copy",
-    "feature", "outpath_counts", "outpath_deseq2",
-    "refcond", "compared", "redundant", "geneset",
-    "visualizer_data_dir"
-]
+def _new_project_values(analysis_type, active_values):
+    label = config_store.ANALYSIS_LABELS.get(analysis_type, analysis_type)
+    keep = {key: value for key, value in active_values.items() if key.startswith("last_") or key.endswith("_project_name")}
 
-def _config_path():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.py")
+    print("========================================")
+    print("Provide a new "+label+" project name:")
+    print("\033[91m"+"If you want to use our example dataset, type"+"\033[94m"+" example_dataset"+"\x1b[0m")
+    project_name = input().strip()
 
-def _read_config_values():
-    path = _config_path()
-    values = {}
-    if os.path.exists(path):
-        spec = importlib.util.spec_from_file_location("_codespring_config", path)
-        cfg = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cfg)
-        for key in CONFIG_KEYS:
-            if hasattr(cfg, key):
-                values[key] = getattr(cfg, key)
-    return values
-
-def _write_config_values(values):
-    ordered = [key for key in CONFIG_KEYS if key in values]
-    ordered += sorted([key for key in values if key not in ordered])
-    with open(_config_path(), "w") as conf:
-        for key in ordered:
-            conf.write(key+"="+repr(str(values[key]))+"\n")
-
-def config():
-    
-    print("Do you want to use your most recent project name, genome, design matrix, and reads folders:(e.g y/n)")
-    print("\033[91m"+"If this is your first time, type"+"\033[94m"+" n"+"\x1b[0m")
-    param = input().strip().lower()
-    values = _read_config_values()
-
-    if param == 'n':
-        print("========================================")
-        print("Provide any unique project name:")
-        print("\033[91m"+"If you want to use our example dataset, type"+"\033[94m"+" example_dataset"+"\x1b[0m")
-        project_name = input().strip()
-
-        print("========================================")
-        print("Provide a path/location where to store your analysis results:(Sometimes your home has limited space)")
-        print("\033[91m"+"If not sure, leave it blank and press enter. Results will be stored in the same location"+"\033[94m")
-        res_dir = input().strip()
-        if len(res_dir) == 0:
-            res_dir = "../../csl_results/"
-        else:
-            res_dir = os.path.expanduser(res_dir).rstrip("/")+"/csl_results/"
-
-        values["project_name"] = project_name
-        values["parameters_exist"] = param
-        values["results_directory"] = res_dir
-        _write_config_values(values)
+    print("========================================")
+    print("Provide a path/location where to store your analysis results:(Sometimes your home has limited space)")
+    print("\033[91m"+"If not sure, leave it blank and press enter. Results will be stored in the same location"+"\033[94m")
+    res_dir = input().strip()
+    if len(res_dir) == 0:
+        res_dir = "../../csl_results/"
     else:
-        values.setdefault("project_name", "example_dataset")
-        values.setdefault("results_directory", "../../csl_results/")
-        values["parameters_exist"] = param
-        _write_config_values(values)
-        print("Using saved project: "+str(values["project_name"]))
-        print("Using saved results directory: "+str(values["results_directory"]))
+        res_dir = os.path.expanduser(res_dir).rstrip("/")+"/csl_results/"
+
+    for key in config_store.CONFIG_KEYS:
+        if key not in ["analysis_type", "project_name", "parameters_exist", "results_directory"]:
+            keep[key] = ""
+
+    keep.update({
+        "analysis_type": analysis_type,
+        "project_name": project_name,
+        "parameters_exist": "n",
+        "results_directory": res_dir
+    })
+    return keep
+
+def config(analysis_type=None):
+    analysis_type = analysis_type or config_store.infer_analysis_type("rna")
+    label = config_store.ANALYSIS_LABELS.get(analysis_type, analysis_type)
+    active_values = config_store.read_values()
+    last_key = "last_"+analysis_type+"_project_name"
+    last_project = active_values.get(last_key, active_values.get(analysis_type+"_project_name", ""))
+
+    print("Do you want to use your most recent "+label+" project? (e.g y/n)")
+    if len(str(last_project).strip()) > 0:
+        print("Most recent "+label+" project: "+"\033[94m"+str(last_project)+"\x1b[0m")
+    else:
+        print("\033[91m"+"No saved "+label+" project was found. Type"+"\033[94m"+" n"+"\x1b[0m"+" to start one.")
+    print("\033[91m"+"If this is your first time for this analysis type, type"+"\033[94m"+" n"+"\x1b[0m")
+
+    param = input().strip().lower()
+    if param.startswith("y") and len(str(last_project).strip()) > 0:
+        values = config_store.activate_project(analysis_type, last_project)
+        print("Using saved "+label+" project: "+str(values.get("project_name", last_project)))
+        print("Using saved results directory: "+str(values.get("results_directory", "../../csl_results/")))
+    else:
+        values = _new_project_values(analysis_type, active_values)
+        config_store.save_config_values(values, analysis_type)
