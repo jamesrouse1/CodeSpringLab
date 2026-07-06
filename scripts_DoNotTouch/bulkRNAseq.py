@@ -1792,6 +1792,28 @@ def _collapse_gsea_expression(gene_exp_conv, sample_cols):
     gene_exp_conv.insert(1, "NAME", "na")
     return gene_exp_conv[["GENE", "NAME"] + sample_cols]
 
+def _apply_description_gene_labels(gene_exp, description_labels, feature):
+    if description_labels is None:
+        return gene_exp, feature
+    index_values = gene_exp.index.to_series().astype(str)
+    if not index_values.str.startswith("ENS").any():
+        return gene_exp, feature
+
+    labels = description_labels.reindex(gene_exp.index)
+    labels = labels.astype("object").where(labels.notna(), "")
+    labels = labels.astype(str).str.strip()
+    labels = labels.replace({"nan": "", "None": "", "NA": "", "<NA>": ""})
+    usable = labels != ""
+    usable_count = int(usable.sum())
+    if usable_count < 10:
+        print("WARNING: DESCRIPTION column was present but had too few usable gene labels for GSEA.")
+        return gene_exp, feature
+
+    out = gene_exp.loc[usable].copy()
+    out.index = labels.loc[usable]
+    print("GSEA gene labels: using DESCRIPTION column for "+str(usable_count)+" gene labels.")
+    return out, "gene_name"
+
 def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
     genome = str(genome).strip().lower()
     feature = str(feature).strip().lower()
@@ -1831,8 +1853,9 @@ def _prepare_gseapy_expression(gene_exp, genome, feature, outpath_pathway):
         if gene_exp_conv is not None and gene_exp_conv["GENE"].notna().sum() > 0:
             return _collapse_gsea_expression(gene_exp_conv, sample_cols)
         raise ValueError(
-            "Mouse-to-human ortholog mapping requires the bundled MGI table. "
-            "GTF can convert mouse Ensembl IDs to mouse symbols, but it cannot define human orthologs."
+            "Mouse-to-human ortholog mapping failed. The bundled MGI table is required, "
+            "and Ensembl-ID count rows also need either a DESCRIPTION gene-symbol column "
+            "or a readable mouse GTF for Ensembl-to-symbol conversion."
         )
 
     gene_exp_conv = gene_exp.copy()
@@ -1946,11 +1969,13 @@ def gseapy_RunPathway(geneset,genome,feature,inpath_design,outpath,outpath_pathw
     design = design.loc[design[vardesign].isin([refcond,compared]),:]
     class_vector = list(design[vardesign])
     gene_exp = pd.read_table(outpath+'/normalized_counts_'+compared+'_vs_'+refcond+'(ref).txt',index_col=0)
+    description_labels = gene_exp["DESCRIPTION"] if "DESCRIPTION" in gene_exp.columns else None
     gene_exp = gene_exp.drop(['DESCRIPTION'],axis=1,errors='ignore')
     missing_samples = [sample for sample in design.index if sample not in gene_exp.columns]
     if missing_samples:
         raise ValueError("Normalized counts file is missing samples from design matrix: "+", ".join(missing_samples))
     gene_exp = gene_exp[list(design.index)]
+    gene_exp, feature = _apply_description_gene_labels(gene_exp, description_labels, feature)
     gene_exp_conv = _prepare_gseapy_expression(gene_exp,genome,feature,outpath_pathway)
 
     if gene_exp_conv.shape[0] < 10:
