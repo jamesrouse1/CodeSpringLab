@@ -817,42 +817,16 @@ def diffbind_RunDiffPeak(scriptpath_diffbind,Rpath_diffbind,outpath_peak,inpath_
     global project_name
     global res_dir
 
-    bamdir_example = res_dir+"example_dataset/data/bowtie2/"
-    peakdir_example = res_dir+"example_dataset/data/macs2/"
-    bamsuffix = "Aligned.sortedByCoord_removeDup.out.bam"
-    peaksuffix = "_peaks.narrowPeak"
-    
-    day1_rep2_bam = bamdir_example+"/CD4_day1_rep2/"
-    day3_rep2_bam = bamdir_example+"/CD4_day3_rep2/"
-    day1_rep2_peak = peakdir_example+"/CD4_day1_rep2/"
-    day3_rep2_peak = peakdir_example+"/CD4_day3_rep2/"
-    
-    day1_rep3_bam = bamdir_example+"/CD4_day1_rep3/"
-    day3_rep3_bam = bamdir_example+"/CD4_day3_rep3/"
-    day1_rep3_peak = peakdir_example+"/CD4_day1_rep3/"
-    day3_rep3_peak = peakdir_example+"/CD4_day3_rep3/"
-    
-    os.makedirs(day1_rep3_bam,exist_ok=True)
-    os.makedirs(day3_rep3_bam,exist_ok=True)
-    os.makedirs(day1_rep3_peak,exist_ok=True)
-    os.makedirs(day3_rep3_peak,exist_ok=True)
-
-    shutil.copy(day1_rep2_bam+"/CD4_day1_rep2"+bamsuffix,day1_rep3_bam+"/CD4_day1_rep3"+bamsuffix)
-    shutil.copy(day3_rep2_bam+"/CD4_day3_rep2"+bamsuffix,day3_rep3_bam+"/CD4_day3_rep3"+bamsuffix)
-    shutil.copy(day1_rep2_peak+"/CD4_day1_rep2"+peaksuffix,day1_rep3_peak+"/CD4_day1_rep3"+peaksuffix)
-    shutil.copy(day3_rep2_peak+"/CD4_day3_rep2"+peaksuffix,day3_rep3_peak+"/CD4_day3_rep3"+peaksuffix)
-    
     jobid = []
     stderr = "-e "+res_dir+project_name+"/log/error_diffbind.txt"
     stdout = "-o "+res_dir+project_name+"/log/output_diffbind.txt"
+
     command = "sbatch "+stderr+" "+stdout+" "+scriptpath_diffbind+" "+Rpath_diffbind+" "+outpath+" "+inpath_design+" "+outpath_peak+" "+refcond+" "+compared+" "+genome+" "+out_dir+" "+project_name
-    #command = "source "+scriptpath_diffbind+" "+Rpath_diffbind+" "+outpath+" "+inpath_design+" "+outpath_peak+" "+refcond+" "+compared+" "+genome+" "+out_dir+" "+project_name
+
     job = os.popen(command).read().splitlines()
     print(job[0])
-    #print(job[1])
 
     jobid.append(job[0].split(' ')[3])
-    #jobid.append(job[1].split(' ')[2])
 
     return jobid
 
