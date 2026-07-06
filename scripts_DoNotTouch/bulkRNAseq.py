@@ -165,7 +165,7 @@ def _maybe_launch_results_explorer_from_setup():
     print("==================================")
     print("Copy the path to design_matrix.txt used for the visualizer:")
     print("\033[91m"+"If you want to use our example dataset and it is stored in your home folder, copy and paste this path below,"+"\x1b[0m")
-    print("\033[94m"+"~/csl_results/example_dataset/data/design_matrix.txt"+"\x1b[0m")
+    print("\033[94m"+"../scripts_DoNotTouch/test/manifest/"+"\x1b[0m")
     if len(default_design) > 0:
         print("Current saved/default design matrix path:")
         print(default_design)

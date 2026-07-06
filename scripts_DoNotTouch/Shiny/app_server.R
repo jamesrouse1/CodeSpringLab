@@ -46,8 +46,21 @@ featurecounts_summary_path <- file.path(data_dir, "counts", "featurecounts_summa
 kallisto_dir <- file.path(data_dir, "kallisto")
 rsem_dir <- file.path(data_dir, "rsem")
 gtf_dir <- file.path(data_dir, "gtf")
-mouse_gtf_path <- file.path(gtf_dir, "gencode.vM29.annotation.gtf")
-human_gtf_path <- file.path(gtf_dir, "gencode.v42.chr_patch_hapl_scaff.annotation.gtf")
+pick_first_existing <- function(filename, dirs) {
+  for (d in dirs) {
+    p <- file.path(d, filename)
+    if (file.exists(p)) return(p)
+  }
+  NULL
+}
+mouse_gtf_path <- pick_first_existing("gencode.vM29.annotation.gtf", c(
+  gtf_dir,
+  "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode"
+))
+human_gtf_path <- pick_first_existing("gencode.v42.chr_patch_hapl_scaff.annotation.gtf", c(
+  gtf_dir,
+  "/grid/bsr/data/data/utama/genome/hg38_p13_gencode"
+))
 deseq2_dir <- file.path(data_dir, "deseq2")
 gseapy_dir <- file.path(data_dir, "gseapy")
 logo_search_dirs <- unique(c(
@@ -58,11 +71,7 @@ logo_search_dirs <- unique(c(
 ))
 
 find_first_existing <- function(filename, dirs) {
-  for (d in dirs) {
-    p <- file.path(d, filename)
-    if (file.exists(p)) return(p)
-  }
-  NULL
+  pick_first_existing(filename, dirs)
 }
 
 logo_csl_path <- find_first_existing("Logo_CSL.png", logo_search_dirs)
@@ -753,7 +762,7 @@ qc_subtabs <- list(
     sidebarLayout(
       sidebarPanel(
         selectInput("star_sample", "STAR sample", choices = samples, selected = first_or_null(samples)),
-        selectInput("star_sort_col", "Sort rows by", choices = colnames(star_summary_df), selected = if ("metric" %in% colnames(star_summary_df)) "metric" else first_or_null(colnames(star_summary_df))),
+        selectInput("star_sample_sort_col", "Sort sample columns by", choices = comparison_columns, selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns)),
         tags$hr(),
         helpText("Compact alignment metrics pulled from STAR summary output.")
       ),
@@ -771,7 +780,7 @@ qc_subtabs <- list(
     "FeatureCounts QC",
     sidebarLayout(
       sidebarPanel(
-        selectInput("featurecounts_qc_sort_col", "Sort rows by", choices = colnames(featurecounts_summary_df), selected = if ("Status" %in% colnames(featurecounts_summary_df)) "Status" else first_or_null(colnames(featurecounts_summary_df)))
+        selectInput("featurecounts_qc_sample_sort_col", "Sort sample columns by", choices = comparison_columns, selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns))
       ),
       mainPanel(
         uiOutput("featurecounts_qc_status_ui"),
@@ -1466,13 +1475,13 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$star_summary_table <- DT::renderDT({
       req(star_available)
-      df <- sort_df_by_col(star_summary_df, value_or(input$star_sort_col, "metric"), "asc")
-      simple_dt(format_numeric_commas(df), page_length = 25)
+      df <- order_sample_columns(star_summary_df, annotation_col = value_or(input$star_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("metric"))
+      simple_dt(df, page_length = 25)
     })
   } else {
     output$star_summary_table <- renderTable({
       req(star_available)
-      df <- sort_df_by_col(star_summary_df, value_or(input$star_sort_col, "metric"), "asc")
+      df <- order_sample_columns(star_summary_df, annotation_col = value_or(input$star_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("metric"))
       rownames(df) <- df$metric
       df$metric <- NULL
       format_numeric_commas(df)
@@ -1499,32 +1508,18 @@ server <- function(input, output, session) {
     NULL
   })
 
-  observe({
-    if (!featurecounts_available) {
-      updateSelectInput(session, "featurecounts_qc_sort_col", choices = c("Status"), selected = "Status")
-      return()
-    }
-    updateSelectInput(
-      session,
-      "featurecounts_qc_sort_col",
-      choices = colnames(featurecounts_summary_df),
-      selected = if ("Status" %in% colnames(featurecounts_summary_df)) "Status" else colnames(featurecounts_summary_df)[1]
-    )
-  })
-
   if (DT_AVAILABLE) {
     output$featurecounts_summary_table <- DT::renderDT({
       req(featurecounts_available)
       df <- featurecounts_summary_df
-      df <- sort_df_by_col(df, value_or(input$featurecounts_qc_sort_col, "Status"), "asc")
-      df <- format_numeric_commas(df)
+      df <- order_sample_columns(df, annotation_col = value_or(input$featurecounts_qc_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("Status"))
       simple_dt(df, page_length = 25)
     })
   } else {
     output$featurecounts_summary_table <- renderTable({
       req(featurecounts_available)
       df <- featurecounts_summary_df
-      df <- sort_df_by_col(df, value_or(input$featurecounts_qc_sort_col, "Status"), "asc")
+      df <- order_sample_columns(df, annotation_col = value_or(input$featurecounts_qc_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("Status"))
       rownames(df) <- df$Status
       df$Status <- NULL
       format_numeric_commas(df)
@@ -1592,11 +1587,11 @@ server <- function(input, output, session) {
     display_df <- featurecounts_display_df()
     q <- input$gene_query
     if (is.null(q) || !nzchar(trimws(q))) {
-      show_df <- head(display_df, 200)
+      show_df <- display_df
     } else {
       idx <- tolower(display_df$Geneid) == tolower(trimws(q))
       hits <- display_df[idx, , drop = FALSE]
-      show_df <- if (nrow(hits) == 0) head(display_df, 200) else hits
+      show_df <- if (nrow(hits) == 0) display_df else hits
     }
     sort_df_by_col(show_df, "Geneid", "asc")
   })
@@ -1604,8 +1599,7 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$gene_search_table <- DT::renderDT({
       df <- raw_counts_table_df()
-      show_df <- format_numeric_commas(df)
-      simple_dt(show_df, page_length = 50)
+      simple_dt(df, page_length = 50)
     })
   } else {
     output$gene_search_table <- renderTable({
@@ -1715,10 +1709,10 @@ server <- function(input, output, session) {
       id_col <- if (identical(input$rsem_type, "genes")) "gene_id" else "transcript_id"
       q <- input$rsem_query
       if (is.null(q) || !nzchar(trimws(q))) {
-        show_df <- head(df, 100)
+        show_df <- df
       } else {
         hits <- df[tolower(df[[id_col]]) == tolower(trimws(q)), , drop = FALSE]
-        show_df <- if (nrow(hits) == 0) head(df, 100) else hits
+        show_df <- if (nrow(hits) == 0) df else hits
       }
       sort_df_by_col(show_df, id_col, "asc")
     })
@@ -1726,8 +1720,7 @@ server <- function(input, output, session) {
     if (DT_AVAILABLE) {
       output$rsem_table <- DT::renderDT({
         df <- rsem_table_df()
-        show_df <- format_numeric_commas(df)
-        simple_dt(show_df, page_length = 50)
+        simple_dt(df, page_length = 50)
       })
     } else {
       output$rsem_table <- renderTable({
@@ -1818,9 +1811,13 @@ server <- function(input, output, session) {
           sprintf("This comparison has not been tested: %s vs %s.", input$deseq_treatment, input$deseq_control)
         ))
       }
+      raw_df <- read_normalized_counts(path)
+      shown_df <- deseq_counts_df()
+      raw_n <- if (is.null(raw_df)) 0 else nrow(raw_df)
+      shown_n <- if (is.null(shown_df)) 0 else nrow(shown_df)
       tags$div(
         style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-        sprintf("Showing normalized counts for %s vs %s using %s.", input$deseq_treatment, input$deseq_control, input$deseq_compare_col)
+        sprintf("Showing normalized counts for %s vs %s using %s. File has %s genes; display has %s genes. DESeq2.R writes normalized counts after keep <- rowSums(counts(dds)) >= 10.", input$deseq_treatment, input$deseq_control, input$deseq_compare_col, raw_n, shown_n)
       )
     })
 
@@ -1845,18 +1842,17 @@ server <- function(input, output, session) {
       req(!is.null(df))
       q <- input$deseq_gene_query
       if (is.null(q) || !nzchar(trimws(q))) {
-        show_df <- head(df, 100)
+        show_df <- df
       } else {
         hits <- df[tolower(df$gene_label) == tolower(trimws(q)), , drop = FALSE]
-        show_df <- if (nrow(hits) == 0) head(df, 100) else hits
+        show_df <- if (nrow(hits) == 0) df else hits
       }
       sort_df_by_col(show_df, "gene_label", "asc")
     })
 
     if (DT_AVAILABLE) {
       output$deseq_counts_table <- DT::renderDT({
-        show_df <- format_numeric_commas(deseq_counts_table_df())
-        simple_dt(show_df, page_length = 50)
+        simple_dt(deseq_counts_table_df(), page_length = 50)
       })
     } else {
       output$deseq_counts_table <- renderTable({
@@ -2047,10 +2043,10 @@ server <- function(input, output, session) {
         df <- sort_deg_table(df, sort_mode = value_or(input$deg_sort_mode, "up"), p_col = input$deg_p_col)
         q <- input$deg_gene_query
         if (is.null(q) || !nzchar(trimws(q))) {
-          show_df <- format_deg_table(df)
+          show_df <- df
         } else {
           hits <- df[tolower(df$gene_label) == tolower(trimws(q)), , drop = FALSE]
-          show_df <- if (nrow(hits) == 0) format_deg_table(df) else format_deg_table(hits)
+          show_df <- if (nrow(hits) == 0) df else hits
         }
         simple_dt(show_df, page_length = 50)
       })
@@ -2269,13 +2265,13 @@ server <- function(input, output, session) {
         req(!is.null(df), input$gsea_pathway)
         hit <- df[df$Term == input$gsea_pathway, , drop = FALSE]
         if (!nrow(hit)) return(NULL)
-        simple_dt(format_gsea_table(hit), page_length = 5, scroll_y = "180px", dom = "t")
+        simple_dt(hit, page_length = 5, scroll_y = "180px", dom = "t")
       })
 
       output$gsea_all_pathways_table <- DT::renderDT({
         df <- gsea_report_df()
         req(!is.null(df))
-        simple_dt(format_gsea_table(df), page_length = 25)
+        simple_dt(df, page_length = 25)
       })
     } else {
       output$gsea_pathway_table <- renderTable({
@@ -2358,6 +2354,7 @@ server <- function(input, output, session) {
     })
 
     observeEvent(input$build_kallisto_matrix_btn, {
+      if (isTRUE(kallisto_building()) || !is.null(kallisto_matrix_cache())) return()
       kallisto_building(TRUE)
       showModal(modalDialog("Building transcript matrix...", footer = NULL, easyClose = FALSE))
       built <- build_kallisto_matrix(kallisto_sample_names)
@@ -2490,8 +2487,7 @@ server <- function(input, output, session) {
 
     if (DT_AVAILABLE) {
       output$kallisto_table <- DT::renderDT({
-        show_df <- format_numeric_commas(kallisto_table_df())
-        simple_dt(show_df, page_length = 50)
+        simple_dt(kallisto_table_df(), page_length = 50)
       })
     } else {
       output$kallisto_table <- renderTable({
