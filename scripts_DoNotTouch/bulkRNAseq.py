@@ -9,6 +9,8 @@ import importlib
 import shlex
 import socket
 import subprocess
+import glob
+import signal
 import urllib.parse
 import urllib.request
 from IPython.display import IFrame,clear_output,HTML,Image
@@ -1374,6 +1376,58 @@ def shiny_LaunchPy(shiny_dir, shiny_config_path, port=None, proxy_mode="relative
     }
 
 
+
+def _shiny_cleanup_shell_command(port=None):
+    cleanup = (
+        'for pf in ~/.rnaseq_shiny_*.pid; do '
+        '[ -e "$pf" ] || continue; '
+        'oldpid=$(cat "$pf" 2>/dev/null); '
+        'if [ -n "$oldpid" ]; then kill "$oldpid" 2>/dev/null || true; fi; '
+        'rm -f "$pf"; '
+        'done'
+    )
+    if port is not None:
+        cleanup += (
+            '; if command -v lsof >/dev/null 2>&1; then '
+            'PIDS=$(lsof -ti :'+str(int(port))+' 2>/dev/null); '
+            'if [ -n "$PIDS" ]; then kill $PIDS 2>/dev/null || true; fi; '
+            'fi'
+        )
+    return cleanup
+
+
+def _cleanup_local_shiny_processes(port=None):
+    for pidfile_path in glob.glob(os.path.expanduser("~/.rnaseq_shiny_*.pid")):
+        try:
+            with open(pidfile_path) as f:
+                pid = int(f.read().strip())
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            os.remove(pidfile_path)
+        except (OSError, ValueError):
+            try:
+                os.remove(pidfile_path)
+            except OSError:
+                pass
+    if port is None:
+        return
+    try:
+        pids = subprocess.check_output(
+            ["lsof", "-ti", ":"+str(int(port))],
+            stderr=subprocess.DEVNULL,
+            universal_newlines=True
+        ).split()
+    except (OSError, subprocess.CalledProcessError):
+        pids = []
+    for pid_text in pids:
+        try:
+            os.kill(int(pid_text), signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+
+
 def shiny_TerminalCommands(shiny_dir, shiny_config_path, username=None, server_host="bamdev1", port=None, port_min=3838, port_max=3900, server_only=False, minimal=False):
 
     if (not server_only) and (username is None or len(str(username).strip()) == 0):
@@ -1393,6 +1447,7 @@ def shiny_TerminalCommands(shiny_dir, shiny_config_path, username=None, server_h
         "PORT={port}\n"
         "PIDFILE={pidfile}\n"
         "LOGFILE={logfile}\n"
+        "{cleanup}\n"
         "nohup bash {script} {cfg} 0.0.0.0 $PORT > $LOGFILE 2>&1 &\n"
         "echo $! > $PIDFILE\n"
         "echo \"Started R Shiny PID $(cat $PIDFILE) on port $PORT\"\n"
@@ -1401,6 +1456,7 @@ def shiny_TerminalCommands(shiny_dir, shiny_config_path, username=None, server_h
         port=port,
         pidfile=pidfile,
         logfile=logfile,
+        cleanup=_shiny_cleanup_shell_command(port),
         script=run_script,
         cfg=shiny_config_path
     )
@@ -1413,7 +1469,7 @@ def shiny_TerminalCommands(shiny_dir, shiny_config_path, username=None, server_h
             h=server_host
         )
 
-    stop_cmd = "kill $(cat {pidfile}) && rm -f {pidfile}".format(pidfile=pidfile)
+    stop_cmd = _shiny_cleanup_shell_command(port)
 
     if minimal:
         print(server_cmd)
@@ -1463,6 +1519,7 @@ def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_ho
     logfile_expanded = os.path.expanduser(logfile)
 
     if start_server_here:
+        _cleanup_local_shiny_processes(port)
         log_handle = open(logfile_expanded, "a")
         proc = subprocess.Popen(
             ["bash", run_script, shiny_config_path, "0.0.0.0", str(port)],
@@ -1481,9 +1538,11 @@ def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_ho
         )
     else:
         remote_start_cmd = (
+            "{cleanup}; "
             "nohup bash {script} {cfg} 0.0.0.0 {port} > {log} 2>&1 < /dev/null & "
             "echo $! > {pid}"
         ).format(
+            cleanup=_shiny_cleanup_shell_command(port),
             script=shlex.quote(run_script),
             cfg=shlex.quote(shiny_config_path),
             port=port,
@@ -1502,18 +1561,14 @@ def shiny_OutsideOneLiner(shiny_dir, shiny_config_path, username=None, server_ho
         )
 
     if start_server_here:
-        stop_cmd = "PORT={}; PIDS=$(lsof -ti :$PORT); if [ -n \"$PIDS\" ]; then kill $PIDS; fi; rm -f {}".format(port, pidfile)
+        stop_cmd = _shiny_cleanup_shell_command(port)
     else:
         stop_cmd = (
-            "ssh {user}@{host} \"PORT={port}; "
-            "PIDS=\\$(lsof -ti :\\$PORT); "
-            "if [ -n \\\"\\$PIDS\\\" ]; then kill \\$PIDS; fi; "
-            "rm -f {pid}\""
+            "ssh {user}@{host} {remote}"
         ).format(
             user=username,
             host=server_host,
-            port=port,
-            pid=pidfile
+            remote=shlex.quote(_shiny_cleanup_shell_command(port))
         )
 
     print(one_liner)
@@ -1548,10 +1603,12 @@ def shiny_ServerFirstCommands(shiny_dir, shiny_config_path, username=None, serve
         login_cmd = "ssh {user}@{host}".format(user=username, host=server_host)
     server_cmd = (
         "PORT={port}; "
+        "{cleanup}; "
         "nohup bash {script} {cfg} 0.0.0.0 $PORT > {log} 2>&1 < /dev/null & "
         "echo $! > {pid}"
     ).format(
         port=port,
+        cleanup=_shiny_cleanup_shell_command(port),
         script=shlex.quote(run_script),
         cfg=shlex.quote(shiny_config_path),
         log=logfile,
@@ -1565,11 +1622,11 @@ def shiny_ServerFirstCommands(shiny_dir, shiny_config_path, username=None, serve
             h=server_host
         )
     browser_url = "http://localhost:{}/".format(port)
-    stop_cmd = "lsof -ti :{} | xargs -r kill".format(port)
+    stop_cmd = _shiny_cleanup_shell_command(port)
 
     if after_login_only:
         if minimal_after_login:
-            print("bash {} {} 0.0.0.0 {} &".format(run_script, shiny_config_path, port))
+            print("{}; bash {} {} 0.0.0.0 {} &".format(_shiny_cleanup_shell_command(port), run_script, shiny_config_path, port))
         else:
             print(server_cmd)
         if print_stop:

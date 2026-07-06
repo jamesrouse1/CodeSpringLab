@@ -593,6 +593,40 @@ sanitize_filename <- function(x) {
   x
 }
 
+
+download_filename <- function(prefix, ext = "csv") {
+  clean_project <- sanitize_filename(project_name)
+  clean_prefix <- sanitize_filename(prefix)
+  if (!nzchar(clean_project)) clean_project <- "rna_seq_project"
+  if (!nzchar(clean_prefix)) clean_prefix <- "table"
+  paste0(clean_project, "_", clean_prefix, "_", format(Sys.Date(), "%Y%m%d"), ".", ext)
+}
+
+safe_download_df <- function(expr, empty_message = "No data available.") {
+  tryCatch({
+    df <- force(expr)
+    if (is.null(df)) {
+      data.frame(message = empty_message, stringsAsFactors = FALSE)
+    } else {
+      as.data.frame(df, stringsAsFactors = FALSE)
+    }
+  }, error = function(e) {
+    data.frame(message = empty_message, stringsAsFactors = FALSE)
+  })
+}
+
+write_csv_download <- function(df, file) {
+  if (is.null(df)) df <- data.frame()
+  write.csv(as.data.frame(df, stringsAsFactors = FALSE), file, row.names = FALSE, na = "")
+}
+
+download_table_button <- function(id, label) {
+  tags$div(
+    style = "margin-top: 8px; margin-bottom: 12px;",
+    downloadButton(id, label, class = "btn-sm")
+  )
+}
+
 gseapy_comparison_dir <- function(treatment_value, control_value) {
   if (!dir.exists(gseapy_dir)) return(NULL)
   candidates <- unique(c(
@@ -1083,9 +1117,11 @@ qc_subtabs <- list(
         uiOutput("star_status_ui"),
         h4("Alignment Summary Across Samples"),
         table_widget("star_summary_table"),
+        download_table_button("download_star_summary", "Download STAR summary"),
         tags$hr(style = "margin: 10px 0 8px 0;"),
         h4(style = "margin-top: 0;", "Selected Sample"),
-        tableOutput("star_sample_table")
+        tableOutput("star_sample_table"),
+        download_table_button("download_star_sample", "Download selected STAR sample")
       )
     )
   ),
@@ -1100,9 +1136,11 @@ qc_subtabs <- list(
         uiOutput("featurecounts_qc_status_ui"),
         h4("FeatureCounts Summary Across Samples"),
         table_widget("featurecounts_summary_table"),
+        download_table_button("download_featurecounts_summary", "Download FeatureCounts summary"),
         tags$hr(style = "margin: 10px 0 8px 0;"),
         h4(style = "margin-top: 0;", "Selected Sample"),
-        tableOutput("featurecounts_sample_table")
+        tableOutput("featurecounts_sample_table"),
+        download_table_button("download_featurecounts_sample", "Download selected FeatureCounts sample")
       )
     )
   )
@@ -1120,7 +1158,8 @@ counts_subtabs <- list(
       ),
       mainPanel(
         uiOutput("featurecounts_status_ui"),
-        table_widget("gene_search_table")
+        table_widget("gene_search_table"),
+        download_table_button("download_raw_counts_table", "Download raw counts table")
       )
     )
   )
@@ -1144,7 +1183,8 @@ counts_subtabs <- c(
         mainPanel(
           h4("RSEM Matrix"),
           uiOutput("rsem_status_ui"),
-          table_widget("rsem_table")
+          table_widget("rsem_table"),
+          download_table_button("download_rsem_table", "Download RSEM table")
         )
       )
     ),
@@ -1167,7 +1207,8 @@ counts_subtabs <- c(
         ),
         mainPanel(
           uiOutput("deseq_status_ui"),
-          table_widget("deseq_counts_table")
+          table_widget("deseq_counts_table"),
+          download_table_button("download_deseq_counts_table", "Download DESeq2 counts table")
         )
       )
     ),
@@ -1199,7 +1240,8 @@ counts_subtabs <- c(
         mainPanel(
           h4("Kallisto Transcript Abundance"),
           uiOutput("kallisto_status_ui"),
-          table_widget("kallisto_table")
+          table_widget("kallisto_table"),
+          download_table_button("download_kallisto_table", "Download Kallisto table")
         )
       )
     )
@@ -1943,16 +1985,31 @@ server <- function(input, output, session) {
     NULL
   })
 
+  star_summary_table_df <- reactive({
+    req(star_available)
+    order_sample_columns(star_summary_df, annotation_col = value_or(input$star_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("metric"))
+  })
+
+  star_sample_table_df <- reactive({
+    req(star_available)
+    req(input$star_sample)
+    sample_col <- input$star_sample
+    req(sample_col %in% colnames(star_summary_df))
+    data.frame(
+      Metric = star_summary_df$metric,
+      Value = star_summary_df[[sample_col]],
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  })
+
   if (DT_AVAILABLE) {
     output$star_summary_table <- DT::renderDT({
-      req(star_available)
-      df <- order_sample_columns(star_summary_df, annotation_col = value_or(input$star_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("metric"))
-      simple_dt(df, page_length = 25)
+      simple_dt(star_summary_table_df(), page_length = 25)
     })
   } else {
     output$star_summary_table <- renderTable({
-      req(star_available)
-      df <- order_sample_columns(star_summary_df, annotation_col = value_or(input$star_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("metric"))
+      df <- star_summary_table_df()
       rownames(df) <- df$metric
       df$metric <- NULL
       format_numeric_commas(df)
@@ -1960,17 +2017,17 @@ server <- function(input, output, session) {
   }
 
   output$star_sample_table <- renderTable({
-    req(star_available)
-    req(input$star_sample)
-    sample_col <- input$star_sample
-    req(sample_col %in% colnames(star_summary_df))
-    format_numeric_commas(data.frame(
-      Metric = star_summary_df$metric,
-      Value = star_summary_df[[sample_col]],
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    ))
+    format_numeric_commas(star_sample_table_df())
   }, striped = TRUE, bordered = TRUE, spacing = "s")
+
+  output$download_star_summary <- downloadHandler(
+    filename = function() download_filename("qc_star_summary"),
+    content = function(file) write_csv_download(safe_download_df(star_summary_table_df()), file)
+  )
+  output$download_star_sample <- downloadHandler(
+    filename = function() download_filename(paste0("qc_star_", value_or(input$star_sample, "sample"))),
+    content = function(file) write_csv_download(safe_download_df(star_sample_table_df()), file)
+  )
 
   output$featurecounts_qc_status_ui <- renderUI({
     if (!featurecounts_available) {
@@ -1979,18 +2036,31 @@ server <- function(input, output, session) {
     NULL
   })
 
+  featurecounts_summary_table_df <- reactive({
+    req(featurecounts_available)
+    order_sample_columns(featurecounts_summary_df, annotation_col = value_or(input$featurecounts_qc_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("Status"))
+  })
+
+  featurecounts_sample_table_df <- reactive({
+    req(featurecounts_available)
+    req(input$featurecounts_qc_sample)
+    sample_col <- input$featurecounts_qc_sample
+    req(sample_col %in% colnames(featurecounts_summary_df))
+    data.frame(
+      Status = featurecounts_summary_df$Status,
+      Value = featurecounts_summary_df[[sample_col]],
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  })
+
   if (DT_AVAILABLE) {
     output$featurecounts_summary_table <- DT::renderDT({
-      req(featurecounts_available)
-      df <- featurecounts_summary_df
-      df <- order_sample_columns(df, annotation_col = value_or(input$featurecounts_qc_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("Status"))
-      simple_dt(df, page_length = 25)
+      simple_dt(featurecounts_summary_table_df(), page_length = 25)
     })
   } else {
     output$featurecounts_summary_table <- renderTable({
-      req(featurecounts_available)
-      df <- featurecounts_summary_df
-      df <- order_sample_columns(df, annotation_col = value_or(input$featurecounts_qc_sample_sort_col, "__alpha__"), design_df = design_df, id_cols = c("Status"))
+      df <- featurecounts_summary_table_df()
       rownames(df) <- df$Status
       df$Status <- NULL
       format_numeric_commas(df)
@@ -1998,17 +2068,17 @@ server <- function(input, output, session) {
   }
 
   output$featurecounts_sample_table <- renderTable({
-    req(featurecounts_available)
-    req(input$featurecounts_qc_sample)
-    sample_col <- input$featurecounts_qc_sample
-    req(sample_col %in% colnames(featurecounts_summary_df))
-    format_numeric_commas(data.frame(
-      Status = featurecounts_summary_df$Status,
-      Value = featurecounts_summary_df[[sample_col]],
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    ))
+    format_numeric_commas(featurecounts_sample_table_df())
   }, striped = TRUE, bordered = TRUE, spacing = "s")
+
+  output$download_featurecounts_summary <- downloadHandler(
+    filename = function() download_filename("qc_featurecounts_summary"),
+    content = function(file) write_csv_download(safe_download_df(featurecounts_summary_table_df()), file)
+  )
+  output$download_featurecounts_sample <- downloadHandler(
+    filename = function() download_filename(paste0("qc_featurecounts_", value_or(input$featurecounts_qc_sample, "sample"))),
+    content = function(file) write_csv_download(safe_download_df(featurecounts_sample_table_df()), file)
+  )
 
   output$featurecounts_convert_ui <- renderUI({
     if (count_matrix_available && "Geneid" %in% colnames(count_matrix_nonzero_df) && looks_like_gene_id(count_matrix_nonzero_df$Geneid)) {
@@ -2093,6 +2163,11 @@ server <- function(input, output, session) {
       format_numeric_commas(df)
     }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = TRUE)
   }
+
+  output$download_raw_counts_table <- downloadHandler(
+    filename = function() download_filename("counts_raw_featurecounts"),
+    content = function(file) write_csv_download(safe_download_df(raw_counts_table_df()), file)
+  )
 
   if (rsem_available) {
     rsem_matrix_cache <- reactiveValues()
@@ -2227,11 +2302,19 @@ server <- function(input, output, session) {
         format_numeric_commas(df)
       }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = TRUE)
     }
+    output$download_rsem_table <- downloadHandler(
+      filename = function() download_filename(paste0("counts_rsem_", value_or(input$rsem_type, "matrix"), "_", value_or(input$rsem_metric, "metric"), "_", value_or(input$rsem_label_mode, "label"))),
+      content = function(file) write_csv_download(safe_download_df(rsem_table_df()), file)
+    )
   } else {
     output$rsem_status_ui <- renderUI({
       status_box("RSEM results have not been generated yet.", "warning")
     })
     output$rsem_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable(NULL)
+    output$download_rsem_table <- downloadHandler(
+      filename = function() download_filename("counts_rsem_unavailable"),
+      content = function(file) write_csv_download(safe_download_df(NULL), file)
+    )
   }
 
   if (deseq2_available) {
@@ -2354,6 +2437,10 @@ server <- function(input, output, session) {
         format_numeric_commas(show_df)
       }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = TRUE)
     }
+    output$download_deseq_counts_table <- downloadHandler(
+      filename = function() download_filename(paste0("counts_deseq2_normalized_", value_or(input$deseq_treatment, "treatment"), "_vs_", value_or(input$deseq_control, "control"))),
+      content = function(file) write_csv_download(safe_download_df(deseq_counts_table_df()), file)
+    )
 
     get_deg_values <- reactive({
       if (is.null(input$deg_compare_col) || identical(input$deg_compare_col, "NA") || !nzchar(input$deg_compare_col)) {
@@ -2797,6 +2884,10 @@ server <- function(input, output, session) {
       status_box("DESeq2 normalized counts have not been generated yet.", "warning")
     })
     output$deseq_counts_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
+    output$download_deseq_counts_table <- downloadHandler(
+      filename = function() download_filename("counts_deseq2_normalized_unavailable"),
+      content = function(file) write_csv_download(safe_download_df(NULL), file)
+    )
 
     output$deg_treatment_ui <- empty_compare_input("deg_treatment", "Treatment")
     output$deg_control_ui <- empty_compare_input("deg_control", "Control")
@@ -3146,11 +3237,19 @@ server <- function(input, output, session) {
         format_numeric_commas(kallisto_table_df())
       }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = FALSE)
     }
+    output$download_kallisto_table <- downloadHandler(
+      filename = function() download_filename(paste0("counts_kallisto_", value_or(input$kallisto_view_mode, "matrix"))),
+      content = function(file) write_csv_download(safe_download_df(kallisto_table_df()), file)
+    )
   } else {
     output$kallisto_status_ui <- renderUI({
       status_box("Kallisto transcript abundance has not been generated yet.", "warning")
     })
     output$kallisto_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable(NULL)
+    output$download_kallisto_table <- downloadHandler(
+      filename = function() download_filename("counts_kallisto_unavailable"),
+      content = function(file) write_csv_download(safe_download_df(NULL), file)
+    )
     observe({
       updateSelectizeInput(session, "kallisto_sample_filter_value", choices = character(0), selected = character(0), server = TRUE)
       updateSelectizeInput(session, "kallisto_filter_value", choices = character(0), selected = character(0), server = TRUE)
