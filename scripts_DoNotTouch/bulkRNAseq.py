@@ -131,11 +131,59 @@ def ListDir(directory):
     
     return dirlist
 
+
+def _maybe_launch_existing_results_explorer():
+
+    global project_name
+    global res_dir
+
+    print("==================================")
+    print("Have you already run the analysis and only want to visualize results? (y/n)")
+    visualize_existing_results = input().strip().lower()
+    if not visualize_existing_results.startswith("y"):
+        return None
+
+    project_name_existing = input("Project name used in csl_results: ").strip() or project_name
+    results_root_existing = input("Results root folder (example: /path/to/csl_results/): ").strip() or res_dir
+    design_matrix_existing = input("Full path to design_matrix.txt or its containing folder: ").strip()
+    data_dir_existing = input("Existing data folder (press Enter for <results_root>/<project_name>/data): ").strip()
+
+    if not results_root_existing.endswith("/"):
+        results_root_existing += "/"
+    if design_matrix_existing and not design_matrix_existing.endswith("design_matrix.txt"):
+        design_matrix_existing = os.path.join(design_matrix_existing, "design_matrix.txt")
+    if not data_dir_existing:
+        data_dir_existing = os.path.join(results_root_existing, project_name_existing, "data")
+
+    project_name = project_name_existing
+    res_dir = results_root_existing
+
+    design_dir = os.path.dirname(design_matrix_existing) if design_matrix_existing else getattr(config, "inpath_design", "")
+    read_path_destination = getattr(config, "read_path_destination", os.path.join(data_dir_existing, "fastq"))
+    read_path_original = getattr(config, "read_path_original", read_path_destination)
+    genome = getattr(config, "genome", "mouse")
+    pairing = getattr(config, "pairing", "y")
+    scriptpath_copy = getattr(config, "scriptpath_copy", "../scripts_DoNotTouch/fastq/qsub_copy.sh")
+
+    shiny_dir, outpath_shiny, shiny_config_path = shiny_Prep(
+        data_dir=data_dir_existing,
+        inpath_design=design_matrix_existing
+    )
+    _ = shiny_OutsideOneLiner(shiny_dir, shiny_config_path, start_server_here=True)
+    print("Results Explorer launch commands printed above. Skip the analysis cells below unless you need to rerun them.")
+
+    return read_path_original, read_path_destination, scriptpath_copy, genome, pairing, design_dir
+
 def filetransfer_Prep():
         
     global project_name
     global param
     global res_dir
+
+    existing_results = _maybe_launch_existing_results_explorer()
+    if existing_results is not None:
+        read_path_original,read_path_destination,scriptpath_copy,genome,pairing,inpath_design = existing_results
+        return read_path_original+"/",read_path_destination+"/",scriptpath_copy,genome,pairing,inpath_design+"/"
     
     os.makedirs(res_dir+project_name+"/data/",exist_ok=True)
     #os.makedirs(res_dir+project_name+"/data/manifest/",exist_ok=True)
