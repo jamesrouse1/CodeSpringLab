@@ -232,6 +232,12 @@ fallback_sample_sources <- fallback_sample_sources[
 ]
 samples <- if (length(design_samples)) design_samples else sort(unique(fallback_sample_sources))
 default_show_trimmed <- if (fastqc_trim_available && !fastqc_raw_available) TRUE else if (fastqc_raw_available && !fastqc_trim_available) FALSE else fastqc_trim_available
+featurecounts_sample_choices <- setdiff(colnames(featurecounts_summary_df), "Status")
+if (length(samples)) {
+  design_ordered_featurecounts <- samples[samples %in% featurecounts_sample_choices]
+  other_featurecounts <- setdiff(featurecounts_sample_choices, design_ordered_featurecounts)
+  featurecounts_sample_choices <- c(design_ordered_featurecounts, other_featurecounts)
+}
 
 if (dir.exists(fastqc_dir)) addResourcePath("fastqc_results", fastqc_dir)
 if (dir.exists(fastqc_cutadapt_dir)) addResourcePath("fastqc_cutadapt_results", fastqc_cutadapt_dir)
@@ -273,7 +279,7 @@ qc_file_map <- function(sample_name, read_name = c("R1", "R2"), trimmed = FALSE)
   )
 }
 
-iframe_or_message <- function(path, resource_prefix, height = "calc(100vh - 260px)", missing_message = NULL) {
+iframe_or_message <- function(path, resource_prefix, height = "calc(100vh - 210px)", missing_message = NULL) {
   if (!file.exists(path)) {
     return(tags$p(value_or(missing_message, sprintf("Missing file: %s", basename(path)))))
   }
@@ -282,7 +288,7 @@ iframe_or_message <- function(path, resource_prefix, height = "calc(100vh - 260p
   tags$iframe(
     class = "qc-report-frame",
     src = file.path(resource_prefix, rel),
-    style = sprintf("width: 100%%; height: %s; min-height: 760px; border: 1px solid #d7e0ea;", height_css)
+    style = sprintf("width: 100%%; height: %s; min-height: 900px; border: 1px solid #d7e0ea;", height_css)
   )
 }
 
@@ -971,7 +977,6 @@ draw_volcano_plot <- function(plot_df, labels, title, subtitle, p_cutoff, lfc_cu
 
   label_hits <- plot_df[plot_df$gene_label %in% labels, , drop = FALSE]
   if (nrow(label_hits)) {
-    points(label_hits$log2FoldChange, label_hits$neg_log10_p, pch = 21, bg = pal[["selected"]], col = theme$bg, cex = 1.15)
     text(
       label_hits$log2FoldChange,
       label_hits$neg_log10_p,
@@ -1012,12 +1017,14 @@ qc_subtabs <- list(
     "Initial QC",
     sidebarLayout(
       sidebarPanel(
+        width = 2,
         selectInput("sample", "Sample", choices = samples, selected = first_or_null(samples)),
         checkboxInput("show_trimmed", "Show cutadapt-trimmed QC", value = default_show_trimmed),
         tags$hr(),
         helpText("This tab renders FastQC and FastQ Screen HTML reports for both reads.")
       ),
       mainPanel(
+        width = 10,
         uiOutput("qc_status_ui"),
         tabsetPanel(
           tabPanel("R1 FastQC", uiOutput("r1_fastqc_ui")),
@@ -1041,8 +1048,8 @@ qc_subtabs <- list(
         uiOutput("star_status_ui"),
         h4("Alignment Summary Across Samples"),
         table_widget("star_summary_table"),
-        tags$hr(),
-        h4("Selected Sample"),
+        tags$hr(style = "margin: 10px 0 8px 0;"),
+        h4(style = "margin-top: 0;", "Selected Sample"),
         tableOutput("star_sample_table")
       )
     )
@@ -1051,12 +1058,16 @@ qc_subtabs <- list(
     "FeatureCounts QC",
     sidebarLayout(
       sidebarPanel(
+        selectInput("featurecounts_qc_sample", "FeatureCounts sample", choices = featurecounts_sample_choices, selected = first_or_null(featurecounts_sample_choices)),
         selectInput("featurecounts_qc_sample_sort_col", "Sort sample columns by", choices = comparison_columns, selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns))
       ),
       mainPanel(
         uiOutput("featurecounts_qc_status_ui"),
         h4("FeatureCounts Summary Across Samples"),
-        table_widget("featurecounts_summary_table")
+        table_widget("featurecounts_summary_table"),
+        tags$hr(style = "margin: 10px 0 8px 0;"),
+        h4(style = "margin-top: 0;", "Selected Sample"),
+        tableOutput("featurecounts_sample_table")
       )
     )
   )
@@ -1090,10 +1101,10 @@ counts_subtabs <- c(
         sidebarPanel(
           selectInput("rsem_type", "Show", choices = c("Genes" = "genes", "Isoforms" = "isoforms"), selected = "genes"),
           selectInput("rsem_metric", "Metric", choices = c("TPM", "expected_count", "FPKM"), selected = "TPM"),
+          selectInput("rsem_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id"),
           selectizeInput("rsem_query", "Select gene/transcript of interest", choices = NULL, selected = NULL, multiple = FALSE),
-          uiOutput("rsem_convert_ui"),
           tags$hr(),
-          helpText("Shows an RSEM matrix across all samples. Choose genes or isoforms, then optionally flip displayed gene labels using the local GTF.")
+          helpText("Shows an RSEM matrix across all samples. Choose genes or isoforms, then display gene labels as Ensembl IDs or gene names using the local GTF.")
         ),
         mainPanel(
           h4("RSEM Matrix"),
@@ -1240,7 +1251,7 @@ app_tabs <- list(
               selectInput(
                 "volcano_save_mode",
                 "Saved image size",
-                choices = c("Match display" = "match", "High-res 2x" = "double", "High-res 3x" = "triple", "Custom" = "custom"),
+                choices = c("Match display" = "match", "High-res 2x" = "double", "High-res 3x" = "triple", "High-res 5x" = "quintuple", "Custom" = "custom"),
                 selected = "double"
               ),
               conditionalPanel(
@@ -1373,6 +1384,7 @@ app_tabs <- list(
                   "Match display" = "match",
                   "High-res 2x" = "double",
                   "High-res 3x" = "triple",
+                  "High-res 5x" = "quintuple",
                   "Custom" = "custom"
                 ),
                 selected = "double"
@@ -1950,6 +1962,19 @@ server <- function(input, output, session) {
     }, rownames = TRUE, striped = TRUE, bordered = TRUE, spacing = "s")
   }
 
+  output$featurecounts_sample_table <- renderTable({
+    req(featurecounts_available)
+    req(input$featurecounts_qc_sample)
+    sample_col <- input$featurecounts_qc_sample
+    req(sample_col %in% colnames(featurecounts_summary_df))
+    format_numeric_commas(data.frame(
+      Status = featurecounts_summary_df$Status,
+      Value = featurecounts_summary_df[[sample_col]],
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    ))
+  }, striped = TRUE, bordered = TRUE, spacing = "s")
+
   output$featurecounts_convert_ui <- renderUI({
     if (count_matrix_available && "Geneid" %in% colnames(count_matrix_nonzero_df) && looks_like_gene_id(count_matrix_nonzero_df$Geneid)) {
       actionButton("featurecounts_convert_btn", "Convert Ensembl IDs to gene names")
@@ -2037,6 +2062,7 @@ server <- function(input, output, session) {
   if (rsem_available) {
     rsem_matrix_cache <- reactiveValues()
     rsem_display_cache <- reactiveValues()
+    rsem_label_status <- reactiveVal(NULL)
 
     get_rsem_matrix <- reactive({
       req(input$rsem_type, input$rsem_metric)
@@ -2049,67 +2075,78 @@ server <- function(input, output, session) {
       cached
     })
 
-    output$rsem_convert_ui <- renderUI({
-      raw_df <- get_rsem_matrix()
-      if (!is.null(raw_df) && "gene_id" %in% colnames(raw_df) && looks_like_gene_id(raw_df$gene_id)) {
-        actionButton("rsem_convert_btn", "Convert Ensembl IDs to gene names")
-      }
-    })
-
     rsem_display_df <- reactive({
       raw_df <- get_rsem_matrix()
       req(!is.null(raw_df))
-      cache_key <- paste(
-        input$rsem_type,
-        input$rsem_metric,
-        if ("gene_id" %in% colnames(raw_df) && looks_like_gene_id(raw_df$gene_id)) value_or(input$rsem_convert_btn, 0) %% 2 else 0,
-        sep = "::"
-      )
+      label_mode <- value_or(input$rsem_label_mode, "gene_id")
+      cache_key <- paste(input$rsem_type, input$rsem_metric, label_mode, sep = "::")
       cached <- rsem_display_cache[[cache_key]]
       if (!is.null(cached)) {
+        rsem_label_status(attr(cached, "label_status", exact = TRUE))
         return(cached)
       }
+
       df <- raw_df
-      if ("gene_id" %in% colnames(df) && looks_like_gene_id(df$gene_id) && (value_or(input$rsem_convert_btn, 0)) %% 2 == 1) {
-        species <- detect_species_from_ids(df$gene_id)
-        map_df <- get_gtf_map(species)
-        conv <- convert_gene_labels(df$gene_id, map_df)
-        df$gene_id <- conv$values
-        if (identical(input$rsem_type, "genes")) {
-          df <- aggregate_display_matrix(df, "gene_id")
+      status_message <- NULL
+      if ("gene_id" %in% colnames(df)) {
+        original_gene_id <- as.character(df$gene_id)
+        if (looks_like_gene_id(original_gene_id)) {
+          species <- detect_species_from_ids(original_gene_id)
+          map_df <- get_gtf_map(species)
+          conv <- convert_gene_labels(original_gene_id, map_df)
+          df$gene_name <- conv$values
+          if (identical(label_mode, "gene_name")) {
+            mapped_all <- sum(!is.na(df$gene_name) & nzchar(df$gene_name) & df$gene_name != original_gene_id)
+            status_message <- if (mapped_all > 0) {
+              sprintf("RSEM display is showing gene names using %s GTF (%s IDs mapped).", value_or(species, "detected"), mapped_all)
+            } else {
+              sprintf("RSEM gene-name display requested, but no IDs were mapped using the %s GTF.", value_or(species, "detected"))
+            }
+          }
+        } else {
+          df$gene_name <- original_gene_id
+          if (identical(label_mode, "gene_name")) {
+            status_message <- "RSEM gene labels already look like gene names."
+          }
         }
       }
+
+      if (identical(label_mode, "gene_name") && "gene_name" %in% colnames(df)) {
+        if (identical(input$rsem_type, "genes")) {
+          df <- df[, c("gene_name", setdiff(colnames(df), c("gene_name", "gene_id"))), drop = FALSE]
+        } else {
+          df <- df[, c("transcript_id", "gene_name", setdiff(colnames(df), c("transcript_id", "gene_name", "gene_id"))), drop = FALSE]
+        }
+      } else if (identical(input$rsem_type, "genes") && "gene_id" %in% colnames(df)) {
+        df <- df[, c("gene_id", setdiff(colnames(df), c("gene_id", "gene_name"))), drop = FALSE]
+      } else {
+        df <- df[, c(intersect(c("transcript_id", "gene_id"), colnames(df)), setdiff(colnames(df), c("transcript_id", "gene_id", "gene_name"))), drop = FALSE]
+      }
+
+      attr(df, "label_status") <- status_message
       rsem_display_cache[[cache_key]] <- df
+      rsem_label_status(status_message)
       df
     })
 
     output$rsem_status_ui <- renderUI({
-      raw_df <- get_rsem_matrix()
-      if (is.null(raw_df)) {
+      df <- rsem_display_df()
+      if (is.null(df)) {
         return(status_box("RSEM results have not been generated yet.", "warning"))
       }
-      if ("gene_id" %in% colnames(raw_df) && looks_like_gene_id(raw_df$gene_id) && (value_or(input$rsem_convert_btn, 0)) %% 2 == 1) {
-        species <- detect_species_from_ids(raw_df$gene_id)
-        map_df <- get_gtf_map(species)
-        conv <- convert_gene_labels(head(raw_df$gene_id, 100), map_df)
-        tags$div(
-          style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-          if (isTRUE(conv$changed)) {
-            sprintf("RSEM display converted from %s to %s using %s GTF (%s IDs mapped).", conv$from, conv$to, value_or(species, "detected"), conv$mapped)
-          } else {
-            sprintf("RSEM conversion requested, but no %s labels were found in the %s GTF map.", conv$from, value_or(species, "detected"))
-          }
-        )
-      } else {
-        NULL
-      }
+      msg <- rsem_label_status()
+      if (is.null(msg) || !nzchar(msg)) return(NULL)
+      tags$div(
+        style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
+        msg
+      )
     })
 
     observe({
       req(input$rsem_type, input$rsem_metric)
       df <- rsem_display_df()
       req(!is.null(df))
-      id_col <- if (identical(input$rsem_type, "genes")) "gene_id" else "transcript_id"
+      id_col <- if (identical(input$rsem_type, "genes")) colnames(df)[1] else if (identical(value_or(input$rsem_label_mode, "gene_id"), "gene_name") && "gene_name" %in% colnames(df)) "gene_name" else "transcript_id"
       vals <- sort(unique(df[[id_col]]))
       vals <- vals[!is.na(vals) & nzchar(vals)]
       updateSelectizeInput(
@@ -2130,7 +2167,7 @@ server <- function(input, output, session) {
     rsem_table_df <- reactive({
       df <- rsem_display_df()
       req(!is.null(df))
-      id_col <- if (identical(input$rsem_type, "genes")) "gene_id" else "transcript_id"
+      id_col <- if (identical(input$rsem_type, "genes")) colnames(df)[1] else if (identical(value_or(input$rsem_label_mode, "gene_id"), "gene_name") && "gene_name" %in% colnames(df)) "gene_name" else "transcript_id"
       q <- input$rsem_query
       if (is.null(q) || !nzchar(trimws(q))) {
         show_df <- df
@@ -2149,7 +2186,7 @@ server <- function(input, output, session) {
     } else {
       output$rsem_table <- renderTable({
         df <- rsem_table_df()
-        id_col <- if (identical(input$rsem_type, "genes")) "gene_id" else "transcript_id"
+        id_col <- if (identical(input$rsem_type, "genes")) colnames(df)[1] else if (identical(value_or(input$rsem_label_mode, "gene_id"), "gene_name") && "gene_name" %in% colnames(df)) "gene_name" else "transcript_id"
         rownames(df) <- make.unique(as.character(df[[id_col]]))
         df[[id_col]] <- NULL
         format_numeric_commas(df)
@@ -2493,7 +2530,7 @@ server <- function(input, output, session) {
       display_width <- as.numeric(value_or(input$volcano_plot_width, 900))
       display_height <- as.numeric(value_or(input$volcano_plot_height, 700))
       save_mode <- value_or(input$volcano_save_mode, "double")
-      save_scale <- if (identical(save_mode, "triple")) 3 else if (identical(save_mode, "double")) 2 else 1
+      save_scale <- if (identical(save_mode, "quintuple")) 5 else if (identical(save_mode, "triple")) 3 else if (identical(save_mode, "double")) 2 else 1
       save_width <- display_width * save_scale
       save_height <- display_height * save_scale
       save_res <- 96 * save_scale
@@ -2675,7 +2712,7 @@ server <- function(input, output, session) {
       display_width <- as.numeric(value_or(input$heatmap_plot_width, 900))
       display_height <- as.numeric(value_or(input$heatmap_plot_height, 700))
       save_mode <- value_or(input$heatmap_save_mode, "double")
-      save_scale <- if (identical(save_mode, "triple")) 3 else if (identical(save_mode, "double")) 2 else 1
+      save_scale <- if (identical(save_mode, "quintuple")) 5 else if (identical(save_mode, "triple")) 3 else if (identical(save_mode, "double")) 2 else 1
       save_width <- display_width * save_scale
       save_height <- display_height * save_scale
       save_res <- 96 * save_scale
@@ -2907,12 +2944,25 @@ server <- function(input, output, session) {
   }
 
   if (kallisto_available) {
-    kallisto_matrix_cache <- reactiveVal(read_kallisto_matrix())
-    kallisto_filter_cache <- reactiveValues()
+    kallisto_matrix_cache <- reactiveVal(NULL)
+    kallisto_matrix_loaded <- reactiveVal(FALSE)
     kallisto_building <- reactiveVal(FALSE)
 
+    get_kallisto_matrix <- function() {
+      cached <- kallisto_matrix_cache()
+      if (!is.null(cached)) return(cached)
+      if (!isTRUE(kallisto_matrix_loaded()) && file.exists(kallisto_matrix_path)) {
+        kallisto_matrix_loaded(TRUE)
+        cached <- read_kallisto_matrix()
+        kallisto_matrix_cache(cached)
+        return(cached)
+      }
+      kallisto_matrix_loaded(TRUE)
+      NULL
+    }
+
     output$kallisto_build_ui <- renderUI({
-      if (is.null(kallisto_matrix_cache())) {
+      if (!file.exists(kallisto_matrix_path) && is.null(kallisto_matrix_cache())) {
         actionButton("build_kallisto_matrix_btn", "Build transcript matrix")
       } else {
         tags$span("Using saved transcript matrix.")
@@ -2920,7 +2970,7 @@ server <- function(input, output, session) {
     })
 
     observeEvent(input$build_kallisto_matrix_btn, {
-      if (isTRUE(kallisto_building()) || !is.null(kallisto_matrix_cache())) return()
+      if (isTRUE(kallisto_building()) || file.exists(kallisto_matrix_path) || !is.null(kallisto_matrix_cache())) return()
       kallisto_building(TRUE)
       showModal(modalDialog("Building transcript matrix...", footer = NULL, easyClose = FALSE))
       built <- build_kallisto_matrix(kallisto_sample_names)
@@ -2934,10 +2984,10 @@ server <- function(input, output, session) {
       if (!kallisto_available) {
         return(status_box("Kallisto transcript abundance has not been generated yet.", "warning"))
       }
-      if (identical(input$kallisto_view_mode, "matrix") && !is.null(kallisto_matrix_cache())) {
+      if (identical(input$kallisto_view_mode, "matrix") && (file.exists(kallisto_matrix_path) || !is.null(kallisto_matrix_cache()))) {
         return(status_box(sprintf("Using Kallisto transcript matrix: %s", kallisto_matrix_path), "info"))
       }
-      if (identical(input$kallisto_view_mode, "matrix") && is.null(kallisto_matrix_cache())) {
+      if (identical(input$kallisto_view_mode, "matrix") && !file.exists(kallisto_matrix_path) && is.null(kallisto_matrix_cache())) {
         tags$div(
           style = "margin-bottom: 12px; padding: 10px 12px; background: #fff7e6; border: 1px solid #f0c36d; border-radius: 6px;",
           "Click 'Build transcript matrix' to load the joined transcript table across all samples."
@@ -2985,11 +3035,12 @@ server <- function(input, output, session) {
       req(identical(input$counts_subtab, "Kallisto"))
       req(identical(input$kallisto_view_mode, "matrix"))
       req(input$kallisto_filter_col)
-      col_key <- input$kallisto_filter_col
-      vals <- kallisto_filter_cache[[col_key]]
-      if (is.null(vals)) {
-        vals <- collect_kallisto_filter_values(samples, col_key)
-        kallisto_filter_cache[[col_key]] <- vals
+      matrix_df <- get_kallisto_matrix()
+      if (is.null(matrix_df) || !(input$kallisto_filter_col %in% colnames(matrix_df))) {
+        vals <- character(0)
+      } else {
+        vals <- sort(unique(as.character(matrix_df[[input$kallisto_filter_col]])))
+        vals <- vals[!is.na(vals) & nzchar(vals)]
       }
       updateSelectizeInput(
         session,
