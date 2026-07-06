@@ -934,6 +934,73 @@ draw_volcano_plot <- function(plot_df, labels, title, subtitle, p_cutoff, lfc_cu
   validate(need(!is.null(plot_df) && nrow(plot_df) > 0, "No differential expression rows are available for this volcano plot."))
   pal <- volcano_palette_colors(palette_style)
   theme <- volcano_theme_options(style)
+  label_hits <- plot_df[plot_df$gene_label %in% labels, , drop = FALSE]
+
+  if (requireNamespace("ggplot2", quietly = TRUE) && requireNamespace("ggrepel", quietly = TRUE)) {
+    plot_df$status <- factor(plot_df$status, levels = c("Down", "Not significant", "Up"))
+    label_hits$status <- factor(label_hits$status, levels = c("Down", "Not significant", "Up"))
+    threshold_y <- -log10(pmax(p_cutoff, .Machine$double.xmin))
+    p <- ggplot2::ggplot(
+      plot_df,
+      ggplot2::aes(x = log2FoldChange, y = neg_log10_p, color = status)
+    )
+    if (isTRUE(show_grid)) {
+      p <- p + ggplot2::theme(panel.grid.major = ggplot2::element_line(color = theme$grid, size = 0.25),
+                              panel.grid.minor = ggplot2::element_blank())
+    } else {
+      p <- p + ggplot2::theme(panel.grid = ggplot2::element_blank())
+    }
+    if (isTRUE(show_thresholds)) {
+      p <- p +
+        ggplot2::geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), color = "#7f8792", linetype = "dashed", size = 0.45) +
+        ggplot2::geom_hline(yintercept = threshold_y, color = "#7f8792", linetype = "dashed", size = 0.45)
+    }
+    p <- p +
+      ggplot2::geom_point(alpha = as.numeric(value_or(point_alpha, 0.72)), size = as.numeric(value_or(point_size, 0.75))) +
+      ggplot2::scale_color_manual(
+        values = c("Down" = pal[["down"]], "Not significant" = pal[["nonsig"]], "Up" = pal[["up"]]),
+        breaks = c("Up", "Down", "Not significant")
+      ) +
+      ggplot2::labs(
+        title = title,
+        x = "log2 fold change",
+        y = paste0("-log10(", subtitle, ")"),
+        color = NULL
+      ) +
+      ggplot2::theme_classic(base_family = font_family) +
+      ggplot2::theme(
+        plot.background = ggplot2::element_rect(fill = theme$bg, color = NA),
+        panel.background = ggplot2::element_rect(fill = theme$bg, color = NA),
+        axis.text = ggplot2::element_text(color = theme$axis),
+        axis.title = ggplot2::element_text(color = theme$fg, face = "bold"),
+        plot.title = ggplot2::element_text(color = theme$fg, face = "bold", hjust = 0, size = 14),
+        legend.position = "top",
+        legend.justification = "left",
+        legend.text = ggplot2::element_text(color = theme$fg),
+        legend.background = ggplot2::element_rect(fill = theme$bg, color = NA)
+      )
+    if (nrow(label_hits)) {
+      p <- p + ggrepel::geom_text_repel(
+        data = label_hits,
+        ggplot2::aes(label = gene_label),
+        color = pal[["selected"]],
+        size = max(2.5, as.numeric(value_or(label_size, 0.72)) * 3.4),
+        box.padding = 0.55,
+        point.padding = 0.35,
+        min.segment.length = 0,
+        segment.color = "#7f8792",
+        segment.alpha = 0.75,
+        segment.size = 0.3,
+        max.overlaps = Inf,
+        seed = 8,
+        force = 2.5,
+        force_pull = 0.35
+      )
+    }
+    print(p)
+    return(invisible(p))
+  }
+
   old_par <- par(no.readonly = TRUE)
   on.exit(par(old_par), add = TRUE)
   par(bg = theme$bg, fg = theme$fg, col.axis = theme$axis, col.lab = theme$fg, col.main = theme$fg, family = font_family)
@@ -948,55 +1015,23 @@ draw_volcano_plot <- function(plot_df, labels, title, subtitle, p_cutoff, lfc_cu
   xlim <- xlim + c(-xpad, xpad)
   ylim <- c(0, ylim[2] + ypad)
 
-  plot(
-    x,
-    y,
-    type = "n",
-    xlim = xlim,
-    ylim = ylim,
-    xlab = "log2 fold change",
-    ylab = paste0("-log10(", subtitle, ")"),
-    main = title,
-    cex.main = 1.15,
-    font.main = 2,
-    bty = "l"
-  )
-  if (isTRUE(show_grid)) {
-    abline(h = pretty(ylim), v = pretty(xlim), col = theme$grid, lwd = 0.8)
-  }
+  plot(x, y, type = "n", xlim = xlim, ylim = ylim, xlab = "log2 fold change",
+       ylab = paste0("-log10(", subtitle, ")"), main = title, cex.main = 1.15, font.main = 2, bty = "l")
+  if (isTRUE(show_grid)) abline(h = pretty(ylim), v = pretty(xlim), col = theme$grid, lwd = 0.8)
   if (isTRUE(show_thresholds)) {
     abline(v = c(-lfc_cutoff, lfc_cutoff), col = "#7f8792", lty = 2, lwd = 1.1)
     abline(h = -log10(pmax(p_cutoff, .Machine$double.xmin)), col = "#7f8792", lty = 2, lwd = 1.1)
   }
-
   cols <- rep(pal[["nonsig"]], nrow(plot_df))
   cols[plot_df$status == "Up"] <- pal[["up"]]
   cols[plot_df$status == "Down"] <- pal[["down"]]
-  cols <- adjustcolor(cols, alpha.f = as.numeric(value_or(point_alpha, 0.72)))
-  points(x, y, pch = 16, col = cols, cex = as.numeric(value_or(point_size, 0.75)))
-
-  label_hits <- plot_df[plot_df$gene_label %in% labels, , drop = FALSE]
+  points(x, y, pch = 16, col = adjustcolor(cols, alpha.f = as.numeric(value_or(point_alpha, 0.72))), cex = as.numeric(value_or(point_size, 0.75)))
   if (nrow(label_hits)) {
-    text(
-      label_hits$log2FoldChange,
-      label_hits$neg_log10_p,
-      labels = label_hits$gene_label,
-      pos = 3,
-      cex = as.numeric(value_or(label_size, 0.72)),
-      col = pal[["selected"]],
-      xpd = NA
-    )
+    text(label_hits$log2FoldChange, label_hits$neg_log10_p, labels = label_hits$gene_label,
+         pos = 3, cex = as.numeric(value_or(label_size, 0.72)), col = pal[["selected"]], xpd = NA)
   }
-
-  legend(
-    "topright",
-    legend = c("Up", "Down", "Not significant"),
-    col = c(pal[["up"]], pal[["down"]], pal[["nonsig"]]),
-    pch = 16,
-    bty = "n",
-    text.col = theme$fg,
-    cex = 0.85
-  )
+  legend("topright", legend = c("Up", "Down", "Not significant"),
+         col = c(pal[["up"]], pal[["down"]], pal[["nonsig"]]), pch = 16, bty = "n", text.col = theme$fg, cex = 0.85)
 }
 
 make_enrichr_gene_lists <- function(df, p_col, p_cutoff, lfc_cutoff) {

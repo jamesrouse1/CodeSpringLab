@@ -54,15 +54,41 @@ keep <- rowSums(counts(dds)) >= 10
 dds <- dds[keep,]
 
 ### PCA Plot #####
+vsdata <- vst(dds, blind=FALSE)
 for (i in 1:length(colnames(design))){
 
-png(paste(outpath,'/pca_',colnames(design)[i],'_',compared,"_vs_",refcond,'(ref).png',sep=""),units="in", width=5, height=5, res=300,type="cairo")
-vsdata <- vst(dds, blind=FALSE)
-pca<-plotPCA(vsdata, intgroup=colnames(design)[i])+theme(aspect.ratio = 1)
-pca<-pca+geom_text_repel(label=rownames(design),color="black",size=2)+labs(title = "geom_text_repel()")
+png(paste(outpath,'/pca_',colnames(design)[i],'_',compared,"_vs_",refcond,'(ref).png',sep=""),units="in", width=6.2, height=5.6, res=300,type="cairo")
+pca_data <- plotPCA(vsdata, intgroup=colnames(design)[i], returnData=TRUE)
+percent_var <- round(100 * attr(pca_data, "percentVar"))
+group_col <- colnames(design)[i]
+pca_data$sample <- rownames(pca_data)
+
+pca <- ggplot(pca_data, aes(x = PC1, y = PC2, color = .data[[group_col]])) +
+  geom_point(size = 3.2, alpha = 0.92) +
+  geom_text_repel(aes(label = sample), color = "black", size = 3.0,
+                  box.padding = 0.45, point.padding = 0.35,
+                  segment.color = "grey45", segment.size = 0.3,
+                  max.overlaps = Inf, seed = 8) +
+  labs(
+    title = paste("PCA:", compared, "vs", refcond),
+    subtitle = paste("Colored by", group_col),
+    x = paste0("PC1: ", percent_var[1], "% variance"),
+    y = paste0("PC2: ", percent_var[2], "% variance"),
+    color = group_col
+  ) +
+  coord_fixed() +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 11, color = "grey35"),
+    axis.title = element_text(face = "bold"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    panel.border = element_rect(color = "grey25", fill = NA, size = 0.5)
+  )
 print(pca)
 dev.off()
-  
+
 }
 ##################
 
