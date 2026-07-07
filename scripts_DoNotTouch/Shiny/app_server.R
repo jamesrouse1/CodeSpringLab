@@ -1151,7 +1151,7 @@ qc_subtabs <- list(
     sidebarLayout(
       sidebarPanel(
         width = 2,
-        selectInput("sample", "Sample", choices = samples, selected = first_or_null(samples)),
+        selectInput("sample", "Sample", choices = samples, selected = first_or_null(samples), selectize = FALSE),
         checkboxInput("show_trimmed", "Show cutadapt-trimmed QC", value = default_show_trimmed),
         tags$hr(),
         helpText("This tab renders FastQC and FastQ Screen HTML reports for both reads.")
@@ -1172,8 +1172,8 @@ qc_subtabs <- list(
     "STAR",
     sidebarLayout(
       sidebarPanel(
-        selectInput("star_sample", "STAR sample", choices = samples, selected = first_or_null(samples)),
-        selectInput("star_sample_sort_col", "Sort sample columns by", choices = comparison_columns, selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns)),
+        selectInput("star_sample", "STAR sample", choices = samples, selected = first_or_null(samples), selectize = FALSE),
+        selectInput("star_sample_sort_col", "Sort sample columns by", choices = comparison_columns, selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns), selectize = FALSE),
         tags$hr(),
         helpText("Compact alignment metrics pulled from STAR summary output.")
       ),
@@ -1193,8 +1193,8 @@ qc_subtabs <- list(
     "FeatureCounts QC",
     sidebarLayout(
       sidebarPanel(
-        selectInput("featurecounts_qc_sample", "FeatureCounts sample", choices = featurecounts_sample_choices, selected = first_or_null(featurecounts_sample_choices)),
-        selectInput("featurecounts_qc_sample_sort_col", "Sort sample columns by", choices = comparison_columns, selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns))
+        selectInput("featurecounts_qc_sample", "FeatureCounts sample", choices = featurecounts_sample_choices, selected = first_or_null(featurecounts_sample_choices), selectize = FALSE),
+        selectInput("featurecounts_qc_sample_sort_col", "Sort sample columns by", choices = comparison_columns, selected = if ("treatment" %in% comparison_columns) "treatment" else first_or_null(comparison_columns), selectize = FALSE)
       ),
       mainPanel(
         uiOutput("featurecounts_qc_status_ui"),
@@ -1215,7 +1215,7 @@ counts_subtabs <- list(
     "Raw Counts",
     sidebarLayout(
       sidebarPanel(
-        selectizeInput("gene_query", "Search gene", choices = NULL, selected = NULL, multiple = FALSE),
+        selectizeInput("gene_query", "Search gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
         uiOutput("featurecounts_convert_ui"),
         tags$hr(),
         helpText("Search the raw featureCounts matrix and optionally flip between gene_id and gene_name using the local GTF.")
@@ -1237,10 +1237,10 @@ counts_subtabs <- c(
       "RSEM",
       sidebarLayout(
         sidebarPanel(
-          selectInput("rsem_type", "Show", choices = c("Genes" = "genes", "Isoforms" = "isoforms"), selected = "genes"),
-          selectInput("rsem_metric", "Metric", choices = c("TPM", "expected_count", "FPKM"), selected = "TPM"),
-          selectInput("rsem_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id"),
-          selectizeInput("rsem_query", "Select gene/transcript of interest", choices = NULL, selected = NULL, multiple = FALSE),
+          selectInput("rsem_type", "Show", choices = c("Genes" = "genes", "Isoforms" = "isoforms"), selected = "genes", selectize = FALSE),
+          selectInput("rsem_metric", "Metric", choices = c("TPM", "expected_count", "FPKM"), selected = "TPM", selectize = FALSE),
+          selectInput("rsem_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id", selectize = FALSE),
+          selectizeInput("rsem_query", "Select gene/transcript of interest", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
           actionButton("rsem_load_matrix", "Load RSEM matrix", class = "btn-primary"),
           tags$hr(),
           helpText("Shows an RSEM matrix across all samples. Choose genes or isoforms, then display gene labels as Ensembl IDs or gene names using the local GTF.")
@@ -1261,11 +1261,10 @@ counts_subtabs <- c(
             "deseq_compare_col",
             "Comparison column",
             choices = c("NA" = "NA", comparison_columns),
-            selected = if ("treatment" %in% comparison_columns) "treatment" else "NA"
-          ),
+            selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
           uiOutput("deseq_treatment_ui"),
           uiOutput("deseq_control_ui"),
-          selectizeInput("deseq_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE),
+          selectizeInput("deseq_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
           uiOutput("deseq_convert_ui"),
           tags$hr(),
           helpText("Shows DESeq2 normalized counts for an available treatment vs control comparison.")
@@ -1289,14 +1288,14 @@ counts_subtabs <- c(
           ),
           conditionalPanel(
             "input.kallisto_view_mode == 'sample'",
-            selectInput("kallisto_sample", "Kallisto sample", choices = kallisto_sample_names, selected = first_or_null(kallisto_sample_names)),
-            selectInput("kallisto_sample_filter_col", "Filter by", choices = c("All transcripts" = "all", kallisto_filter_columns), selected = "all"),
-            selectizeInput("kallisto_sample_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE)
+            selectInput("kallisto_sample", "Kallisto sample", choices = kallisto_sample_names, selected = first_or_null(kallisto_sample_names), selectize = FALSE),
+            selectInput("kallisto_sample_filter_col", "Filter by", choices = c("All transcripts" = "all", kallisto_filter_columns), selected = "all", selectize = FALSE),
+            selectizeInput("kallisto_sample_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body"))
           ),
           conditionalPanel(
             "input.kallisto_view_mode == 'matrix'",
-            selectInput("kallisto_filter_col", "Filter by", choices = kallisto_filter_columns, selected = "gene_symbol"),
-            selectizeInput("kallisto_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE),
+            selectInput("kallisto_filter_col", "Filter by", choices = kallisto_filter_columns, selected = "gene_symbol", selectize = FALSE),
+            selectizeInput("kallisto_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
             uiOutput("kallisto_build_ui")
           ),
           actionButton("kallisto_load_table", "Load Kallisto table", class = "btn-primary"),
@@ -1325,15 +1324,14 @@ app_tabs <- list(
               "deg_compare_col",
               "Comparison column",
               choices = c("NA" = "NA", comparison_columns),
-              selected = if ("treatment" %in% comparison_columns) "treatment" else "NA"
-            ),
+              selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
             uiOutput("deg_treatment_ui"),
             uiOutput("deg_control_ui"),
             conditionalPanel(
               "input.deg_subtab == 'DEGs'",
-              selectizeInput("deg_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE),
+              selectizeInput("deg_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
               uiOutput("deg_convert_ui"),
-              selectInput("deg_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj"),
+              selectInput("deg_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
               numericInput("deg_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
               numericInput("deg_lfc_cutoff", "Absolute log2FC cutoff", value = 0, min = 0, step = 0.1),
               helpText("These cutoffs only build the Enrichr up/down gene lists below; they do not filter the DEG table."),
@@ -1344,35 +1342,31 @@ app_tabs <- list(
                   "Upregulated genes at top" = "up",
                   "Downregulated genes at top" = "down"
                 ),
-                selected = "up"
-              )
+                selected = "up", selectize = FALSE)
             ),
             conditionalPanel(
               "input.deg_subtab == 'Volcano'",
-              selectInput("volcano_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj"),
+              selectInput("volcano_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
               numericInput("volcano_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
               numericInput("volcano_lfc_cutoff", "Absolute log2FC cutoff", value = 1, min = 0, step = 0.1),
               selectInput(
                 "volcano_style",
                 "Volcano style",
                 choices = c("Clean publication" = "publication", "Minimal" = "minimal", "Dark" = "dark", "Colorblind" = "colorblind", "Soft" = "soft"),
-                selected = "publication"
-              ),
+                selected = "publication", selectize = FALSE),
               selectInput(
                 "volcano_palette",
                 "Volcano colors",
                 choices = c("Publication" = "publication", "Minimal" = "minimal", "Dark" = "dark", "Colorblind" = "colorblind", "Soft" = "soft"),
-                selected = "publication"
-              ),
+                selected = "publication", selectize = FALSE),
               selectInput(
                 "volcano_label_mode",
                 "Gene labels",
                 choices = c("Top significant genes" = "top", "Select genes manually" = "manual", "No labels" = "none"),
-                selected = "top"
-              ),
+                selected = "top", selectize = FALSE),
               conditionalPanel(
                 "input.volcano_label_mode == 'manual'",
-                selectizeInput("volcano_label_genes", "Genes to label", choices = NULL, selected = NULL, multiple = TRUE)
+                selectizeInput("volcano_label_genes", "Genes to label", choices = NULL, selected = NULL, multiple = TRUE, options = list(dropdownParent = "body"))
               ),
               conditionalPanel(
                 "input.volcano_label_mode == 'top'",
@@ -1385,8 +1379,7 @@ app_tabs <- list(
                 "volcano_font_family",
                 "Font family",
                 choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
-                selected = "sans"
-              ),
+                selected = "sans", selectize = FALSE),
               checkboxInput("volcano_show_thresholds", "Show cutoff lines", value = TRUE),
               checkboxInput("volcano_show_grid", "Show grid", value = TRUE),
               numericInput("volcano_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
@@ -1395,8 +1388,7 @@ app_tabs <- list(
                 "volcano_save_mode",
                 "Saved image size",
                 choices = c("Match display" = "match", "High-res 2x" = "double", "High-res 3x" = "triple", "High-res 5x" = "quintuple", "Custom" = "custom"),
-                selected = "double"
-              ),
+                selected = "double", selectize = FALSE),
               conditionalPanel(
                 "input.volcano_save_mode == 'custom'",
                 numericInput("volcano_save_width", "Custom saved width (px)", value = 1800, min = 600, max = 8000, step = 100),
@@ -1416,15 +1408,14 @@ app_tabs <- list(
                 "heatmap_source",
                 "Heatmap values",
                 choices = c("DESeq2 normalized counts" = "deseq", "RSEM TPM" = "rsem"),
-                selected = "deseq"
-              ),
+                selected = "deseq", selectize = FALSE),
               conditionalPanel(
                 "input.heatmap_gene_mode == 'manual'",
-                selectizeInput("heatmap_genes", "Genes to plot", choices = NULL, selected = NULL, multiple = TRUE)
+                selectizeInput("heatmap_genes", "Genes to plot", choices = NULL, selected = NULL, multiple = TRUE, options = list(dropdownParent = "body"))
               ),
               conditionalPanel(
                 "input.heatmap_gene_mode == 'topdeg'",
-                selectInput("heatmap_rank_p_col", "Rank by p-value column", choices = c("padj", "pvalue"), selected = "padj"),
+                selectInput("heatmap_rank_p_col", "Rank by p-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
                 numericInput("heatmap_total_genes", "Total genes", value = 20, min = 2, step = 2),
                 checkboxInput("heatmap_equal_split", "Equal numbers of up and down", value = TRUE)
               ),
@@ -1433,8 +1424,7 @@ app_tabs <- list(
                 "Column annotations",
                 choices = comparison_columns,
                 selected = if ("treatment" %in% comparison_columns) "treatment" else character(0),
-                multiple = TRUE
-              ),
+                multiple = TRUE, options = list(dropdownParent = "body")),
               checkboxInput("heatmap_cluster_rows", "Cluster rows", value = TRUE),
               checkboxInput("heatmap_cluster_cols", "Cluster columns", value = TRUE),
               conditionalPanel(
@@ -1443,8 +1433,7 @@ app_tabs <- list(
                   "heatmap_order_col",
                   "Order samples by",
                   choices = comparison_columns,
-                  selected = if ("treatment" %in% comparison_columns) "treatment" else comparison_columns[1]
-                )
+                  selected = if ("treatment" %in% comparison_columns) "treatment" else comparison_columns[1], selectize = FALSE)
               ),
               checkboxInput("heatmap_scale_rows", "Scale heatmap rows", value = TRUE),
               selectInput(
@@ -1457,8 +1446,7 @@ app_tabs <- list(
                   "Fully labeled" = "labeled",
                   "High contrast" = "contrast"
                 ),
-                selected = "publication"
-              ),
+                selected = "publication", selectize = FALSE),
               selectInput(
                 "heatmap_palette",
                 "Heatmap colors",
@@ -1471,38 +1459,32 @@ app_tabs <- list(
                   "Blue-white-red vivid" = "navy_orange",
                   "Gray-white-red" = "gray_red"
                 ),
-                selected = "theme"
-              ),
+                selected = "theme", selectize = FALSE),
               selectInput(
                 "heatmap_border_style",
                 "Cell borders",
                 choices = c("Use style default" = "theme", "None" = "none", "Light grid" = "light"),
-                selected = "theme"
-              ),
+                selected = "theme", selectize = FALSE),
               selectInput(
                 "heatmap_font_family",
                 "Font family",
                 choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
-                selected = "sans"
-              ),
+                selected = "sans", selectize = FALSE),
               selectInput(
                 "heatmap_row_font_size",
                 "Gene label size",
                 choices = c("Small" = 7, "Medium" = 9, "Large" = 11, "XL" = 13),
-                selected = 9
-              ),
+                selected = 9, selectize = FALSE),
               selectInput(
                 "heatmap_col_font_size",
                 "Sample label size",
                 choices = c("Small" = 8, "Medium" = 10, "Large" = 12, "XL" = 14),
-                selected = 10
-              ),
+                selected = 10, selectize = FALSE),
               selectInput(
                 "heatmap_col_angle",
                 "Sample label angle",
                 choices = c("0" = "0", "45" = "45", "90" = "90", "315" = "315"),
-                selected = "45"
-              ),
+                selected = "45", selectize = FALSE),
               checkboxInput("heatmap_show_row_names", "Show gene labels", value = TRUE),
               checkboxInput("heatmap_show_col_names", "Show sample labels", value = TRUE),
               checkboxInput("heatmap_show_annotation_names", "Show annotation track labels", value = FALSE),
@@ -1510,14 +1492,12 @@ app_tabs <- list(
                 "heatmap_distance",
                 "Clustering distance",
                 choices = c("Euclidean" = "euclidean", "Correlation" = "correlation", "Manhattan" = "manhattan"),
-                selected = "euclidean"
-              ),
+                selected = "euclidean", selectize = FALSE),
               selectInput(
                 "heatmap_cluster_method",
                 "Clustering method",
                 choices = c("Complete" = "complete", "Average" = "average", "Single" = "single", "Ward D2" = "ward.D2"),
-                selected = "complete"
-              ),
+                selected = "complete", selectize = FALSE),
               numericInput("heatmap_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
               numericInput("heatmap_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
               selectInput(
@@ -1530,8 +1510,7 @@ app_tabs <- list(
                   "High-res 5x" = "quintuple",
                   "Custom" = "custom"
                 ),
-                selected = "double"
-              ),
+                selected = "double", selectize = FALSE),
               conditionalPanel(
                 "input.heatmap_save_mode == 'custom'",
                 numericInput("heatmap_save_width", "Custom saved width (px)", value = 1800, min = 600, max = 8000, step = 100),
@@ -1600,8 +1579,7 @@ app_tabs <- list(
               "gsea_compare_col",
               "Comparison column",
               choices = c("NA" = "NA", comparison_columns),
-              selected = if ("treatment" %in% comparison_columns) "treatment" else "NA"
-            ),
+              selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
             uiOutput("gsea_treatment_ui"),
             uiOutput("gsea_control_ui"),
             uiOutput("gsea_collection_ui"),
@@ -1955,10 +1933,6 @@ ui <- fluidPage(
         border-radius: 8px !important;
       }
       .selectize-dropdown {
-        position: absolute !important;
-        top: 100% !important;
-        left: 0 !important;
-        width: 100% !important;
         z-index: 100000 !important;
         background: #ffffff !important;
         color: #132033 !important;
@@ -2556,12 +2530,12 @@ server <- function(input, output, session) {
 
     output$deseq_treatment_ui <- renderUI({
       vals <- get_deseq_values()
-      selectInput("deseq_treatment", "Treatment", choices = vals, selected = if (length(vals) > 1) vals[2] else vals)
+      selectInput("deseq_treatment", "Treatment", choices = vals, selected = if (length(vals) > 1) vals[2] else vals, selectize = FALSE)
     })
 
     output$deseq_control_ui <- renderUI({
       vals <- get_deseq_values()
-      selectInput("deseq_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals)
+      selectInput("deseq_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
     })
 
     deseq_counts_raw_df <- reactive({
@@ -2683,12 +2657,12 @@ server <- function(input, output, session) {
 
     output$deg_treatment_ui <- renderUI({
       vals <- get_deg_values()
-      selectInput("deg_treatment", "Treatment", choices = vals, selected = if (length(vals) > 1) vals[2] else vals)
+      selectInput("deg_treatment", "Treatment", choices = vals, selected = if (length(vals) > 1) vals[2] else vals, selectize = FALSE)
     })
 
     output$deg_control_ui <- renderUI({
       vals <- get_deg_values()
-      selectInput("deg_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals)
+      selectInput("deg_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
     })
 
     deg_raw_df <- reactive({
@@ -3130,7 +3104,7 @@ server <- function(input, output, session) {
     })
   } else {
     empty_compare_input <- function(id, label) {
-      renderUI(selectInput(id, label, choices = character(0), selected = character(0)))
+      renderUI(selectInput(id, label, choices = character(0), selected = character(0), selectize = FALSE))
     }
     output$deseq_treatment_ui <- empty_compare_input("deseq_treatment", "Treatment")
     output$deseq_control_ui <- empty_compare_input("deseq_control", "Control")
@@ -3184,12 +3158,12 @@ server <- function(input, output, session) {
 
     output$gsea_treatment_ui <- renderUI({
       vals <- get_gsea_values()
-      selectInput("gsea_treatment", "Treatment", choices = vals, selected = if (length(vals) > 1) vals[2] else vals)
+      selectInput("gsea_treatment", "Treatment", choices = vals, selected = if (length(vals) > 1) vals[2] else vals, selectize = FALSE)
     })
 
     output$gsea_control_ui <- renderUI({
       vals <- get_gsea_values()
-      selectInput("gsea_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals)
+      selectInput("gsea_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
     })
 
     gsea_comp_dir <- reactive({
@@ -3203,7 +3177,7 @@ server <- function(input, output, session) {
       req(identical(input$main_tabs, "GSEA"))
       comp_dir <- gsea_comp_dir()
       collections <- list_gseapy_collections(comp_dir)
-      selectInput("gsea_collection", "Pathway collection", choices = collections, selected = if (length(collections)) collections[1] else character(0))
+      selectInput("gsea_collection", "Pathway collection", choices = collections, selected = if (length(collections)) collections[1] else character(0), selectize = FALSE)
     })
 
     gsea_report_df <- reactive({
@@ -3216,7 +3190,7 @@ server <- function(input, output, session) {
       req(identical(input$main_tabs, "GSEA"))
       df <- gsea_report_df()
       pathways <- if (is.null(df)) character(0) else df$Term
-      selectizeInput("gsea_pathway", "Pathway", choices = pathways, selected = if (length(pathways)) pathways[1] else character(0), multiple = FALSE)
+      selectizeInput("gsea_pathway", "Pathway", choices = pathways, selected = if (length(pathways)) pathways[1] else character(0), multiple = FALSE, options = list(dropdownParent = "body"))
     })
 
     output$gsea_status_ui <- renderUI({
@@ -3315,10 +3289,10 @@ server <- function(input, output, session) {
       )
     })
   } else {
-    output$gsea_treatment_ui <- renderUI(selectInput("gsea_treatment", "Treatment", choices = character(0), selected = character(0)))
-    output$gsea_control_ui <- renderUI(selectInput("gsea_control", "Control", choices = character(0), selected = character(0)))
-    output$gsea_collection_ui <- renderUI(selectInput("gsea_collection", "Pathway collection", choices = character(0), selected = character(0)))
-    output$gsea_pathway_ui <- renderUI(selectizeInput("gsea_pathway", "Pathway", choices = character(0), selected = character(0), multiple = FALSE))
+    output$gsea_treatment_ui <- renderUI(selectInput("gsea_treatment", "Treatment", choices = character(0), selected = character(0), selectize = FALSE))
+    output$gsea_control_ui <- renderUI(selectInput("gsea_control", "Control", choices = character(0), selected = character(0), selectize = FALSE))
+    output$gsea_collection_ui <- renderUI(selectInput("gsea_collection", "Pathway collection", choices = character(0), selected = character(0), selectize = FALSE))
+    output$gsea_pathway_ui <- renderUI(selectizeInput("gsea_pathway", "Pathway", choices = character(0), selected = character(0), multiple = FALSE, options = list(dropdownParent = "body")))
     output$gsea_status_ui <- renderUI({
       status_box("GSEA results have not been generated yet.", "warning")
     })
