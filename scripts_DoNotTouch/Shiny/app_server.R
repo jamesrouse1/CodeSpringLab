@@ -880,8 +880,8 @@ format_deg_table <- function(df) {
 
 heatmap_theme_options <- function(style) {
   style <- value_or(style, "publication")
-  if (identical(style, "minimal")) return(list(palette = "viridis", border = "none"))
-  if (identical(style, "compact")) return(list(palette = "magma", border = "none"))
+  if (identical(style, "minimal")) return(list(palette = "blue_red", border = "none"))
+  if (identical(style, "compact")) return(list(palette = "gray_red", border = "none"))
   if (identical(style, "labeled")) return(list(palette = "blue_red", border = "light"))
   if (identical(style, "contrast")) return(list(palette = "green_purple", border = "light"))
   list(palette = "blue_red", border = "none")
@@ -892,11 +892,28 @@ heatmap_palette_colors <- function(style, theme = "publication") {
     style <- heatmap_theme_options(theme)$palette
   }
   if (identical(style, "viridis")) return(grDevices::hcl.colors(100, "viridis"))
-  if (identical(style, "magma")) return(grDevices::hcl.colors(100, "inferno"))
+  if (identical(style, "magma")) return(grDevices::hcl.colors(100, "magma"))
   if (identical(style, "green_purple")) return(colorRampPalette(c("#1b7837", "white", "#762a83"))(100))
   if (identical(style, "navy_orange")) return(colorRampPalette(c("#2c7bb6", "white", "#d7191c"))(100))
   if (identical(style, "gray_red")) return(colorRampPalette(c("#3b3b3b", "white", "#b2182b"))(100))
   colorRampPalette(c("#2166ac", "white", "#b2182b"))(100)
+}
+
+heatmap_color_breaks <- function(mat, colors) {
+  vals <- as.numeric(mat)
+  vals <- vals[is.finite(vals)]
+  if (!length(vals)) return(seq(-1, 1, length.out = length(colors) + 1))
+  lo <- min(vals, na.rm = TRUE)
+  hi <- max(vals, na.rm = TRUE)
+  if (!is.finite(lo) || !is.finite(hi) || identical(lo, hi)) {
+    lo <- lo - 1
+    hi <- hi + 1
+  }
+  if (lo < 0 && hi > 0) {
+    lim <- max(abs(c(lo, hi)))
+    return(seq(-lim, lim, length.out = length(colors) + 1))
+  }
+  seq(lo, hi, length.out = length(colors) + 1)
 }
 
 heatmap_border_color <- function(style, theme = "publication") {
@@ -2812,6 +2829,7 @@ server <- function(input, output, session) {
     output$deg_heatmap_plot <- renderPlot({
       hp <- heatmap_plot_state()
       heatmap_theme <- value_or(input$heatmap_theme, "publication")
+      hm_colors <- heatmap_palette_colors(input$heatmap_palette, heatmap_theme)
       pheatmap::pheatmap(
         hp$mat,
         annotation_col = hp$ann_col,
@@ -2830,7 +2848,8 @@ server <- function(input, output, session) {
         clustering_distance_cols = value_or(input$heatmap_distance, "euclidean"),
         clustering_method = value_or(input$heatmap_cluster_method, "complete"),
         border_color = heatmap_border_color(input$heatmap_border_style, heatmap_theme),
-        color = heatmap_palette_colors(input$heatmap_palette, heatmap_theme)
+        color = hm_colors,
+        breaks = heatmap_color_breaks(hp$mat, hm_colors)
       )
     }, width = function() {
       as.numeric(value_or(input$heatmap_plot_width, 900))
@@ -2870,6 +2889,7 @@ server <- function(input, output, session) {
         res = save_res
       )
       heatmap_theme <- value_or(input$heatmap_theme, "publication")
+      hm_colors <- heatmap_palette_colors(input$heatmap_palette, heatmap_theme)
       pheatmap::pheatmap(
         hp$mat,
         annotation_col = hp$ann_col,
@@ -2888,7 +2908,8 @@ server <- function(input, output, session) {
         clustering_distance_cols = value_or(input$heatmap_distance, "euclidean"),
         clustering_method = value_or(input$heatmap_cluster_method, "complete"),
         border_color = heatmap_border_color(input$heatmap_border_style, heatmap_theme),
-        color = heatmap_palette_colors(input$heatmap_palette, heatmap_theme)
+        color = hm_colors,
+        breaks = heatmap_color_breaks(hp$mat, hm_colors)
       )
       dev.off()
       showNotification(sprintf("Saved heatmap to %s", out_path), type = "message", duration = 6)
