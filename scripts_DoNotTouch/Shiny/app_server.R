@@ -489,7 +489,7 @@ table_widget <- function(id) {
   )
 }
 
-simple_dt <- function(df, page_length = 25, scroll_y = "520px", dom = "tip") {
+simple_dt <- function(df, page_length = 50, scroll_y = "520px", dom = "lfrtip") {
   DT::datatable(
     df,
     rownames = FALSE,
@@ -498,6 +498,9 @@ simple_dt <- function(df, page_length = 25, scroll_y = "520px", dom = "tip") {
       scrollX = TRUE,
       scrollY = scroll_y,
       pageLength = page_length,
+      lengthMenu = list(c(25, 50, 100, -1), c("25", "50", "100", "All")),
+      paging = TRUE,
+      pagingType = "full_numbers",
       dom = dom,
       deferRender = TRUE,
       processing = TRUE,
@@ -1895,6 +1898,26 @@ ui <- fluidPage(
         border-radius: 16px;
       }
       .table-scroll-shell .dataTables_wrapper,
+      .dataTables_length,
+      .dataTables_filter,
+      .dataTables_info,
+      .dataTables_paginate {
+        margin: 8px 0;
+        color: #48627d;
+        font-size: 13px;
+      }
+      .dataTables_paginate .paginate_button {
+        border-radius: 8px !important;
+        border: 1px solid #d7e0ea !important;
+        background: #ffffff !important;
+        color: #27425f !important;
+        margin: 0 2px !important;
+      }
+      .dataTables_paginate .paginate_button.current {
+        background: linear-gradient(135deg, #0f62c6, #15936f) !important;
+        color: white !important;
+        border-color: transparent !important;
+      }
       .dataTables_wrapper {
         width: 100%;
         max-width: 100%;
@@ -2082,7 +2105,7 @@ server <- function(input, output, session) {
 
   if (DT_AVAILABLE) {
     output$star_summary_table <- DT::renderDT({
-      simple_dt(star_summary_table_df(), page_length = 25)
+      simple_dt(star_summary_table_df(), page_length = 50)
     }, server = TRUE)
   } else {
     output$star_summary_table <- renderTable({
@@ -2133,7 +2156,7 @@ server <- function(input, output, session) {
 
   if (DT_AVAILABLE) {
     output$featurecounts_summary_table <- DT::renderDT({
-      simple_dt(featurecounts_summary_table_df(), page_length = 25)
+      simple_dt(featurecounts_summary_table_df(), page_length = 50)
     }, server = TRUE)
   } else {
     output$featurecounts_summary_table <- renderTable({
@@ -3105,7 +3128,7 @@ server <- function(input, output, session) {
       output$gsea_all_pathways_table <- DT::renderDT({
         df <- gsea_report_df()
         req(!is.null(df))
-        simple_dt(df, page_length = 25)
+        simple_dt(df, page_length = 50)
       }, server = TRUE)
     } else {
       output$gsea_pathway_table <- renderTable({
