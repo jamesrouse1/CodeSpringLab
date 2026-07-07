@@ -505,11 +505,17 @@ simple_dt <- function(df, page_length = 50, scroll_y = "520px", dom = "lfrtip", 
       deferRender = FALSE,
       processing = FALSE,
       searchDelay = 350,
-      autoWidth = FALSE
+      autoWidth = FALSE,
+      columnDefs = list(list(width = "118px", targets = "_all"))
     )
   )
   if (!is.null(container)) dt_args$container <- container
-  do.call(DT::datatable, dt_args)
+  dt <- do.call(DT::datatable, dt_args)
+  numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+  if (length(numeric_cols)) {
+    dt <- DT::formatSignif(dt, columns = numeric_cols, digits = 4)
+  }
+  dt
 }
 
 sample_annotation_col <- function(preferred = NULL) {
@@ -1138,14 +1144,14 @@ qc_subtabs <- list(
     "Initial QC",
     sidebarLayout(
       sidebarPanel(
-        width = 2,
+        width = 1,
         selectInput("sample", "Sample", choices = samples, selected = first_or_null(samples)),
         checkboxInput("show_trimmed", "Show cutadapt-trimmed QC", value = default_show_trimmed),
         tags$hr(),
         helpText("This tab renders FastQC and FastQ Screen HTML reports for both reads.")
       ),
       mainPanel(
-        width = 10,
+        width = 11,
         uiOutput("qc_status_ui"),
         tabsetPanel(
           tabPanel("R1 FastQC", uiOutput("r1_fastqc_ui")),
@@ -1865,11 +1871,19 @@ ui <- fluidPage(
       table.dataTable tbody tr:nth-child(odd) {
         background: rgba(246, 250, 255, 0.9) !important;
       }
+      table.dataTable {
+        table-layout: fixed;
+      }
       table.dataTable tbody td, table.dataTable thead th {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 210px;
+        min-width: 118px;
+        max-width: 118px;
+      }
+      table.dataTable tbody td:first-child, table.dataTable thead th:first-child {
+        min-width: 150px;
+        max-width: 190px;
       }
       .dataTables_wrapper .dataTables_scrollHead {
         position: sticky;
@@ -1905,6 +1919,7 @@ ui <- fluidPage(
       .qc-report-frame {
         display: block;
         width: 100%;
+        min-width: 1120px;
       }
       .table-scroll-shell {
         width: 100%;
@@ -2122,16 +2137,7 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$star_summary_table <- DT::renderDT({
       df <- star_summary_table_df()
-      simple_dt(
-        df,
-        page_length = 50,
-        container = build_group_header_container(
-          df,
-          id_cols = c("metric"),
-          annotation_col = sample_annotation_col(input$star_sample_sort_col),
-          design_df = design_df
-        )
-      )
+      simple_dt(df, page_length = 50)
     }, server = FALSE)
   } else {
     output$star_summary_table <- renderTable({
@@ -2183,16 +2189,7 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$featurecounts_summary_table <- DT::renderDT({
       df <- featurecounts_summary_table_df()
-      simple_dt(
-        df,
-        page_length = 50,
-        container = build_group_header_container(
-          df,
-          id_cols = c("Status"),
-          annotation_col = sample_annotation_col(input$featurecounts_qc_sample_sort_col),
-          design_df = design_df
-        )
-      )
+      simple_dt(df, page_length = 50)
     }, server = FALSE)
   } else {
     output$featurecounts_summary_table <- renderTable({
@@ -2285,16 +2282,7 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$gene_search_table <- DT::renderDT({
       df <- raw_counts_table_df()
-      simple_dt(
-        df,
-        page_length = 50,
-        container = build_group_header_container(
-          df,
-          id_cols = c("Geneid"),
-          annotation_col = sample_annotation_col(),
-          design_df = design_df
-        )
-      )
+      simple_dt(df, page_length = 50)
     }, server = FALSE)
   } else {
     output$gene_search_table <- renderTable({
@@ -2452,16 +2440,7 @@ server <- function(input, output, session) {
           return(simple_dt(data.frame(Message = "Click 'Load RSEM matrix' to render this table.", stringsAsFactors = FALSE), page_length = 50, scroll_y = "140px"))
         }
         df <- rsem_table_df()
-        simple_dt(
-          df,
-          page_length = 50,
-          container = build_group_header_container(
-            df,
-            id_cols = matrix_id_cols(df),
-            annotation_col = sample_annotation_col(),
-            design_df = design_df
-          )
-        )
+        simple_dt(df, page_length = 50)
       }, server = FALSE)
     } else {
       output$rsem_table <- renderTable({
@@ -2601,16 +2580,7 @@ server <- function(input, output, session) {
     if (DT_AVAILABLE) {
       output$deseq_counts_table <- DT::renderDT({
         df <- deseq_counts_table_df()
-        simple_dt(
-          df,
-          page_length = 50,
-          container = build_group_header_container(
-            df,
-            id_cols = c("gene_label"),
-            annotation_col = sample_annotation_col(input$deseq_compare_col),
-            design_df = design_df
-          )
-        )
+        simple_dt(df, page_length = 50)
       }, server = FALSE)
     } else {
       output$deseq_counts_table <- renderTable({
@@ -3460,16 +3430,7 @@ server <- function(input, output, session) {
           return(simple_dt(data.frame(Message = "Click 'Load Kallisto table' to render this table.", stringsAsFactors = FALSE), page_length = 50, scroll_y = "140px"))
         }
         df <- kallisto_table_df()
-        simple_dt(
-          df,
-          page_length = 50,
-          container = build_group_header_container(
-            df,
-            id_cols = matrix_id_cols(df),
-            annotation_col = sample_annotation_col(),
-            design_df = design_df
-          )
-        )
+        simple_dt(df, page_length = 50)
       }, server = FALSE)
     } else {
       output$kallisto_table <- renderTable({
