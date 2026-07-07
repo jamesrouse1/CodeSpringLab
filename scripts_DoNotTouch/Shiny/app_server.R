@@ -513,7 +513,13 @@ simple_dt <- function(df, page_length = 50, scroll_y = "520px", dom = "lfrtip", 
   dt <- do.call(DT::datatable, dt_args)
   numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   if (length(numeric_cols)) {
-    dt <- DT::formatSignif(dt, columns = numeric_cols, digits = 4)
+    integer_cols <- numeric_cols[vapply(df[numeric_cols], function(x) {
+      finite <- x[is.finite(x) & !is.na(x)]
+      length(finite) == 0 || all(abs(finite - round(finite)) < 1e-8)
+    }, logical(1))]
+    decimal_cols <- setdiff(numeric_cols, integer_cols)
+    if (length(integer_cols)) dt <- DT::formatRound(dt, columns = integer_cols, digits = 0)
+    if (length(decimal_cols)) dt <- DT::formatRound(dt, columns = decimal_cols, digits = 2)
   }
   dt
 }
