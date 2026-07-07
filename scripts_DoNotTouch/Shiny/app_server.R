@@ -1229,6 +1229,7 @@ counts_subtabs <- c(
           selectInput("rsem_metric", "Metric", choices = c("TPM", "expected_count", "FPKM"), selected = "TPM"),
           selectInput("rsem_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id"),
           selectizeInput("rsem_query", "Select gene/transcript of interest", choices = NULL, selected = NULL, multiple = FALSE),
+          actionButton("rsem_load_matrix", "Load RSEM matrix", class = "btn-primary"),
           tags$hr(),
           helpText("Shows an RSEM matrix across all samples. Choose genes or isoforms, then display gene labels as Ensembl IDs or gene names using the local GTF.")
         ),
@@ -1286,6 +1287,7 @@ counts_subtabs <- c(
             selectizeInput("kallisto_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE),
             uiOutput("kallisto_build_ui")
           ),
+          actionButton("kallisto_load_table", "Load Kallisto table", class = "btn-primary"),
           tags$hr(),
           helpText("Single sample matrix shows transcript-level abundance for one sample. Transcript matrix view shows matching transcripts across all samples.")
         ),
@@ -2312,6 +2314,18 @@ server <- function(input, output, session) {
     rsem_matrix_cache <- reactiveValues()
     rsem_display_cache <- reactiveValues()
     rsem_label_status <- reactiveVal(NULL)
+    rsem_loaded <- reactiveVal(FALSE)
+
+    observeEvent(input$rsem_load_matrix, {
+      rsem_loaded(TRUE)
+      rsem_label_status(NULL)
+    }, ignoreInit = TRUE)
+
+    observeEvent(list(input$rsem_type, input$rsem_metric, input$rsem_label_mode), {
+      rsem_loaded(FALSE)
+      rsem_label_status(NULL)
+      updateSelectizeInput(session, "rsem_query", choices = character(0), selected = character(0), server = TRUE)
+    }, ignoreInit = TRUE)
 
     get_rsem_matrix <- reactive({
       req(input$rsem_type, input$rsem_metric)
@@ -2325,6 +2339,7 @@ server <- function(input, output, session) {
     })
 
     rsem_display_df <- reactive({
+      req(isTRUE(rsem_loaded()))
       raw_df <- get_rsem_matrix()
       req(!is.null(raw_df))
       label_mode <- value_or(input$rsem_label_mode, "gene_id")
@@ -2339,22 +2354,20 @@ server <- function(input, output, session) {
       status_message <- NULL
       if ("gene_id" %in% colnames(df)) {
         original_gene_id <- as.character(df$gene_id)
-        if (looks_like_gene_id(original_gene_id)) {
-          species <- detect_species_from_ids(original_gene_id)
-          map_df <- get_gtf_map(species)
-          conv <- convert_gene_labels(original_gene_id, map_df)
-          df$gene_name <- conv$values
-          if (identical(label_mode, "gene_name")) {
+        if (identical(label_mode, "gene_name")) {
+          if (looks_like_gene_id(original_gene_id)) {
+            species <- detect_species_from_ids(original_gene_id)
+            map_df <- get_gtf_map(species)
+            conv <- convert_gene_labels(original_gene_id, map_df)
+            df$gene_name <- conv$values
             mapped_all <- sum(!is.na(df$gene_name) & nzchar(df$gene_name) & df$gene_name != original_gene_id)
             status_message <- if (mapped_all > 0) {
               sprintf("RSEM display is showing gene names using %s GTF (%s IDs mapped).", value_or(species, "detected"), mapped_all)
             } else {
               sprintf("RSEM gene-name display requested, but no IDs were mapped using the %s GTF.", value_or(species, "detected"))
             }
-          }
-        } else {
-          df$gene_name <- original_gene_id
-          if (identical(label_mode, "gene_name")) {
+          } else {
+            df$gene_name <- original_gene_id
             status_message <- "RSEM gene labels already look like gene names."
           }
         }
@@ -2379,6 +2392,9 @@ server <- function(input, output, session) {
     })
 
     output$rsem_status_ui <- renderUI({
+      if (!isTRUE(rsem_loaded())) {
+        return(status_box("Choose RSEM settings, then click 'Load RSEM matrix' to render the table.", "info"))
+      }
       df <- rsem_display_df()
       if (is.null(df)) {
         return(status_box("RSEM results have not been generated yet.", "warning"))
@@ -2395,6 +2411,7 @@ server <- function(input, output, session) {
       req(identical(input$main_tabs, "Counts"))
       req(identical(input$counts_subtab, "RSEM"))
       req(input$rsem_type, input$rsem_metric)
+      req(isTRUE(rsem_loaded()))
       df <- rsem_display_df()
       req(!is.null(df))
       id_col <- if (identical(input$rsem_type, "genes")) colnames(df)[1] else if (identical(value_or(input$rsem_label_mode, "gene_id"), "gene_name") && "gene_name" %in% colnames(df)) "gene_name" else "transcript_id"
@@ -2431,6 +2448,9 @@ server <- function(input, output, session) {
 
     if (DT_AVAILABLE) {
       output$rsem_table <- DT::renderDT({
+        if (!isTRUE(rsem_loaded())) {
+          return(simple_dt(data.frame(Message = "Click 'Load RSEM matrix' to render this table.", stringsAsFactors = FALSE), page_length = 50, scroll_y = "140px"))
+        }
         df <- rsem_table_df()
         simple_dt(
           df,
@@ -2445,6 +2465,7 @@ server <- function(input, output, session) {
       }, server = FALSE)
     } else {
       output$rsem_table <- renderTable({
+        if (!isTRUE(rsem_loaded())) return(data.frame(Message = "Click 'Load RSEM matrix' to render this table.", stringsAsFactors = FALSE))
         df <- rsem_table_df()
         id_col <- if (identical(input$rsem_type, "genes")) colnames(df)[1] else if (identical(value_or(input$rsem_label_mode, "gene_id"), "gene_name") && "gene_name" %in% colnames(df)) "gene_name" else "transcript_id"
         rownames(df) <- make.unique(as.character(df[[id_col]]))
@@ -2454,7 +2475,7 @@ server <- function(input, output, session) {
     }
     output$download_rsem_table <- downloadHandler(
       filename = function() download_filename(paste0("counts_rsem_", value_or(input$rsem_type, "matrix"), "_", value_or(input$rsem_metric, "metric"), "_", value_or(input$rsem_label_mode, "label"))),
-      content = function(file) write_csv_download(safe_download_df(rsem_table_df()), file)
+      content = function(file) write_csv_download(safe_download_df(if (isTRUE(rsem_loaded())) rsem_table_df() else NULL), file)
     )
   } else {
     output$rsem_status_ui <- renderUI({
@@ -3263,6 +3284,15 @@ server <- function(input, output, session) {
     kallisto_matrix_cache <- reactiveVal(NULL)
     kallisto_matrix_loaded <- reactiveVal(FALSE)
     kallisto_building <- reactiveVal(FALSE)
+    kallisto_table_loaded <- reactiveVal(FALSE)
+
+    observeEvent(input$kallisto_load_table, {
+      kallisto_table_loaded(TRUE)
+    }, ignoreInit = TRUE)
+
+    observeEvent(list(input$kallisto_view_mode, input$kallisto_sample, input$kallisto_sample_filter_col, input$kallisto_filter_col), {
+      kallisto_table_loaded(FALSE)
+    }, ignoreInit = TRUE)
 
     get_kallisto_matrix <- function() {
       cached <- kallisto_matrix_cache()
@@ -3300,6 +3330,9 @@ server <- function(input, output, session) {
       if (!kallisto_available) {
         return(status_box("Kallisto transcript abundance has not been generated yet.", "warning"))
       }
+      if (!isTRUE(kallisto_table_loaded())) {
+        return(status_box("Choose Kallisto settings, then click 'Load Kallisto table' to render the table.", "info"))
+      }
       if (identical(input$kallisto_view_mode, "matrix") && (file.exists(kallisto_matrix_path) || !is.null(kallisto_matrix_cache()))) {
         return(status_box(sprintf("Using Kallisto transcript matrix: %s", kallisto_matrix_path), "info"))
       }
@@ -3322,6 +3355,7 @@ server <- function(input, output, session) {
       req(identical(input$main_tabs, "Counts"))
       req(identical(input$counts_subtab, "Kallisto"))
       req(identical(input$kallisto_view_mode, "sample"))
+      req(isTRUE(kallisto_table_loaded()))
       req(input$kallisto_sample_filter_col)
       if (identical(input$kallisto_sample_filter_col, "all")) {
         updateSelectizeInput(
@@ -3350,6 +3384,7 @@ server <- function(input, output, session) {
       req(identical(input$main_tabs, "Counts"))
       req(identical(input$counts_subtab, "Kallisto"))
       req(identical(input$kallisto_view_mode, "matrix"))
+      req(isTRUE(kallisto_table_loaded()))
       req(input$kallisto_filter_col)
       matrix_df <- get_kallisto_matrix()
       if (is.null(matrix_df) || !(input$kallisto_filter_col %in% colnames(matrix_df))) {
@@ -3368,6 +3403,7 @@ server <- function(input, output, session) {
     })
 
     kallisto_table_df <- reactive({
+      req(isTRUE(kallisto_table_loaded()))
       req(input$kallisto_view_mode)
       if (identical(input$kallisto_view_mode, "sample")) {
         req(input$kallisto_sample)
@@ -3389,7 +3425,7 @@ server <- function(input, output, session) {
           colnames(show_df)[colnames(show_df) == "tpm"] <- input$kallisto_sample
         }
       } else {
-        kallisto_matrix_df <- kallisto_matrix_cache()
+        kallisto_matrix_df <- get_kallisto_matrix()
         req(!is.null(kallisto_matrix_df))
         if (is.null(input$kallisto_filter_value) || !nzchar(trimws(input$kallisto_filter_value))) {
           show_df <- kallisto_matrix_df
@@ -3420,6 +3456,9 @@ server <- function(input, output, session) {
 
     if (DT_AVAILABLE) {
       output$kallisto_table <- DT::renderDT({
+        if (!isTRUE(kallisto_table_loaded())) {
+          return(simple_dt(data.frame(Message = "Click 'Load Kallisto table' to render this table.", stringsAsFactors = FALSE), page_length = 50, scroll_y = "140px"))
+        }
         df <- kallisto_table_df()
         simple_dt(
           df,
@@ -3434,12 +3473,13 @@ server <- function(input, output, session) {
       }, server = FALSE)
     } else {
       output$kallisto_table <- renderTable({
+        if (!isTRUE(kallisto_table_loaded())) return(data.frame(Message = "Click 'Load Kallisto table' to render this table.", stringsAsFactors = FALSE))
         format_numeric_commas(kallisto_table_df())
       }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = FALSE)
     }
     output$download_kallisto_table <- downloadHandler(
       filename = function() download_filename(paste0("counts_kallisto_", value_or(input$kallisto_view_mode, "matrix"))),
-      content = function(file) write_csv_download(safe_download_df(kallisto_table_df()), file)
+      content = function(file) write_csv_download(safe_download_df(if (isTRUE(kallisto_table_loaded())) kallisto_table_df() else NULL), file)
     )
   } else {
     output$kallisto_status_ui <- renderUI({
