@@ -1933,9 +1933,12 @@ ui <- fluidPage(
       .selectize-control.single,
       .selectize-control.multi {
         position: relative;
-        z-index: 20;
+        z-index: 30;
+        margin-bottom: 12px;
       }
+      .form-group:has(.selectize-control.dropdown-active),
       .selectize-control.dropdown-active {
+        position: relative;
         z-index: 100000 !important;
       }
       .selectize-input,
@@ -1945,7 +1948,17 @@ ui <- fluidPage(
         color: #132033 !important;
         background: #ffffff !important;
       }
+      select.form-control {
+        color: #132033 !important;
+        background-color: #ffffff !important;
+        border: 1px solid #cfd9e6 !important;
+        border-radius: 8px !important;
+      }
       .selectize-dropdown {
+        position: absolute !important;
+        top: 100% !important;
+        left: 0 !important;
+        width: 100% !important;
         z-index: 100000 !important;
         background: #ffffff !important;
         color: #132033 !important;
@@ -1955,6 +1968,8 @@ ui <- fluidPage(
       .selectize-dropdown-content {
         background: #ffffff !important;
         color: #132033 !important;
+        max-height: 320px !important;
+        overflow-y: auto !important;
       }
       .selectize-dropdown .option,
       .selectize-dropdown .optgroup-header,
@@ -1962,6 +1977,8 @@ ui <- fluidPage(
         color: #132033 !important;
         background: #ffffff !important;
         opacity: 1 !important;
+        padding: 8px 12px !important;
+        line-height: 1.3 !important;
       }
       .selectize-dropdown .option.active,
       .selectize-dropdown [data-selectable].active {
@@ -1977,7 +1994,8 @@ ui <- fluidPage(
       .tab-pane,
       .main-panel,
       .sidebar-panel,
-      .well {
+      .well,
+      .form-group {
         overflow: visible;
       }
       
