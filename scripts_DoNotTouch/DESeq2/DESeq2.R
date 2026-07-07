@@ -23,6 +23,69 @@ design <- read.delim(args[2],header=T,sep="\t",row.names = 1,check.names=FALSE)
 if (redundant %in% colnames(design)){
     design <- design[,-match(redundant, colnames(design))]
 }
+
+design_all <- design
+if (ncol(design_all) > 1) {
+    design_all <- design_all[1:(ncol(design_all)-1)]
+}
+overlap_all <- intersect(row.names(design_all), colnames(count))
+count_all <- count[, overlap_all, drop=FALSE]
+design_all_header <- colnames(design_all)
+design_all <- as.data.frame(design_all[overlap_all,,drop=FALSE])
+row.names(design_all) <- overlap_all
+colnames(design_all) <- design_all_header
+for (i in 1:length(colnames(design_all))){
+    design_all[,i] <- factor(design_all[,i])
+}
+
+if (ncol(count_all) >= 2 && nrow(design_all) >= 2 && length(colnames(design_all)) >= 1) {
+    for (i in 1:length(colnames(design_all))){
+      if (i == 1){
+        model_all <- paste("~",colnames(design_all)[i])
+      } else {
+        model_all <- paste(model_all,"+",colnames(design_all)[i])
+      }
+    }
+    dds_all <- DESeqDataSetFromMatrix(countData = count_all, colData = design_all, design = as.formula(model_all))
+    keep_all <- rowSums(counts(dds_all)) >= 10
+    dds_all <- dds_all[keep_all,]
+    if (nrow(dds_all) >= 2) {
+        vsdata_all <- vst(dds_all, blind=FALSE)
+        for (i in 1:length(colnames(design_all))){
+            group_col <- colnames(design_all)[i]
+            png(paste(outpath,'/pca_all_samples_',group_col,'.png',sep=""),units="in", width=6.8, height=5.8, res=300,type="cairo")
+            pca_data <- plotPCA(vsdata_all, intgroup=group_col, returnData=TRUE)
+            percent_var <- round(100 * attr(pca_data, "percentVar"))
+            pca_data$sample <- rownames(pca_data)
+            pca <- ggplot(pca_data, aes(x = PC1, y = PC2, color = .data[[group_col]])) +
+              geom_point(size = 3.4, alpha = 0.92) +
+              geom_text_repel(aes(label = sample), color = "black", size = 3.0,
+                              box.padding = 0.45, point.padding = 0.35,
+                              segment.color = "grey45", segment.size = 0.3,
+                              max.overlaps = Inf, seed = 8) +
+              labs(
+                title = "PCA: all samples",
+                subtitle = paste("Colored by", group_col),
+                x = paste0("PC1: ", percent_var[1], "% variance"),
+                y = paste0("PC2: ", percent_var[2], "% variance"),
+                color = group_col
+              ) +
+              coord_fixed() +
+              theme_classic(base_size = 12) +
+              theme(
+                plot.title = element_text(face = "bold", size = 15),
+                plot.subtitle = element_text(size = 11, color = "grey35"),
+                axis.title = element_text(face = "bold"),
+                legend.position = "right",
+                legend.title = element_text(face = "bold"),
+                panel.border = element_rect(color = "grey25", fill = NA, size = 0.5)
+              )
+            print(pca)
+            dev.off()
+        }
+    }
+}
+
 design <- design %>% filter_all(any_vars(. %in% c(refcond,compared)))
 design <- design[1:(ncol(design)-1)]
 

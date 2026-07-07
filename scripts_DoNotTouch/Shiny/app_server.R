@@ -832,6 +832,10 @@ pca_plot_path <- function(compare_col, treatment_value, control_value) {
   file.path(deseq2_dir, sprintf("pca_%s_%s_vs_%s(ref).png", compare_col, treatment_value, control_value))
 }
 
+pca_all_plot_path <- function(compare_col) {
+  file.path(deseq2_dir, sprintf("pca_all_samples_%s.png", compare_col))
+}
+
 read_normalized_counts <- function(path) {
   if (!file.exists(path)) return(NULL)
   df <- read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
@@ -1532,6 +1536,10 @@ app_tabs <- list(
               ),
               tabPanel(
                 "PCA",
+                h4("All Samples PCA"),
+                uiOutput("deg_all_pca_ui"),
+                tags$hr(),
+                h4("Selected Comparison PCA"),
                 uiOutput("deg_pca_ui")
               ),
               tabPanel(
@@ -2782,6 +2790,17 @@ server <- function(input, output, session) {
       }, striped = TRUE, bordered = TRUE, spacing = "s", rownames = TRUE)
     }
 
+    output$deg_all_pca_ui <- renderUI({
+      if (!deseq2_available) return(tags$p("PCA has not been generated yet."))
+      req(input$deg_compare_col)
+      if (identical(input$deg_compare_col, "NA")) return(NULL)
+      pca_path <- pca_all_plot_path(input$deg_compare_col)
+      if (!file.exists(pca_path)) {
+        return(tags$p("All-sample PCA has not been generated yet. Re-run DESeq2 once to create it."))
+      }
+      tags$img(src = file.path("deseq2_results", basename(pca_path)), style = "max-width: 100%; border: 1px solid #ddd;")
+    })
+
     output$deg_pca_ui <- renderUI({
       if (!deseq2_available) return(tags$p("PCA has not been generated yet."))
       req(input$deg_compare_col)
@@ -2935,6 +2954,9 @@ server <- function(input, output, session) {
       status_box("Differential expression results have not been generated yet.", "warning")
     })
     output$deg_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
+    output$deg_all_pca_ui <- renderUI({
+      tags$p("PCA has not been generated yet.")
+    })
     output$deg_pca_ui <- renderUI({
       tags$p("PCA has not been generated yet.")
     })
