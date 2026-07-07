@@ -1150,14 +1150,14 @@ qc_subtabs <- list(
     "Initial QC",
     sidebarLayout(
       sidebarPanel(
-        width = 1,
+        width = 2,
         selectInput("sample", "Sample", choices = samples, selected = first_or_null(samples)),
         checkboxInput("show_trimmed", "Show cutadapt-trimmed QC", value = default_show_trimmed),
         tags$hr(),
         helpText("This tab renders FastQC and FastQ Screen HTML reports for both reads.")
       ),
       mainPanel(
-        width = 11,
+        width = 10,
         uiOutput("qc_status_ui"),
         tabsetPanel(
           tabPanel("R1 FastQC", uiOutput("r1_fastqc_ui")),
@@ -1925,7 +1925,7 @@ ui <- fluidPage(
       .qc-report-frame {
         display: block;
         width: 100%;
-        min-width: 1120px;
+        min-width: 1320px;
       }
       .table-scroll-shell {
         width: 100%;
