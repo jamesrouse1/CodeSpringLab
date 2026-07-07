@@ -479,11 +479,14 @@ value_or <- function(x, default) {
 }
 
 table_widget <- function(id) {
-  if (DT_AVAILABLE) {
-    DT::DTOutput(id)
-  } else {
-    tableOutput(id)
-  }
+  tags$div(
+    class = "table-scroll-shell",
+    if (DT_AVAILABLE) {
+      DT::DTOutput(id)
+    } else {
+      tableOutput(id)
+    }
+  )
 }
 
 simple_dt <- function(df, page_length = 25, scroll_y = "520px", dom = "tip") {
@@ -1884,9 +1887,47 @@ ui <- fluidPage(
         display: block;
         width: 100%;
       }
+      .table-scroll-shell {
+        width: 100%;
+        max-width: 100%;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+        border-radius: 16px;
+      }
+      .table-scroll-shell .dataTables_wrapper,
       .dataTables_wrapper {
         width: 100%;
+        max-width: 100%;
         overflow-x: auto;
+        overflow-y: visible;
+      }
+      .dataTables_scroll {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      .dataTables_scrollBody {
+        max-height: min(62vh, 650px) !important;
+        overflow: auto !important;
+      }
+      .tab-pane,
+      .tab-content,
+      .main-panel,
+      .col-sm-8,
+      .col-sm-9,
+      .col-md-8,
+      .col-md-9 {
+        min-width: 0;
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      .shiny-html-output {
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      .shiny-html-output > table,
+      .table {
+        min-width: max-content;
       }
       .shiny-notification {
         border-radius: 14px;
