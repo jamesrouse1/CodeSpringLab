@@ -489,9 +489,9 @@ table_widget <- function(id) {
   )
 }
 
-simple_dt <- function(df, page_length = 50, scroll_y = "520px", dom = "lfrtip") {
-  DT::datatable(
-    df,
+simple_dt <- function(df, page_length = 50, scroll_y = "520px", dom = "lfrtip", container = NULL) {
+  dt_args <- list(
+    data = df,
     rownames = FALSE,
     class = "compact stripe hover cell-border",
     options = list(
@@ -502,12 +502,26 @@ simple_dt <- function(df, page_length = 50, scroll_y = "520px", dom = "lfrtip") 
       paging = TRUE,
       pagingType = "full_numbers",
       dom = dom,
-      deferRender = TRUE,
-      processing = TRUE,
+      deferRender = FALSE,
+      processing = FALSE,
       searchDelay = 350,
       autoWidth = FALSE
     )
   )
+  if (!is.null(container)) dt_args$container <- container
+  do.call(DT::datatable, dt_args)
+}
+
+sample_annotation_col <- function(preferred = NULL) {
+  preferred <- value_or(preferred, "")
+  if (nzchar(preferred) && preferred %in% comparison_columns) return(preferred)
+  if ("treatment" %in% comparison_columns) return("treatment")
+  first_or_null(comparison_columns)
+}
+
+matrix_id_cols <- function(df) {
+  sample_cols <- intersect(samples, colnames(df))
+  setdiff(colnames(df), sample_cols)
 }
 
 format_numeric_commas <- function(df) {
@@ -2105,8 +2119,18 @@ server <- function(input, output, session) {
 
   if (DT_AVAILABLE) {
     output$star_summary_table <- DT::renderDT({
-      simple_dt(star_summary_table_df(), page_length = 50)
-    }, server = TRUE)
+      df <- star_summary_table_df()
+      simple_dt(
+        df,
+        page_length = 50,
+        container = build_group_header_container(
+          df,
+          id_cols = c("metric"),
+          annotation_col = sample_annotation_col(input$star_sample_sort_col),
+          design_df = design_df
+        )
+      )
+    }, server = FALSE)
   } else {
     output$star_summary_table <- renderTable({
       df <- star_summary_table_df()
@@ -2156,8 +2180,18 @@ server <- function(input, output, session) {
 
   if (DT_AVAILABLE) {
     output$featurecounts_summary_table <- DT::renderDT({
-      simple_dt(featurecounts_summary_table_df(), page_length = 50)
-    }, server = TRUE)
+      df <- featurecounts_summary_table_df()
+      simple_dt(
+        df,
+        page_length = 50,
+        container = build_group_header_container(
+          df,
+          id_cols = c("Status"),
+          annotation_col = sample_annotation_col(input$featurecounts_qc_sample_sort_col),
+          design_df = design_df
+        )
+      )
+    }, server = FALSE)
   } else {
     output$featurecounts_summary_table <- renderTable({
       df <- featurecounts_summary_table_df()
@@ -2249,8 +2283,17 @@ server <- function(input, output, session) {
   if (DT_AVAILABLE) {
     output$gene_search_table <- DT::renderDT({
       df <- raw_counts_table_df()
-      simple_dt(df, page_length = 50)
-    }, server = TRUE)
+      simple_dt(
+        df,
+        page_length = 50,
+        container = build_group_header_container(
+          df,
+          id_cols = c("Geneid"),
+          annotation_col = sample_annotation_col(),
+          design_df = design_df
+        )
+      )
+    }, server = FALSE)
   } else {
     output$gene_search_table <- renderTable({
       df <- raw_counts_table_df()
@@ -2389,8 +2432,17 @@ server <- function(input, output, session) {
     if (DT_AVAILABLE) {
       output$rsem_table <- DT::renderDT({
         df <- rsem_table_df()
-        simple_dt(df, page_length = 50)
-      }, server = TRUE)
+        simple_dt(
+          df,
+          page_length = 50,
+          container = build_group_header_container(
+            df,
+            id_cols = matrix_id_cols(df),
+            annotation_col = sample_annotation_col(),
+            design_df = design_df
+          )
+        )
+      }, server = FALSE)
     } else {
       output$rsem_table <- renderTable({
         df <- rsem_table_df()
@@ -2527,8 +2579,18 @@ server <- function(input, output, session) {
 
     if (DT_AVAILABLE) {
       output$deseq_counts_table <- DT::renderDT({
-        simple_dt(deseq_counts_table_df(), page_length = 50)
-      }, server = TRUE)
+        df <- deseq_counts_table_df()
+        simple_dt(
+          df,
+          page_length = 50,
+          container = build_group_header_container(
+            df,
+            id_cols = c("gene_label"),
+            annotation_col = sample_annotation_col(input$deseq_compare_col),
+            design_df = design_df
+          )
+        )
+      }, server = FALSE)
     } else {
       output$deseq_counts_table <- renderTable({
         show_df <- deseq_counts_table_df()
@@ -2835,7 +2897,7 @@ server <- function(input, output, session) {
           show_df <- if (nrow(hits) == 0) df else hits
         }
         simple_dt(show_df, page_length = 50)
-      }, server = TRUE)
+      }, server = FALSE)
     } else {
       output$deg_table <- renderTable({
         df <- deg_df()
@@ -3123,13 +3185,13 @@ server <- function(input, output, session) {
         hit <- df[df$Term == input$gsea_pathway, , drop = FALSE]
         if (!nrow(hit)) return(NULL)
         simple_dt(hit, page_length = 5, scroll_y = "180px", dom = "t")
-      }, server = TRUE)
+      }, server = FALSE)
 
       output$gsea_all_pathways_table <- DT::renderDT({
         df <- gsea_report_df()
         req(!is.null(df))
         simple_dt(df, page_length = 50)
-      }, server = TRUE)
+      }, server = FALSE)
     } else {
       output$gsea_pathway_table <- renderTable({
         df <- gsea_report_df()
@@ -3358,8 +3420,18 @@ server <- function(input, output, session) {
 
     if (DT_AVAILABLE) {
       output$kallisto_table <- DT::renderDT({
-        simple_dt(kallisto_table_df(), page_length = 50)
-      }, server = TRUE)
+        df <- kallisto_table_df()
+        simple_dt(
+          df,
+          page_length = 50,
+          container = build_group_header_container(
+            df,
+            id_cols = matrix_id_cols(df),
+            annotation_col = sample_annotation_col(),
+            design_df = design_df
+          )
+        )
+      }, server = FALSE)
     } else {
       output$kallisto_table <- renderTable({
         format_numeric_commas(kallisto_table_df())
