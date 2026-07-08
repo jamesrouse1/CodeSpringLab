@@ -879,6 +879,94 @@ read_normalized_counts <- function(path) {
   df[order(df$gene_label), , drop = FALSE]
 }
 
+first_normalized_counts_path <- function() {
+  files <- if (dir.exists(deseq2_dir)) {
+    list.files(deseq2_dir, pattern = "^normalized_counts_.*\\.txt$", full.names = TRUE)
+  } else character(0)
+  first_or_null(sort(files))
+}
+
+expression_matrix_from_df <- function(df, sample_ids = samples) {
+  if (is.null(df) || !nrow(df)) return(NULL)
+  gene_col <- intersect(c("gene_label", "Geneid", "gene_id", "target_id"), colnames(df))[1]
+  if (is.na(gene_col)) gene_col <- colnames(df)[1]
+  sample_cols <- intersect(sample_ids, colnames(df))
+  if (length(sample_cols) < 2) return(NULL)
+  mat <- as.matrix(df[, sample_cols, drop = FALSE])
+  storage.mode(mat) <- "numeric"
+  rownames(mat) <- make.unique(as.character(df[[gene_col]]))
+  mat <- mat[rowSums(is.finite(mat), na.rm = TRUE) == ncol(mat), , drop = FALSE]
+  mat <- mat[apply(mat, 1, stats::var, na.rm = TRUE) > 0, , drop = FALSE]
+  if (nrow(mat) < 2 || ncol(mat) < 2) return(NULL)
+  mat
+}
+
+draw_pca_plot <- function(mat, metadata, color_col, include_values = character(0), label_samples = TRUE) {
+  validate(need(!is.null(mat) && ncol(mat) >= 2 && nrow(mat) >= 2, "PCA needs at least two samples and two variable genes/transcripts."))
+  metadata <- metadata[match(colnames(mat), metadata$sample), , drop = FALSE]
+  keep <- !is.na(metadata$sample) & nzchar(metadata$sample)
+  color_values <- rep("Samples", nrow(metadata))
+  if (nzchar(color_col) && color_col %in% colnames(metadata)) {
+    color_values <- as.character(metadata[[color_col]])
+    color_values[is.na(color_values) | !nzchar(color_values)] <- "NA"
+    selected <- value_or(include_values, character(0))
+    selected <- selected[nzchar(selected)]
+    if (length(selected)) keep <- keep & color_values %in% selected
+  } else {
+    color_col <- "Samples"
+  }
+  mat <- mat[, keep, drop = FALSE]
+  color_values <- color_values[keep]
+  metadata <- metadata[keep, , drop = FALSE]
+  validate(need(ncol(mat) >= 2, "Select at least two samples for PCA."))
+  log_mat <- log2(mat + 1)
+  pca <- stats::prcomp(t(log_mat), center = TRUE, scale. = FALSE)
+  var_pct <- round(100 * (pca$sdev^2 / sum(pca$sdev^2)), 1)
+  plot_df <- data.frame(
+    sample = rownames(pca$x),
+    PC1 = pca$x[, 1],
+    PC2 = pca$x[, 2],
+    color_group = factor(color_values),
+    stringsAsFactors = FALSE
+  )
+  title <- "PCA of all selected samples"
+  subtitle <- paste("Colored by", color_col)
+  if (requireNamespace("ggplot2", quietly = TRUE)) {
+    p <- ggplot2::ggplot(plot_df, ggplot2::aes(PC1, PC2, color = color_group)) +
+      ggplot2::geom_point(size = 4.2, alpha = 0.9) +
+      ggplot2::labs(
+        title = title,
+        subtitle = subtitle,
+        x = sprintf("PC1 (%.1f%%)", var_pct[1]),
+        y = sprintf("PC2 (%.1f%%)", var_pct[2]),
+        color = color_col
+      ) +
+      ggplot2::theme_classic(base_family = "sans") +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(face = "bold", size = 18, color = "#17202f"),
+        plot.subtitle = ggplot2::element_text(size = 12, color = "#657084"),
+        axis.title = ggplot2::element_text(face = "bold", color = "#17202f"),
+        axis.text = ggplot2::element_text(color = "#334155"),
+        legend.position = "right",
+        legend.title = ggplot2::element_text(face = "bold"),
+        panel.grid.major = ggplot2::element_line(color = "#e6edf5", size = 0.3),
+        panel.grid.minor = ggplot2::element_blank()
+      )
+    if (isTRUE(label_samples)) {
+      if (requireNamespace("ggrepel", quietly = TRUE)) {
+        p <- p + ggrepel::geom_text_repel(ggplot2::aes(label = sample), size = 3.2, color = "#17202f", min.segment.length = 0, box.padding = 0.35, point.padding = 0.25, seed = 8)
+      } else {
+        p <- p + ggplot2::geom_text(ggplot2::aes(label = sample), vjust = -0.8, size = 3)
+      }
+    }
+    print(p)
+  } else {
+    plot(plot_df$PC1, plot_df$PC2, pch = 19, col = as.integer(plot_df$color_group), xlab = sprintf("PC1 (%.1f%%)", var_pct[1]), ylab = sprintf("PC2 (%.1f%%)", var_pct[2]), main = title)
+    if (isTRUE(label_samples)) text(plot_df$PC1, plot_df$PC2, labels = plot_df$sample, pos = 3, cex = 0.8)
+    legend("topright", legend = levels(plot_df$color_group), col = seq_along(levels(plot_df$color_group)), pch = 19, bty = "n")
+  }
+}
+
 read_deg_table <- function(path) {
   if (!file.exists(path)) return(NULL)
   df <- read.delim(path, check.names = FALSE, stringsAsFactors = FALSE, row.names = 1)
@@ -1318,259 +1406,231 @@ app_tabs <- list(
   tabPanel("Counts", do.call(tabsetPanel, c(list(id = "counts_subtab"), counts_subtabs))),
   tabPanel(
     "Differential Expression",
-        sidebarLayout(
-          sidebarPanel(
-            selectInput(
-              "deg_compare_col",
-              "Comparison column",
-              choices = c("NA" = "NA", comparison_columns),
-              selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
-            uiOutput("deg_treatment_ui"),
-            uiOutput("deg_control_ui"),
-            conditionalPanel(
-              "input.deg_subtab == 'DEGs'",
-              selectizeInput("deg_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
-              uiOutput("deg_convert_ui"),
-              selectInput("deg_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
-              numericInput("deg_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
-              numericInput("deg_lfc_cutoff", "Absolute log2FC cutoff", value = 0, min = 0, step = 0.1),
-              helpText("These cutoffs only build the Enrichr up/down gene lists below; they do not filter the DEG table."),
-              selectInput(
-                "deg_sort_mode",
-                "Sort DEGs",
-                choices = c(
-                  "Upregulated genes at top" = "up",
-                  "Downregulated genes at top" = "down"
-                ),
-                selected = "up", selectize = FALSE)
-            ),
-            conditionalPanel(
-              "input.deg_subtab == 'Volcano'",
-              selectInput("volcano_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
-              numericInput("volcano_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
-              numericInput("volcano_lfc_cutoff", "Absolute log2FC cutoff", value = 1, min = 0, step = 0.1),
-              selectInput(
-                "volcano_style",
-                "Volcano style",
-                choices = c("Clean publication" = "publication", "Minimal" = "minimal", "Dark" = "dark", "Colorblind" = "colorblind", "Soft" = "soft"),
-                selected = "publication", selectize = FALSE),
-              selectInput(
-                "volcano_palette",
-                "Volcano colors",
-                choices = c("Publication" = "publication", "Minimal" = "minimal", "Dark" = "dark", "Colorblind" = "colorblind", "Soft" = "soft"),
-                selected = "publication", selectize = FALSE),
-              selectInput(
-                "volcano_label_mode",
-                "Gene labels",
-                choices = c("Top significant genes" = "top", "Select genes manually" = "manual", "No labels" = "none"),
-                selected = "top", selectize = FALSE),
-              conditionalPanel(
-                "input.volcano_label_mode == 'manual'",
-                selectizeInput("volcano_label_genes", "Genes to label", choices = NULL, selected = NULL, multiple = TRUE, options = list(dropdownParent = "body"))
-              ),
-              conditionalPanel(
-                "input.volcano_label_mode == 'top'",
-                numericInput("volcano_max_labels", "Maximum labels", value = 20, min = 0, max = 100, step = 1)
-              ),
-              numericInput("volcano_point_size", "Point size", value = 2.5, min = 0.2, max = 8, step = 0.1),
-              numericInput("volcano_point_alpha", "Point opacity", value = 0.72, min = 0.1, max = 1, step = 0.05),
-              numericInput("volcano_label_size", "Label size", value = 2.5, min = 0.5, max = 8, step = 0.1),
-              selectInput(
-                "volcano_font_family",
-                "Font family",
-                choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
-                selected = "sans", selectize = FALSE),
-              checkboxInput("volcano_show_thresholds", "Show cutoff lines", value = TRUE),
-              checkboxInput("volcano_show_grid", "Show grid", value = TRUE),
-              numericInput("volcano_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
-              numericInput("volcano_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
-              selectInput(
-                "volcano_save_mode",
-                "Saved image size",
-                choices = c("Match display" = "match", "High-res 2x" = "double", "High-res 3x" = "triple", "High-res 5x" = "quintuple", "Custom" = "custom"),
-                selected = "double", selectize = FALSE),
-              conditionalPanel(
-                "input.volcano_save_mode == 'custom'",
-                numericInput("volcano_save_width", "Custom saved width (px)", value = 1800, min = 600, max = 8000, step = 100),
-                numericInput("volcano_save_height", "Custom saved height (px)", value = 1400, min = 600, max = 8000, step = 100),
-                numericInput("volcano_save_res", "Custom saved DPI", value = 192, min = 72, max = 600, step = 10)
-              )
-            ),
-            conditionalPanel(
-              "input.deg_subtab == 'Heatmap'",
-              radioButtons(
-                "heatmap_gene_mode",
-                "Heatmap genes",
-                choices = c("Select genes manually" = "manual", "Top up/down DEGs" = "topdeg"),
-                selected = "topdeg"
-              ),
-              selectInput(
-                "heatmap_source",
-                "Heatmap values",
-                choices = c("DESeq2 normalized counts" = "deseq", "RSEM TPM" = "rsem"),
-                selected = "deseq", selectize = FALSE),
-              conditionalPanel(
-                "input.heatmap_gene_mode == 'manual'",
-                selectizeInput("heatmap_genes", "Genes to plot", choices = NULL, selected = NULL, multiple = TRUE, options = list(dropdownParent = "body"))
-              ),
-              conditionalPanel(
-                "input.heatmap_gene_mode == 'topdeg'",
-                selectInput("heatmap_rank_p_col", "Rank by p-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
-                numericInput("heatmap_total_genes", "Total genes", value = 20, min = 2, step = 2),
-                checkboxInput("heatmap_equal_split", "Equal numbers of up and down", value = TRUE)
-              ),
-              selectizeInput(
-                "heatmap_annotation_cols",
-                "Column annotations",
-                choices = comparison_columns,
-                selected = if ("treatment" %in% comparison_columns) "treatment" else character(0),
-                multiple = TRUE, options = list(dropdownParent = "body")),
-              checkboxInput("heatmap_cluster_rows", "Cluster rows", value = TRUE),
-              checkboxInput("heatmap_cluster_cols", "Cluster columns", value = TRUE),
-              conditionalPanel(
-                "!input.heatmap_cluster_cols",
-                selectInput(
-                  "heatmap_order_col",
-                  "Order samples by",
-                  choices = comparison_columns,
-                  selected = if ("treatment" %in% comparison_columns) "treatment" else comparison_columns[1], selectize = FALSE)
-              ),
-              checkboxInput("heatmap_scale_rows", "Scale heatmap rows", value = TRUE),
-              selectInput(
-                "heatmap_theme",
-                "Heatmap style",
-                choices = c(
-                  "Clean publication" = "publication",
-                  "Minimal" = "minimal",
-                  "Compact" = "compact",
-                  "Fully labeled" = "labeled",
-                  "High contrast" = "contrast"
-                ),
-                selected = "publication", selectize = FALSE),
-              selectInput(
-                "heatmap_palette",
-                "Heatmap colors",
-                choices = c(
-                  "Use style default" = "theme",
-                  "Blue-white-red" = "blue_red",
-                  "Viridis" = "viridis",
-                  "Magma" = "magma",
-                  "Green-white-purple" = "green_purple",
-                  "Blue-white-red vivid" = "navy_orange",
-                  "Gray-white-red" = "gray_red"
-                ),
-                selected = "theme", selectize = FALSE),
-              selectInput(
-                "heatmap_border_style",
-                "Cell borders",
-                choices = c("Use style default" = "theme", "None" = "none", "Light grid" = "light"),
-                selected = "theme", selectize = FALSE),
-              selectInput(
-                "heatmap_font_family",
-                "Font family",
-                choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
-                selected = "sans", selectize = FALSE),
-              selectInput(
-                "heatmap_row_font_size",
-                "Gene label size",
-                choices = c("Small" = 7, "Medium" = 9, "Large" = 11, "XL" = 13),
-                selected = 9, selectize = FALSE),
-              selectInput(
-                "heatmap_col_font_size",
-                "Sample label size",
-                choices = c("Small" = 8, "Medium" = 10, "Large" = 12, "XL" = 14),
-                selected = 10, selectize = FALSE),
-              selectInput(
-                "heatmap_col_angle",
-                "Sample label angle",
-                choices = c("0" = "0", "45" = "45", "90" = "90", "315" = "315"),
-                selected = "45", selectize = FALSE),
-              checkboxInput("heatmap_show_row_names", "Show gene labels", value = TRUE),
-              checkboxInput("heatmap_show_col_names", "Show sample labels", value = TRUE),
-              checkboxInput("heatmap_show_annotation_names", "Show annotation track labels", value = FALSE),
-              selectInput(
-                "heatmap_distance",
-                "Clustering distance",
-                choices = c("Euclidean" = "euclidean", "Correlation" = "correlation", "Manhattan" = "manhattan"),
-                selected = "euclidean", selectize = FALSE),
-              selectInput(
-                "heatmap_cluster_method",
-                "Clustering method",
-                choices = c("Complete" = "complete", "Average" = "average", "Single" = "single", "Ward D2" = "ward.D2"),
-                selected = "complete", selectize = FALSE),
-              numericInput("heatmap_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
-              numericInput("heatmap_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
-              selectInput(
-                "heatmap_save_mode",
-                "Saved image size",
-                choices = c(
-                  "Match display" = "match",
-                  "High-res 2x" = "double",
-                  "High-res 3x" = "triple",
-                  "High-res 5x" = "quintuple",
-                  "Custom" = "custom"
-                ),
-                selected = "double", selectize = FALSE),
-              conditionalPanel(
-                "input.heatmap_save_mode == 'custom'",
-                numericInput("heatmap_save_width", "Custom saved width (px)", value = 1800, min = 600, max = 8000, step = 100),
-                numericInput("heatmap_save_height", "Custom saved height (px)", value = 1400, min = 600, max = 8000, step = 100),
-                numericInput("heatmap_save_res", "Custom saved DPI", value = 96, min = 72, max = 600, step = 10)
-              )
-            ),
-            tags$hr(),
-            helpText("Shows DEGs, PCA, and a custom heatmap for an available treatment vs control comparison.")
+    sidebarLayout(
+      sidebarPanel(
+        selectInput(
+          "deg_compare_col",
+          "Comparison column",
+          choices = c("NA" = "NA", comparison_columns),
+          selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
+        uiOutput("deg_treatment_ui"),
+        uiOutput("deg_control_ui"),
+        selectizeInput("deg_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
+        uiOutput("deg_convert_ui"),
+        selectInput("deg_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
+        numericInput("deg_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
+        numericInput("deg_lfc_cutoff", "Absolute log2FC cutoff", value = 0, min = 0, step = 0.1),
+        helpText("These cutoffs only build the Enrichr up/down gene lists below; they do not filter the DEG table."),
+        selectInput(
+          "deg_sort_mode",
+          "Sort DEGs",
+          choices = c(
+            "Upregulated genes at top" = "up",
+            "Downregulated genes at top" = "down"
           ),
-          mainPanel(
-            uiOutput("deg_status_ui"),
-            tabsetPanel(
-              id = "deg_subtab",
-              tabPanel(
-                "DEGs",
-                tags$div(
-                  style = "max-height: 520px; overflow-y: auto; overflow-x: auto;",
-                  table_widget("deg_table")
-                ),
-                tags$hr(),
-                tags$div(
-                  style = "display: flex; justify-content: space-between; align-items: center;",
-                  h4("Upregulated Genes For Enrichr"),
-                  tags$a(href = "https://maayanlab.cloud/OxEnrichr/", target = "_blank", "Open OxEnrichr")
-                ),
-                tags$p("Copy this list, open OxEnrichr, and paste the genes into a new submission."),
-                textAreaInput("deg_up_genes", NULL, value = "", width = "100%", height = "180px"),
-                tags$div(
-                  style = "display: flex; justify-content: space-between; align-items: center;",
-                  h4("Downregulated Genes For Enrichr"),
-                  tags$a(href = "https://maayanlab.cloud/OxEnrichr/", target = "_blank", "Open OxEnrichr")
-                ),
-                tags$p("Copy this list, open OxEnrichr, and paste the genes into a new submission."),
-                textAreaInput("deg_down_genes", NULL, value = "", width = "100%", height = "180px")
-              ),
-              tabPanel(
-                "PCA",
-                h4("All Samples PCA"),
-                uiOutput("deg_all_pca_ui"),
-                tags$hr(),
-                h4("Selected Comparison PCA"),
-                uiOutput("deg_pca_ui")
-              ),
-              tabPanel(
-                "Volcano",
-                textInput("volcano_filename", "Filename", value = ""),
-                actionButton("save_volcano_btn", "Save volcano plot"),
-                plotOutput("deg_volcano_plot", height = "700px")
-              ),
-              tabPanel(
-                "Heatmap",
-                textInput("heatmap_filename", "Filename", value = ""),
-                actionButton("save_heatmap_btn", "Save heatmap"),
-                plotOutput("deg_heatmap_plot", height = "700px")
-              )
-            )
+          selected = "up", selectize = FALSE)
+      ),
+      mainPanel(
+        uiOutput("deg_status_ui"),
+        tags$div(
+          style = "max-height: 620px; overflow-y: auto; overflow-x: auto;",
+          table_widget("deg_table")
+        ),
+        tags$hr(),
+        tags$div(
+          style = "display: flex; justify-content: space-between; align-items: center;",
+          h4("Upregulated Genes For Enrichr"),
+          tags$a(href = "https://maayanlab.cloud/OxEnrichr/", target = "_blank", "Open OxEnrichr")
+        ),
+        tags$p("Copy this list, open OxEnrichr, and paste the genes into a new submission."),
+        textAreaInput("deg_up_genes", NULL, value = "", width = "100%", height = "180px"),
+        tags$div(
+          style = "display: flex; justify-content: space-between; align-items: center;",
+          h4("Downregulated Genes For Enrichr"),
+          tags$a(href = "https://maayanlab.cloud/OxEnrichr/", target = "_blank", "Open OxEnrichr")
+        ),
+        tags$p("Copy this list, open OxEnrichr, and paste the genes into a new submission."),
+        textAreaInput("deg_down_genes", NULL, value = "", width = "100%", height = "180px")
+      )
+    )
+  ),
+  tabPanel(
+    "Plots",
+    sidebarLayout(
+      sidebarPanel(
+        conditionalPanel(
+          "input.plot_subtab != 'PCA'",
+          selectInput(
+            "plot_compare_col",
+            "Comparison column",
+            choices = c("NA" = "NA", comparison_columns),
+            selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
+          uiOutput("plot_treatment_ui"),
+          uiOutput("plot_control_ui")
+        ),
+        conditionalPanel(
+          "input.plot_subtab == 'PCA'",
+          selectInput(
+            "pca_source",
+            "PCA values",
+            choices = c("DESeq2 normalized counts" = "deseq", "featureCounts count matrix" = "counts"),
+            selected = "deseq", selectize = FALSE),
+          selectInput(
+            "pca_color_col",
+            "Color by",
+            choices = c("None" = "__none__", setNames(comparison_columns, comparison_columns)),
+            selected = if ("treatment" %in% comparison_columns) "treatment" else "__none__", selectize = FALSE),
+          uiOutput("pca_include_values_ui"),
+          checkboxInput("pca_label_samples", "Label samples", value = TRUE),
+          numericInput("pca_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
+          numericInput("pca_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50)
+        ),
+        conditionalPanel(
+          "input.plot_subtab == 'Volcano'",
+          selectInput("volcano_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
+          numericInput("volcano_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
+          numericInput("volcano_lfc_cutoff", "Absolute log2FC cutoff", value = 1, min = 0, step = 0.1),
+          selectInput(
+            "volcano_style",
+            "Volcano style",
+            choices = c("Clean publication" = "publication", "Minimal" = "minimal", "Dark" = "dark", "Colorblind" = "colorblind", "Soft" = "soft"),
+            selected = "publication", selectize = FALSE),
+          selectInput(
+            "volcano_palette",
+            "Volcano colors",
+            choices = c("Publication" = "publication", "Minimal" = "minimal", "Dark" = "dark", "Colorblind" = "colorblind", "Soft" = "soft"),
+            selected = "publication", selectize = FALSE),
+          selectInput(
+            "volcano_label_mode",
+            "Gene labels",
+            choices = c("Top significant genes" = "top", "Select genes manually" = "manual", "No labels" = "none"),
+            selected = "top", selectize = FALSE),
+          conditionalPanel(
+            "input.volcano_label_mode == 'manual'",
+            selectizeInput("volcano_label_genes", "Genes to label", choices = NULL, selected = NULL, multiple = TRUE, options = list(dropdownParent = "body"))
+          ),
+          conditionalPanel(
+            "input.volcano_label_mode == 'top'",
+            numericInput("volcano_max_labels", "Maximum labels", value = 20, min = 0, max = 100, step = 1)
+          ),
+          numericInput("volcano_point_size", "Point size", value = 2.5, min = 0.2, max = 8, step = 0.1),
+          numericInput("volcano_point_alpha", "Point opacity", value = 0.72, min = 0.1, max = 1, step = 0.05),
+          numericInput("volcano_label_size", "Label size", value = 2.5, min = 0.5, max = 8, step = 0.1),
+          selectInput(
+            "volcano_font_family",
+            "Font family",
+            choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
+            selected = "sans", selectize = FALSE),
+          checkboxInput("volcano_show_thresholds", "Show cutoff lines", value = TRUE),
+          checkboxInput("volcano_show_grid", "Show grid", value = TRUE),
+          numericInput("volcano_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
+          numericInput("volcano_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
+          selectInput(
+            "volcano_save_mode",
+            "Saved image size",
+            choices = c("Match display" = "match", "High-res 2x" = "double", "High-res 3x" = "triple", "High-res 5x" = "quintuple", "Custom" = "custom"),
+            selected = "double", selectize = FALSE),
+          conditionalPanel(
+            "input.volcano_save_mode == 'custom'",
+            numericInput("volcano_save_width", "Custom saved width (px)", value = 1800, min = 600, max = 8000, step = 100),
+            numericInput("volcano_save_height", "Custom saved height (px)", value = 1400, min = 600, max = 8000, step = 100),
+            numericInput("volcano_save_res", "Custom saved DPI", value = 192, min = 72, max = 600, step = 10)
+          )
+        ),
+        conditionalPanel(
+          "input.plot_subtab == 'Heatmap'",
+          radioButtons(
+            "heatmap_gene_mode",
+            "Heatmap genes",
+            choices = c("Select genes manually" = "manual", "Top up/down DEGs" = "topdeg"),
+            selected = "topdeg"
+          ),
+          selectInput(
+            "heatmap_source",
+            "Heatmap values",
+            choices = c("DESeq2 normalized counts" = "deseq", "RSEM TPM" = "rsem"),
+            selected = "deseq", selectize = FALSE),
+          conditionalPanel(
+            "input.heatmap_gene_mode == 'manual'",
+            selectizeInput("heatmap_genes", "Genes to plot", choices = NULL, selected = NULL, multiple = TRUE, options = list(dropdownParent = "body"))
+          ),
+          conditionalPanel(
+            "input.heatmap_gene_mode == 'topdeg'",
+            selectInput("heatmap_rank_p_col", "Rank by p-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
+            numericInput("heatmap_total_genes", "Total genes", value = 20, min = 2, step = 2),
+            checkboxInput("heatmap_equal_split", "Equal numbers of up and down", value = TRUE)
+          ),
+          selectizeInput(
+            "heatmap_annotation_cols",
+            "Column annotations",
+            choices = comparison_columns,
+            selected = if ("treatment" %in% comparison_columns) "treatment" else character(0),
+            multiple = TRUE, options = list(dropdownParent = "body")),
+          checkboxInput("heatmap_cluster_rows", "Cluster rows", value = TRUE),
+          checkboxInput("heatmap_cluster_cols", "Cluster columns", value = TRUE),
+          conditionalPanel(
+            "!input.heatmap_cluster_cols",
+            selectInput(
+              "heatmap_order_col",
+              "Order samples by",
+              choices = comparison_columns,
+              selected = if ("treatment" %in% comparison_columns) "treatment" else comparison_columns[1], selectize = FALSE)
+          ),
+          checkboxInput("heatmap_scale_rows", "Scale heatmap rows", value = TRUE),
+          selectInput(
+            "heatmap_theme",
+            "Heatmap style",
+            choices = c("Clean publication" = "publication", "Minimal" = "minimal", "Compact" = "compact", "Fully labeled" = "labeled", "High contrast" = "contrast"),
+            selected = "publication", selectize = FALSE),
+          selectInput(
+            "heatmap_palette",
+            "Heatmap colors",
+            choices = c("Use style default" = "theme", "Blue-white-red" = "blue_red", "Viridis" = "viridis", "Magma" = "magma", "Green-white-purple" = "green_purple", "Blue-white-red vivid" = "navy_orange", "Gray-white-red" = "gray_red"),
+            selected = "theme", selectize = FALSE),
+          selectInput(
+            "heatmap_border_style",
+            "Cell borders",
+            choices = c("Use style default" = "theme", "None" = "none", "Light grid" = "light"),
+            selected = "theme", selectize = FALSE),
+          selectInput(
+            "heatmap_font_family",
+            "Font family",
+            choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
+            selected = "sans", selectize = FALSE),
+          selectInput("heatmap_row_font_size", "Gene label size", choices = c("Small" = 7, "Medium" = 9, "Large" = 11, "XL" = 13), selected = 9, selectize = FALSE),
+          selectInput("heatmap_col_font_size", "Sample label size", choices = c("Small" = 8, "Medium" = 10, "Large" = 12, "XL" = 14), selected = 10, selectize = FALSE),
+          selectInput("heatmap_col_angle", "Sample label angle", choices = c("0" = "0", "45" = "45", "90" = "90", "315" = "315"), selected = "45", selectize = FALSE),
+          checkboxInput("heatmap_show_row_names", "Show gene labels", value = TRUE),
+          checkboxInput("heatmap_show_col_names", "Show sample labels", value = TRUE),
+          checkboxInput("heatmap_show_annotation_names", "Show annotation track labels", value = FALSE),
+          selectInput("heatmap_distance", "Clustering distance", choices = c("Euclidean" = "euclidean", "Correlation" = "correlation", "Manhattan" = "manhattan"), selected = "euclidean", selectize = FALSE),
+          selectInput("heatmap_cluster_method", "Clustering method", choices = c("Complete" = "complete", "Average" = "average", "Single" = "single", "Ward D2" = "ward.D2"), selected = "complete", selectize = FALSE),
+          numericInput("heatmap_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
+          numericInput("heatmap_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
+          selectInput(
+            "heatmap_save_mode",
+            "Saved image size",
+            choices = c("Match display" = "match", "High-res 2x" = "double", "High-res 3x" = "triple", "High-res 5x" = "quintuple", "Custom" = "custom"),
+            selected = "double", selectize = FALSE),
+          conditionalPanel(
+            "input.heatmap_save_mode == 'custom'",
+            numericInput("heatmap_save_width", "Custom saved width (px)", value = 1800, min = 600, max = 8000, step = 100),
+            numericInput("heatmap_save_height", "Custom saved height (px)", value = 1400, min = 600, max = 8000, step = 100),
+            numericInput("heatmap_save_res", "Custom saved DPI", value = 96, min = 72, max = 600, step = 10)
           )
         )
       ),
+      mainPanel(
+        uiOutput("plot_status_ui"),
+        tabsetPanel(
+          id = "plot_subtab",
+          tabPanel("PCA", plotOutput("pca_plot", height = "700px")),
+          tabPanel("Volcano", textInput("volcano_filename", "Filename", value = ""), actionButton("save_volcano_btn", "Save volcano plot"), plotOutput("deg_volcano_plot", height = "700px")),
+          tabPanel("Heatmap", textInput("heatmap_filename", "Filename", value = ""), actionButton("save_heatmap_btn", "Save heatmap"), plotOutput("deg_heatmap_plot", height = "700px"))
+        )
+      )
+    )
+  ),
   tabPanel(
     "GSEA",
         sidebarLayout(
@@ -2665,6 +2725,24 @@ server <- function(input, output, session) {
       selectInput("deg_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
     })
 
+    get_plot_values <- reactive({
+      if (is.null(input$plot_compare_col) || identical(input$plot_compare_col, "NA") || !nzchar(input$plot_compare_col)) {
+        return(character(0))
+      }
+      vals <- unique(as.character(design_df[[input$plot_compare_col]]))
+      vals[!is.na(vals) & nzchar(vals)]
+    })
+
+    output$plot_treatment_ui <- renderUI({
+      vals <- get_plot_values()
+      selectInput("plot_treatment", "Treatment", choices = vals, selected = if (length(vals) > 1) vals[2] else vals, selectize = FALSE)
+    })
+
+    output$plot_control_ui <- renderUI({
+      vals <- get_plot_values()
+      selectInput("plot_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
+    })
+
     deg_raw_df <- reactive({
       req(input$deg_compare_col)
       if (identical(input$deg_compare_col, "NA")) return(NULL)
@@ -2688,6 +2766,19 @@ server <- function(input, output, session) {
         conv <- convert_gene_labels(df$gene_label, map_df)
         df$gene_label <- conv$values
       }
+      df
+    })
+
+    plot_raw_df <- reactive({
+      req(input$plot_compare_col)
+      if (identical(input$plot_compare_col, "NA")) return(NULL)
+      req(input$plot_treatment, input$plot_control)
+      read_deg_table(deg_table_path(input$plot_treatment, input$plot_control))
+    })
+
+    plot_deg_df <- reactive({
+      df <- plot_raw_df()
+      if (is.null(df)) return(NULL)
       df
     })
 
@@ -2719,6 +2810,25 @@ server <- function(input, output, session) {
       )
     })
 
+    output$plot_status_ui <- renderUI({
+      if (!deseq2_available) {
+        return(status_box("Differential expression outputs have not been generated yet.", "warning"))
+      }
+      if (identical(value_or(input$plot_subtab, "PCA"), "PCA")) {
+        return(status_box("PCA uses all selected samples by default. Use the metadata controls to color and optionally filter samples.", "info"))
+      }
+      req(input$plot_compare_col)
+      if (identical(input$plot_compare_col, "NA")) {
+        return(status_box("Select a comparison column to view plots for a tested comparison.", "warning"))
+      }
+      req(input$plot_treatment, input$plot_control)
+      path <- deg_table_path(input$plot_treatment, input$plot_control)
+      if (!file.exists(path)) {
+        return(status_box(sprintf("This comparison has not been tested: %s vs %s.", input$plot_treatment, input$plot_control), "error"))
+      }
+      status_box(sprintf("Plotting %s vs %s using %s.", input$plot_treatment, input$plot_control, input$plot_compare_col), "info")
+    })
+
     deg_norm_counts_df <- reactive({
       req(input$deg_compare_col)
       if (identical(input$deg_compare_col, "NA")) return(NULL)
@@ -2731,14 +2841,26 @@ server <- function(input, output, session) {
       df[, keep_cols, drop = FALSE]
     })
 
+    plot_norm_counts_df <- reactive({
+      req(input$plot_compare_col)
+      if (identical(input$plot_compare_col, "NA")) return(NULL)
+      req(input$plot_treatment, input$plot_control)
+      path <- normalized_counts_path(input$plot_treatment, input$plot_control)
+      df <- read_normalized_counts(path)
+      if (is.null(df)) return(NULL)
+      keep_samples <- design_df$sample[design_df[[input$plot_compare_col]] %in% c(input$plot_treatment, input$plot_control)]
+      keep_cols <- c("gene_label", intersect(keep_samples, colnames(df)))
+      df[, keep_cols, drop = FALSE]
+    })
+
     heatmap_rsem_df <- reactive({
       req(rsem_available)
-      req(input$deg_compare_col)
-      if (identical(input$deg_compare_col, "NA")) return(NULL)
-      req(input$deg_treatment, input$deg_control)
+      req(input$plot_compare_col)
+      if (identical(input$plot_compare_col, "NA")) return(NULL)
+      req(input$plot_treatment, input$plot_control)
       df <- build_rsem_matrix(samples, data_type = "genes", metric = "TPM")
       if (is.null(df)) return(NULL)
-      keep_samples <- design_df$sample[design_df[[input$deg_compare_col]] %in% c(input$deg_treatment, input$deg_control)]
+      keep_samples <- design_df$sample[design_df[[input$plot_compare_col]] %in% c(input$plot_treatment, input$plot_control)]
       keep_cols <- c("gene_id", intersect(keep_samples, colnames(df)))
       df <- df[, keep_cols, drop = FALSE]
       colnames(df)[colnames(df) == "gene_id"] <- "gene_label"
@@ -2749,13 +2871,55 @@ server <- function(input, output, session) {
       if (identical(value_or(input$heatmap_source, "deseq"), "rsem")) {
         heatmap_rsem_df()
       } else {
-        deg_norm_counts_df()
+        plot_norm_counts_df()
       }
+    })
+
+    output$pca_include_values_ui <- renderUI({
+      col <- value_or(input$pca_color_col, "__none__")
+      if (identical(col, "__none__") || !col %in% colnames(design_df)) return(NULL)
+      vals <- sort(unique(as.character(design_df[[col]])))
+      vals <- vals[!is.na(vals) & nzchar(vals)]
+      selectizeInput("pca_include_values", "Include values", choices = vals, selected = vals, multiple = TRUE, options = list(dropdownParent = "body"))
+    })
+
+    pca_source_df <- reactive({
+      if (identical(value_or(input$pca_source, "deseq"), "counts")) {
+        df <- count_matrix_nonzero_df
+        if (is.null(df) || !nrow(df)) return(NULL)
+        colnames(df)[1] <- "gene_label"
+        return(df)
+      }
+      selected_path <- NULL
+      if (!is.null(input$plot_treatment) && !is.null(input$plot_control)) {
+        candidate <- normalized_counts_path(input$plot_treatment, input$plot_control)
+        if (file.exists(candidate)) selected_path <- candidate
+      }
+      if (is.null(selected_path)) selected_path <- first_normalized_counts_path()
+      read_normalized_counts(selected_path)
+    })
+
+    output$pca_plot <- renderPlot({
+      df <- pca_source_df()
+      validate(need(!is.null(df), "No count matrix or DESeq2 normalized-counts file is available for PCA."))
+      mat <- expression_matrix_from_df(df, samples)
+      color_col <- value_or(input$pca_color_col, "__none__")
+      if (identical(color_col, "__none__")) color_col <- ""
+      draw_pca_plot(
+        mat,
+        metadata = design_df,
+        color_col = color_col,
+        include_values = value_or(input$pca_include_values, character(0)),
+        label_samples = isTRUE(input$pca_label_samples)
+      )
+    }, width = function() {
+      as.numeric(value_or(input$pca_plot_width, 900))
+    }, height = function() {
+      as.numeric(value_or(input$pca_plot_height, 700))
     })
 
     observe({
       req(identical(input$main_tabs, "Differential Expression"))
-      req(identical(input$deg_subtab, "DEGs"))
       df <- deg_df()
       if (is.null(df)) {
         updateSelectizeInput(session, "deg_gene_query", choices = character(0), selected = character(0), server = TRUE)
@@ -2766,7 +2930,6 @@ server <- function(input, output, session) {
 
     observe({
       req(identical(input$main_tabs, "Differential Expression"))
-      req(identical(input$deg_subtab, "DEGs"))
       df <- deg_df()
       if (is.null(df)) {
         updateTextAreaInput(session, "deg_up_genes", value = "")
@@ -2784,8 +2947,8 @@ server <- function(input, output, session) {
     })
 
     observe({
-      req(identical(input$main_tabs, "Differential Expression"))
-      req(identical(input$deg_subtab, "Heatmap"))
+      req(identical(input$main_tabs, "Plots"))
+      req(identical(input$plot_subtab, "Heatmap"))
       df <- heatmap_source_df()
       if (is.null(df)) {
         updateSelectizeInput(session, "heatmap_genes", choices = character(0), selected = character(0), server = TRUE)
@@ -2795,9 +2958,9 @@ server <- function(input, output, session) {
     })
 
     observe({
-      req(identical(input$main_tabs, "Differential Expression"))
-      req(identical(input$deg_subtab, "Volcano"))
-      df <- deg_df()
+      req(identical(input$main_tabs, "Plots"))
+      req(identical(input$plot_subtab, "Volcano"))
+      df <- plot_deg_df()
       if (is.null(df)) {
         updateSelectizeInput(session, "volcano_label_genes", choices = character(0), selected = character(0), server = TRUE)
       } else {
@@ -2806,7 +2969,7 @@ server <- function(input, output, session) {
     })
 
     volcano_plot_state <- reactive({
-      df <- deg_df()
+      df <- plot_deg_df()
       req(!is.null(df))
       p_col <- value_or(input$volcano_p_col, "padj")
       validate(need(p_col %in% colnames(df), "Selected p-value column is not present in the DEG table."))
@@ -2831,7 +2994,7 @@ server <- function(input, output, session) {
       draw_volcano_plot(
         vp$plot_df,
         labels = vp$labels,
-        title = sprintf("%s vs %s", value_or(input$deg_treatment, "treatment"), value_or(input$deg_control, "control")),
+        title = sprintf("%s vs %s", value_or(input$plot_treatment, "treatment"), value_or(input$plot_control, "control")),
         subtitle = vp$p_col,
         p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
         lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
@@ -2854,9 +3017,9 @@ server <- function(input, output, session) {
       vp <- volcano_plot_state()
       default_name <- sprintf(
         "volcano_%s_%s_vs_%s.png",
-        value_or(input$deg_compare_col, "comparison"),
-        value_or(input$deg_treatment, "treatment"),
-        value_or(input$deg_control, "control")
+        value_or(input$plot_compare_col, "comparison"),
+        value_or(input$plot_treatment, "treatment"),
+        value_or(input$plot_control, "control")
       )
       filename <- sanitize_filename(input$volcano_filename)
       if (!nzchar(filename)) filename <- default_name
@@ -2878,7 +3041,7 @@ server <- function(input, output, session) {
       draw_volcano_plot(
         vp$plot_df,
         labels = vp$labels,
-        title = sprintf("%s vs %s", value_or(input$deg_treatment, "treatment"), value_or(input$deg_control, "control")),
+        title = sprintf("%s vs %s", value_or(input$plot_treatment, "treatment"), value_or(input$plot_control, "control")),
         subtitle = vp$p_col,
         p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
         lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
@@ -2899,7 +3062,7 @@ server <- function(input, output, session) {
       if (identical(input$heatmap_gene_mode, "manual")) {
         return(value_or(input$heatmap_genes, character(0)))
       }
-      df <- deg_df()
+      df <- plot_deg_df()
       req(!is.null(df))
       rank_col <- value_or(input$heatmap_rank_p_col, "padj")
       req(rank_col %in% colnames(df), "log2FoldChange" %in% colnames(df))
@@ -3049,9 +3212,9 @@ server <- function(input, output, session) {
       hp <- heatmap_plot_state()
       default_name <- sprintf(
         "heatmap_%s_%s_vs_%s.png",
-        value_or(input$deg_compare_col, "comparison"),
-        value_or(input$deg_treatment, "treatment"),
-        value_or(input$deg_control, "control")
+        value_or(input$plot_compare_col, "comparison"),
+        value_or(input$plot_treatment, "treatment"),
+        value_or(input$plot_control, "control")
       )
       filename <- sanitize_filename(input$heatmap_filename)
       if (!nzchar(filename)) filename <- default_name
@@ -3119,10 +3282,39 @@ server <- function(input, output, session) {
 
     output$deg_treatment_ui <- empty_compare_input("deg_treatment", "Treatment")
     output$deg_control_ui <- empty_compare_input("deg_control", "Control")
+    output$plot_treatment_ui <- empty_compare_input("plot_treatment", "Treatment")
+    output$plot_control_ui <- empty_compare_input("plot_control", "Control")
     output$deg_status_ui <- renderUI({
       status_box("Differential expression results have not been generated yet.", "warning")
     })
+    output$plot_status_ui <- renderUI({
+      status_box("Plots are available after differential expression outputs are generated. PCA can also use the count matrix when available.", "warning")
+    })
     output$deg_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
+    output$pca_include_values_ui <- renderUI({
+      col <- value_or(input$pca_color_col, "__none__")
+      if (identical(col, "__none__") || !col %in% colnames(design_df)) return(NULL)
+      vals <- sort(unique(as.character(design_df[[col]])))
+      vals <- vals[!is.na(vals) & nzchar(vals)]
+      selectizeInput("pca_include_values", "Include values", choices = vals, selected = vals, multiple = TRUE, options = list(dropdownParent = "body"))
+    })
+    output$pca_plot <- renderPlot({
+      df <- count_matrix_nonzero_df
+      if (is.null(df) || !nrow(df)) {
+        plot.new()
+        text(0.5, 0.5, "PCA is not available until a count matrix or normalized-counts file exists.")
+      } else {
+        colnames(df)[1] <- "gene_label"
+        mat <- expression_matrix_from_df(df, samples)
+        color_col <- value_or(input$pca_color_col, "__none__")
+        if (identical(color_col, "__none__")) color_col <- ""
+        draw_pca_plot(mat, design_df, color_col, value_or(input$pca_include_values, character(0)), isTRUE(input$pca_label_samples))
+      }
+    }, width = function() {
+      as.numeric(value_or(input$pca_plot_width, 900))
+    }, height = function() {
+      as.numeric(value_or(input$pca_plot_height, 700))
+    })
     output$deg_all_pca_ui <- renderUI({
       tags$p("PCA has not been generated yet.")
     })
