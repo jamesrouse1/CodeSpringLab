@@ -115,7 +115,8 @@ status_box <- function(message, tone = c("info", "warning", "error")) {
 available_qc_samples <- function(base_dir) {
   if (!dir.exists(base_dir)) return(character(0))
   files <- list.files(base_dir, pattern = "_(fastqc|screen)\\.html$", full.names = FALSE)
-  ids <- sub("_(R1|R2)_001_(fastqc|screen)\\.html$", "", files)
+  ids <- sub("_(fastqc|screen)\\.html$", "", files)
+  ids <- sub("([._-]R)[12]([._-]?[0-9]*)$", "", ids, ignore.case = TRUE)
   sort(unique(ids[ids != files]))
 }
 
@@ -264,15 +265,18 @@ normalize_sample_token <- function(x) {
 find_qc_html <- function(base_dir, sample_name, read_name, suffix) {
   if (!dir.exists(base_dir)) return(file.path(base_dir, paste0(sample_name, "_", read_name, "_001_", suffix, ".html")))
   sample_stem <- sample_fastq_stems[[sample_name]]
+  if (is.null(sample_stem) || length(sample_stem) == 0 || is.na(sample_stem)) sample_stem <- sample_name
   candidates <- unique(c(sample_name, sample_stem, gsub("_", "", sample_name), gsub("_", "", sample_stem)))
   candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
   expected <- file.path(base_dir, paste0(candidates, "_", read_name, "_001_", suffix, ".html"))
   hit <- expected[file.exists(expected)]
   if (length(hit)) return(hit[1])
 
-  files <- list.files(base_dir, pattern = paste0("_", read_name, "_001_", suffix, "\\.html$"), full.names = TRUE)
+  files <- list.files(base_dir, pattern = paste0("([._-]", read_name, "([._-]?[0-9]*)?)_", suffix, "\\.html$"), full.names = TRUE, ignore.case = TRUE)
   if (!length(files)) return(expected[1])
-  file_keys <- normalize_sample_token(sub(paste0("_", read_name, "_001_", suffix, "\\.html$"), "", basename(files)))
+  file_stems <- sub(paste0("_", suffix, "\\.html$"), "", basename(files), ignore.case = TRUE)
+  file_stems <- sub(paste0("([._-]", read_name, "([._-]?[0-9]*)?)$"), "", file_stems, ignore.case = TRUE)
+  file_keys <- normalize_sample_token(file_stems)
   cand_keys <- normalize_sample_token(candidates)
   idx <- match(cand_keys, file_keys, nomatch = 0)
   idx <- idx[idx > 0]
