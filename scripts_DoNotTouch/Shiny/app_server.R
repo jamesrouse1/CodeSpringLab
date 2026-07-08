@@ -41,8 +41,9 @@ design_matrix_path <- normalizePath(
   mustWork = FALSE
 )
 star_summary_path <- file.path(data_dir, "star_summary", "summary_matrix.txt")
-count_matrix_path <- file.path(data_dir, "counts", "count_matrix.txt")
-featurecounts_summary_path <- file.path(data_dir, "counts", "featurecounts_summary.txt")
+counts_dir <- file.path(data_dir, "counts")
+count_matrix_path <- file.path(counts_dir, "count_matrix.txt")
+featurecounts_summary_path <- file.path(counts_dir, "featurecounts_summary.txt")
 kallisto_dir <- file.path(data_dir, "kallisto")
 rsem_dir <- file.path(data_dir, "rsem")
 gtf_dir <- file.path(data_dir, "gtf")
@@ -217,8 +218,10 @@ count_matrix_available <- nrow(count_matrix_df) > 0
 featurecounts_available <- nrow(featurecounts_summary_df) > 0
 kallisto_abundance_files <- if (dir.exists(kallisto_dir)) list.files(kallisto_dir, pattern = "abundance.tsv", recursive = TRUE, full.names = TRUE) else character(0)
 kallisto_sample_names <- sort(unique(basename(dirname(kallisto_abundance_files))))
-kallisto_available <- length(kallisto_sample_names) > 0
-rsem_available <- dir.exists(rsem_dir) && length(list.files(rsem_dir, pattern = "\\.(genes|isoforms)\\.results$", recursive = TRUE)) > 0
+kallisto_saved_matrices <- if (dir.exists(counts_dir)) list.files(counts_dir, pattern = "^kallisto_.*_matrix.*\\.txt$", full.names = TRUE) else character(0)
+rsem_saved_matrices <- if (dir.exists(counts_dir)) list.files(counts_dir, pattern = "^rsem_.*_matrix.*\\.txt$", full.names = TRUE) else character(0)
+kallisto_available <- length(kallisto_sample_names) > 0 || length(kallisto_saved_matrices) > 0
+rsem_available <- (dir.exists(rsem_dir) && length(list.files(rsem_dir, pattern = "\\.(genes|isoforms)\\.results$", recursive = TRUE)) > 0) || length(rsem_saved_matrices) > 0
 deseq2_available <- dir.exists(deseq2_dir) && length(list.files(deseq2_dir, pattern = "^normalized_counts_.*\\.txt$", recursive = FALSE)) > 0
 gseapy_available <- dir.exists(gseapy_dir) && length(list.files(gseapy_dir, pattern = "report\\.gseapy\\..*\\.csv$", recursive = TRUE)) > 0
 
@@ -393,6 +396,85 @@ build_rsem_matrix <- function(sample_names, data_type = c("genes", "isoforms"), 
   merged[sample_cols][is.na(merged[sample_cols])] <- 0
   id_col <- if (identical(data_type, "genes")) "gene_id" else "transcript_id"
   merged[order(merged[[id_col]]), , drop = FALSE]
+}
+
+rsem_metric_token <- function(metric) {
+  switch(
+    as.character(metric),
+    "TPM" = "tpm",
+    "FPKM" = "fpkm",
+    "expected_count" = "expected_count",
+    tolower(as.character(metric))
+  )
+}
+
+rsem_saved_matrix_path <- function(data_type = "genes", metric = "TPM", label_mode = "gene_id") {
+  token <- rsem_metric_token(metric)
+  stem <- if (identical(data_type, "isoforms")) {
+    paste0("rsem_isoform_", token, "_matrix")
+  } else {
+    paste0("rsem_", token, "_matrix")
+  }
+  converted <- file.path(counts_dir, paste0(stem, "_gene_name.txt"))
+  base <- file.path(counts_dir, paste0(stem, ".txt"))
+  if (identical(label_mode, "gene_name") && file.exists(converted)) return(converted)
+  if (file.exists(base)) return(base)
+  if (identical(label_mode, "gene_name") && file.exists(converted)) return(converted)
+  base
+}
+
+kallisto_metric_token <- function(metric) {
+  switch(
+    as.character(metric),
+    "tpm" = "tpm",
+    "est_counts" = "est_counts",
+    "TPM" = "tpm",
+    "Estimated counts" = "est_counts",
+    tolower(as.character(metric))
+  )
+}
+
+kallisto_saved_matrix_path <- function(metric = "tpm", label_mode = "target_id") {
+  token <- kallisto_metric_token(metric)
+  stem <- paste0("kallisto_", token, "_matrix")
+  converted <- file.path(counts_dir, paste0(stem, "_gene_name.txt"))
+  base <- file.path(counts_dir, paste0(stem, ".txt"))
+  if (identical(label_mode, "gene_name") && file.exists(converted)) return(converted)
+  if (file.exists(base)) return(base)
+  legacy <- file.path(kallisto_dir, "kallisto_transcript_matrix.tsv")
+  if (identical(token, "tpm") && file.exists(legacy)) return(legacy)
+  base
+}
+
+read_saved_count_matrix <- function(path) {
+  if (is.null(path) || !file.exists(path)) return(NULL)
+  safe_read_delim(path, check.names = FALSE, stringsAsFactors = FALSE)
+}
+
+gene_name_matrix_path <- function(path) {
+  sub("(\\.txt|\\.tsv)$", "_gene_name.txt", path)
+}
+
+looks_like_transcript_id <- function(ids) {
+  ids <- as.character(ids)
+  ids <- ids[!is.na(ids) & nzchar(ids)]
+  if (!length(ids)) return(FALSE)
+  ids <- head(ids, 500)
+  mean(grepl("^(ENST|ENSMUST|ENS[A-Z]*T)[0-9]+", ids)) >= 0.5
+}
+
+parse_kallisto_target_metadata <- function(target_id) {
+  target_id <- as.character(target_id)
+  parts <- strsplit(target_id, "\\|", fixed = FALSE)
+  data.frame(
+    target_id = target_id,
+    transcript_id = vapply(parts, function(x) if (length(x) >= 1) x[1] else NA_character_, character(1)),
+    gene_id = vapply(parts, function(x) if (length(x) >= 2) x[2] else NA_character_, character(1)),
+    transcript_name = vapply(parts, function(x) if (length(x) >= 5) x[5] else NA_character_, character(1)),
+    gene_name = vapply(parts, function(x) if (length(x) >= 6) x[6] else NA_character_, character(1)),
+    biotype = vapply(parts, function(x) if (length(x) >= 8) x[8] else NA_character_, character(1)),
+    stringsAsFactors = FALSE
+  )
 }
 
 collect_kallisto_filter_values <- function(sample_names, column_name) {
@@ -1328,10 +1410,11 @@ counts_subtabs <- c(
           selectInput("rsem_type", "Show", choices = c("Genes" = "genes", "Isoforms" = "isoforms"), selected = "genes", selectize = FALSE),
           selectInput("rsem_metric", "Metric", choices = c("TPM", "expected_count", "FPKM"), selected = "TPM", selectize = FALSE),
           selectInput("rsem_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id", selectize = FALSE),
+          uiOutput("rsem_convert_ui"),
           selectizeInput("rsem_query", "Select gene/transcript of interest", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
           actionButton("rsem_load_matrix", "Load RSEM matrix", class = "btn-primary"),
           tags$hr(),
-          helpText("Shows an RSEM matrix across all samples. Choose genes or isoforms, then display gene labels as Ensembl IDs or gene names using the local GTF.")
+          helpText("Loads saved RSEM matrices from the counts folder. Gene-name conversion writes a new matrix file beside the original.")
         ),
         mainPanel(
           h4("RSEM Matrix"),
@@ -1382,9 +1465,12 @@ counts_subtabs <- c(
           ),
           conditionalPanel(
             "input.kallisto_view_mode == 'matrix'",
-            selectInput("kallisto_filter_col", "Filter by", choices = kallisto_filter_columns, selected = "gene_symbol", selectize = FALSE),
+            selectInput("kallisto_matrix_metric", "Matrix", choices = c("TPM" = "tpm", "Estimated counts" = "est_counts"), selected = "tpm", selectize = FALSE),
+            selectInput("kallisto_label_mode", "Label", choices = c("Transcript ID" = "target_id", "Gene name" = "gene_name"), selected = "target_id", selectize = FALSE),
+            uiOutput("kallisto_convert_ui"),
+            selectInput("kallisto_filter_col", "Filter by", choices = c("All rows" = "all", "target_id", "gene_name", "transcript_id", "gene_id", "gene_symbol"), selected = "all", selectize = FALSE),
             selectizeInput("kallisto_filter_value", "Select value", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
-            uiOutput("kallisto_build_ui")
+            tags$div(class = "tiny-note", "Kallisto matrix view reads saved matrices from the counts folder.")
           ),
           actionButton("kallisto_load_table", "Load Kallisto table", class = "btn-primary"),
           tags$hr(),
@@ -2164,6 +2250,62 @@ server <- function(input, output, session) {
     NULL
   }
 
+  save_gene_name_matrix <- function(path, mode = c("rsem", "kallisto")) {
+    mode <- match.arg(mode)
+    df <- read_saved_count_matrix(path)
+    if (is.null(df) || !nrow(df)) {
+      return(list(ok = FALSE, message = "Matrix file was not found or was empty.", path = NA_character_))
+    }
+    if (grepl("_gene_name\\.txt$", basename(path))) {
+      return(list(ok = TRUE, message = "This matrix is already the gene-name version.", path = path))
+    }
+    out_file <- gene_name_matrix_path(path)
+    if (identical(mode, "kallisto")) {
+      id_col <- intersect(c("target_id", "transcript_id", "gene_id"), colnames(df))[1]
+      if (is.na(id_col)) id_col <- colnames(df)[1]
+      meta <- parse_kallisto_target_metadata(df[[id_col]])
+      if ("gene_symbol" %in% colnames(df)) meta$gene_name <- df$gene_symbol
+      if ("gene_name" %in% colnames(df)) meta$gene_name <- df$gene_name
+      if ("gene_id" %in% colnames(df)) meta$gene_id <- df$gene_id
+      if ("transcript_id" %in% colnames(df)) meta$transcript_id <- df$transcript_id
+      if ("transcript_name" %in% colnames(df)) meta$transcript_name <- df$transcript_name
+      if ("biotype" %in% colnames(df)) meta$biotype <- df$biotype
+      if (!any(!is.na(meta$gene_name) & nzchar(meta$gene_name)) && any(!is.na(meta$gene_id) & nzchar(meta$gene_id))) {
+        species <- detect_species_from_ids(meta$gene_id)
+        map_df <- get_gtf_map(species)
+        conv <- convert_gene_labels(meta$gene_id, map_df)
+        meta$gene_name <- conv$values
+      }
+      sample_cols <- setdiff(colnames(df), c(id_col, "target_id", "transcript_id", "gene_id", "gene_name", "gene_symbol", "transcript_name", "biotype"))
+      keep_meta <- c("gene_name", "transcript_id", "gene_id", "transcript_name", "biotype")
+      out <- cbind(meta[, keep_meta, drop = FALSE], df[, sample_cols, drop = FALSE])
+      mapped <- sum(!is.na(out$gene_name) & nzchar(out$gene_name) & out$gene_name != out$gene_id, na.rm = TRUE)
+      write.table(out, out_file, sep = "\t", quote = FALSE, row.names = FALSE)
+      return(list(ok = TRUE, message = sprintf("Saved Kallisto gene-name matrix (%s rows with gene names) to %s.", mapped, out_file), path = out_file))
+    }
+
+    gene_col <- intersect(c("gene_id", "Geneid"), colnames(df))[1]
+    if (is.na(gene_col)) gene_col <- colnames(df)[1]
+    ids <- as.character(df[[gene_col]])
+    species <- detect_species_from_ids(ids)
+    map_df <- get_gtf_map(species)
+    conv <- convert_gene_labels(ids, map_df)
+    mapped <- sum(!is.na(conv$values) & nzchar(conv$values) & conv$values != ids)
+    if (mapped == 0) {
+      return(list(ok = FALSE, message = "No Ensembl gene IDs were mapped to gene names from the local GTF.", path = NA_character_))
+    }
+    if ("transcript_id" %in% colnames(df)) {
+      df$gene_name <- conv$values
+      out <- df[, c("transcript_id", "gene_name", setdiff(colnames(df), c("transcript_id", "gene_name", gene_col))), drop = FALSE]
+    } else {
+      df[[gene_col]] <- conv$values
+      colnames(df)[match(gene_col, colnames(df))] <- "gene_name"
+      out <- df
+    }
+    write.table(out, out_file, sep = "\t", quote = FALSE, row.names = FALSE)
+    list(ok = TRUE, message = sprintf("Saved RSEM gene-name matrix (%s IDs mapped) to %s.", mapped, out_file), path = out_file)
+  }
+
   current_resource_prefix <- reactive({
     if (isTRUE(input$show_trimmed)) "fastqc_cutadapt_results" else "fastqc_results"
   })
@@ -2414,6 +2556,7 @@ server <- function(input, output, session) {
     rsem_matrix_cache <- reactiveValues()
     rsem_display_cache <- reactiveValues()
     rsem_label_status <- reactiveVal(NULL)
+    rsem_conversion_status <- reactiveVal(NULL)
     rsem_loaded <- reactiveVal(FALSE)
 
     observeEvent(input$rsem_load_matrix, {
@@ -2424,15 +2567,40 @@ server <- function(input, output, session) {
     observeEvent(list(input$rsem_type, input$rsem_metric, input$rsem_label_mode), {
       rsem_loaded(FALSE)
       rsem_label_status(NULL)
+      rsem_conversion_status(NULL)
       updateSelectizeInput(session, "rsem_query", choices = character(0), selected = character(0), server = TRUE)
+    }, ignoreInit = TRUE)
+
+    output$rsem_convert_ui <- renderUI({
+      req(input$rsem_type, input$rsem_metric)
+      base_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, "gene_id")
+      converted_path <- gene_name_matrix_path(base_path)
+      if (!file.exists(base_path)) {
+        return(tags$span(class = "tiny-note", "Saved RSEM matrix not found yet. Run the RSEM step first."))
+      }
+      if (file.exists(converted_path)) {
+        return(tags$span(class = "tiny-note", "Gene-name matrix saved in counts folder."))
+      }
+      actionButton("rsem_save_gene_names", "Save gene-name matrix")
+    })
+
+    observeEvent(input$rsem_save_gene_names, {
+      req(input$rsem_type, input$rsem_metric)
+      base_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, "gene_id")
+      res <- save_gene_name_matrix(base_path, "rsem")
+      rsem_conversion_status(res$message)
+      rsem_label_status(res$message)
+      rsem_matrix_cache[[base_path]] <- NULL
+      rsem_loaded(TRUE)
     }, ignoreInit = TRUE)
 
     get_rsem_matrix <- reactive({
       req(input$rsem_type, input$rsem_metric)
-      cache_key <- paste(input$rsem_type, input$rsem_metric, sep = "::")
+      matrix_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, value_or(input$rsem_label_mode, "gene_id"))
+      cache_key <- matrix_path
       cached <- rsem_matrix_cache[[cache_key]]
       if (is.null(cached)) {
-        cached <- build_rsem_matrix(samples, input$rsem_type, input$rsem_metric)
+        cached <- read_saved_count_matrix(matrix_path)
         rsem_matrix_cache[[cache_key]] <- cached
       }
       cached
@@ -2443,7 +2611,8 @@ server <- function(input, output, session) {
       raw_df <- get_rsem_matrix()
       req(!is.null(raw_df))
       label_mode <- value_or(input$rsem_label_mode, "gene_id")
-      cache_key <- paste(input$rsem_type, input$rsem_metric, label_mode, sep = "::")
+      matrix_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, label_mode)
+      cache_key <- paste(matrix_path, label_mode, sep = "::")
       cached <- rsem_display_cache[[cache_key]]
       if (!is.null(cached)) {
         rsem_label_status(attr(cached, "label_status", exact = TRUE))
@@ -2451,8 +2620,11 @@ server <- function(input, output, session) {
       }
 
       df <- raw_df
-      status_message <- NULL
-      if ("gene_id" %in% colnames(df)) {
+      status_message <- rsem_conversion_status()
+      if (is.null(status_message) || !nzchar(status_message)) {
+        status_message <- sprintf("Using saved RSEM matrix: %s", matrix_path)
+      }
+      if (!grepl("_gene_name\\.txt$", basename(matrix_path)) && "gene_id" %in% colnames(df)) {
         original_gene_id <- as.character(df$gene_id)
         if (identical(label_mode, "gene_name")) {
           if (looks_like_gene_id(original_gene_id)) {
@@ -2497,7 +2669,7 @@ server <- function(input, output, session) {
       }
       df <- rsem_display_df()
       if (is.null(df)) {
-        return(status_box("RSEM results have not been generated yet.", "warning"))
+        return(status_box("Saved RSEM matrix has not been generated yet. Run the RSEM step to build it in the counts folder.", "warning"))
       }
       msg <- rsem_label_status()
       if (is.null(msg) || !nzchar(msg)) return(NULL)
@@ -2569,6 +2741,7 @@ server <- function(input, output, session) {
       content = function(file) write_csv_download(safe_download_df(if (isTRUE(rsem_loaded())) rsem_table_df() else NULL), file)
     )
   } else {
+    output$rsem_convert_ui <- renderUI(NULL)
     output$rsem_status_ui <- renderUI({
       status_box("RSEM results have not been generated yet.", "warning")
     })
@@ -2858,7 +3031,7 @@ server <- function(input, output, session) {
       req(input$plot_compare_col)
       if (identical(input$plot_compare_col, "NA")) return(NULL)
       req(input$plot_treatment, input$plot_control)
-      df <- build_rsem_matrix(samples, data_type = "genes", metric = "TPM")
+      df <- read_saved_count_matrix(rsem_saved_matrix_path("genes", "TPM", "gene_id"))
       if (is.null(df)) return(NULL)
       keep_samples <- design_df$sample[design_df[[input$plot_compare_col]] %in% c(input$plot_treatment, input$plot_control)]
       keep_cols <- c("gene_id", intersect(keep_samples, colnames(df)))
@@ -3496,49 +3669,55 @@ server <- function(input, output, session) {
 
   if (kallisto_available) {
     kallisto_matrix_cache <- reactiveVal(NULL)
-    kallisto_matrix_loaded <- reactiveVal(FALSE)
-    kallisto_building <- reactiveVal(FALSE)
+    kallisto_matrix_cache_path <- reactiveVal(NULL)
+    kallisto_conversion_status <- reactiveVal(NULL)
     kallisto_table_loaded <- reactiveVal(FALSE)
 
     observeEvent(input$kallisto_load_table, {
       kallisto_table_loaded(TRUE)
     }, ignoreInit = TRUE)
 
-    observeEvent(list(input$kallisto_view_mode, input$kallisto_sample, input$kallisto_sample_filter_col, input$kallisto_filter_col), {
+    observeEvent(list(input$kallisto_view_mode, input$kallisto_sample, input$kallisto_sample_filter_col, input$kallisto_filter_col, input$kallisto_matrix_metric, input$kallisto_label_mode), {
       kallisto_table_loaded(FALSE)
+      kallisto_conversion_status(NULL)
     }, ignoreInit = TRUE)
 
     get_kallisto_matrix <- function() {
+      req(input$kallisto_matrix_metric)
+      matrix_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, value_or(input$kallisto_label_mode, "target_id"))
       cached <- kallisto_matrix_cache()
-      if (!is.null(cached)) return(cached)
-      if (!isTRUE(kallisto_matrix_loaded()) && file.exists(kallisto_matrix_path)) {
-        kallisto_matrix_loaded(TRUE)
-        cached <- read_kallisto_matrix()
+      if (!is.null(cached) && identical(kallisto_matrix_cache_path(), matrix_path)) return(cached)
+      if (file.exists(matrix_path)) {
+        cached <- read_saved_count_matrix(matrix_path)
         kallisto_matrix_cache(cached)
+        kallisto_matrix_cache_path(matrix_path)
         return(cached)
       }
-      kallisto_matrix_loaded(TRUE)
       NULL
     }
 
-    output$kallisto_build_ui <- renderUI({
-      if (!file.exists(kallisto_matrix_path) && is.null(kallisto_matrix_cache())) {
-        actionButton("build_kallisto_matrix_btn", "Build transcript matrix")
-      } else {
-        tags$span("Using saved transcript matrix.")
+    output$kallisto_convert_ui <- renderUI({
+      req(input$kallisto_matrix_metric)
+      base_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, "target_id")
+      converted_path <- gene_name_matrix_path(base_path)
+      if (!file.exists(base_path)) {
+        return(tags$span(class = "tiny-note", "Saved Kallisto matrix not found yet. Run the Kallisto step first."))
       }
+      if (file.exists(converted_path)) {
+        return(tags$span(class = "tiny-note", "Gene-name matrix saved in counts folder."))
+      }
+      actionButton("kallisto_save_gene_names", "Save gene-name matrix")
     })
 
-    observeEvent(input$build_kallisto_matrix_btn, {
-      if (isTRUE(kallisto_building()) || file.exists(kallisto_matrix_path) || !is.null(kallisto_matrix_cache())) return()
-      kallisto_building(TRUE)
-      showModal(modalDialog("Building transcript matrix...", footer = NULL, easyClose = FALSE))
-      built <- build_kallisto_matrix(kallisto_sample_names)
-      if (!is.null(built)) write_kallisto_matrix(built)
-      kallisto_matrix_cache(built)
-      kallisto_building(FALSE)
-      removeModal()
-    })
+    observeEvent(input$kallisto_save_gene_names, {
+      req(input$kallisto_matrix_metric)
+      base_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, "target_id")
+      res <- save_gene_name_matrix(base_path, "kallisto")
+      kallisto_conversion_status(res$message)
+      kallisto_matrix_cache(NULL)
+      kallisto_matrix_cache_path(NULL)
+      kallisto_table_loaded(TRUE)
+    }, ignoreInit = TRUE)
 
     output$kallisto_status_ui <- renderUI({
       if (!kallisto_available) {
@@ -3547,22 +3726,16 @@ server <- function(input, output, session) {
       if (!isTRUE(kallisto_table_loaded())) {
         return(status_box("Choose Kallisto settings, then click 'Load Kallisto table' to render the table.", "info"))
       }
-      if (identical(input$kallisto_view_mode, "matrix") && (file.exists(kallisto_matrix_path) || !is.null(kallisto_matrix_cache()))) {
-        return(status_box(sprintf("Using Kallisto transcript matrix: %s", kallisto_matrix_path), "info"))
+      if (identical(input$kallisto_view_mode, "matrix")) {
+        matrix_path <- kallisto_saved_matrix_path(value_or(input$kallisto_matrix_metric, "tpm"), value_or(input$kallisto_label_mode, "target_id"))
+        if (file.exists(matrix_path)) {
+          msg <- kallisto_conversion_status()
+          if (is.null(msg) || !nzchar(msg)) msg <- sprintf("Using saved Kallisto matrix: %s", matrix_path)
+          return(status_box(msg, "info"))
+        }
+        return(status_box("Saved Kallisto matrix has not been generated yet. Run the Kallisto step to build it in the counts folder.", "warning"))
       }
-      if (identical(input$kallisto_view_mode, "matrix") && !file.exists(kallisto_matrix_path) && is.null(kallisto_matrix_cache())) {
-        tags$div(
-          style = "margin-bottom: 12px; padding: 10px 12px; background: #fff7e6; border: 1px solid #f0c36d; border-radius: 6px;",
-          "Click 'Build transcript matrix' to load the joined transcript table across all samples."
-        )
-      } else if (isTRUE(kallisto_building()) && identical(input$kallisto_view_mode, "matrix")) {
-        tags$div(
-          style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-          "Building transcript matrix..."
-        )
-      } else {
-        NULL
-      }
+      NULL
     })
 
     observe({
@@ -3601,7 +3774,7 @@ server <- function(input, output, session) {
       req(isTRUE(kallisto_table_loaded()))
       req(input$kallisto_filter_col)
       matrix_df <- get_kallisto_matrix()
-      if (is.null(matrix_df) || !(input$kallisto_filter_col %in% colnames(matrix_df))) {
+      if (identical(input$kallisto_filter_col, "all") || is.null(matrix_df) || !(input$kallisto_filter_col %in% colnames(matrix_df))) {
         vals <- character(0)
       } else {
         vals <- sort(unique(as.character(matrix_df[[input$kallisto_filter_col]])))
@@ -3641,7 +3814,7 @@ server <- function(input, output, session) {
       } else {
         kallisto_matrix_df <- get_kallisto_matrix()
         req(!is.null(kallisto_matrix_df))
-        if (is.null(input$kallisto_filter_value) || !nzchar(trimws(input$kallisto_filter_value))) {
+        if (identical(input$kallisto_filter_col, "all") || is.null(input$kallisto_filter_value) || !nzchar(trimws(input$kallisto_filter_value)) || !(input$kallisto_filter_col %in% colnames(kallisto_matrix_df))) {
           show_df <- kallisto_matrix_df
         } else {
           show_df <- kallisto_matrix_df[
@@ -3687,6 +3860,7 @@ server <- function(input, output, session) {
       content = function(file) write_csv_download(safe_download_df(if (isTRUE(kallisto_table_loaded())) kallisto_table_df() else NULL), file)
     )
   } else {
+    output$kallisto_convert_ui <- renderUI(NULL)
     output$kallisto_status_ui <- renderUI({
       status_box("Kallisto transcript abundance has not been generated yet.", "warning")
     })
