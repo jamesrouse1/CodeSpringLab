@@ -13,15 +13,24 @@ import glob
 import signal
 import urllib.parse
 import urllib.request
-from IPython.display import IFrame,clear_output,HTML,Image
+try:
+    from IPython.display import IFrame,clear_output,HTML,Image
+except ImportError:
+    IFrame = clear_output = HTML = Image = None
 import shutil
 import gzip
-import seaborn as sns
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None
 import matplotlib.pyplot as plt
 from pandas import DataFrame
 import gseapy as gp
 from gseapy import GSEA,dotplot,heatmap
-import imgkit
+try:
+    import imgkit
+except ImportError:
+    imgkit = None
 
 config = importlib.reload(config)
 
