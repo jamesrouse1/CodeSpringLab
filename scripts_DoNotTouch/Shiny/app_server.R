@@ -1575,8 +1575,8 @@ app_tabs <- list(
             selected = if ("treatment" %in% comparison_columns) "treatment" else "__none__", selectize = FALSE),
           uiOutput("pca_include_values_ui"),
           checkboxInput("pca_label_samples", "Label samples", value = TRUE),
-          numericInput("pca_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
-          numericInput("pca_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50)
+          numericInput("pca_plot_width", "Display width (px)", value = 800, min = 400, max = 2400, step = 50),
+          numericInput("pca_plot_height", "Display height (px)", value = 600, min = 300, max = 2400, step = 50)
         ),
         conditionalPanel(
           "input.plot_subtab == 'Volcano'",
@@ -1616,8 +1616,8 @@ app_tabs <- list(
             selected = "sans", selectize = FALSE),
           checkboxInput("volcano_show_thresholds", "Show cutoff lines", value = TRUE),
           checkboxInput("volcano_show_grid", "Show grid", value = TRUE),
-          numericInput("volcano_plot_width", "Display width (px)", value = 900, min = 400, max = 2400, step = 50),
-          numericInput("volcano_plot_height", "Display height (px)", value = 700, min = 300, max = 2400, step = 50),
+          numericInput("volcano_plot_width", "Display width (px)", value = 800, min = 400, max = 2400, step = 50),
+          numericInput("volcano_plot_height", "Display height (px)", value = 600, min = 300, max = 2400, step = 50),
           selectInput(
             "volcano_save_mode",
             "Saved image size",
@@ -1717,8 +1717,8 @@ app_tabs <- list(
         uiOutput("plot_status_ui"),
         tabsetPanel(
           id = "plot_subtab",
-          tabPanel("PCA", plotOutput("pca_plot", height = "700px")),
-          tabPanel("Volcano", textInput("volcano_filename", "Filename", value = ""), actionButton("save_volcano_btn", "Save volcano plot"), plotOutput("deg_volcano_plot", height = "700px")),
+          tabPanel("PCA", plotOutput("pca_plot", height = "620px")),
+          tabPanel("Volcano", textInput("volcano_filename", "Filename", value = ""), actionButton("save_volcano_btn", "Save volcano plot"), plotOutput("deg_volcano_plot", height = "620px")),
           tabPanel("Heatmap", textInput("heatmap_filename", "Filename", value = ""), actionButton("save_heatmap_btn", "Save heatmap"), plotOutput("deg_heatmap_plot", height = "700px"))
         )
       )
