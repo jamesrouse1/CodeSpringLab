@@ -2058,6 +2058,40 @@ ui <- fluidPage(
         width: 100%;
         min-width: 1320px;
       }
+      .container-fluid {
+        max-width: 1920px;
+        padding: 10px 12px 18px 12px;
+      }
+      .main-tabs {
+        padding: 10px 12px 14px 12px;
+      }
+      .main-tabs > .tabbable > .nav-tabs {
+        margin-bottom: 8px;
+      }
+      .tab-content {
+        padding-top: 0;
+      }
+      .row > .col-sm-8,
+      .row > .col-sm-9,
+      .row > .col-md-8,
+      .row > .col-md-9 {
+        padding: 10px 12px;
+        border-radius: 14px;
+      }
+      .row > .col-sm-4 > .well,
+      .row > .col-sm-3 > .well,
+      .row > .col-md-4 > .well,
+      .row > .col-md-3 > .well {
+        padding: 12px 12px;
+        border-radius: 14px;
+      }
+      iframe, img, embed {
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(32, 56, 84, 0.08);
+      }
+      .shiny-plot-output {
+        max-width: 100%;
+      }
 
       /* Dropdown visibility hardening */
       .selectize-control,
