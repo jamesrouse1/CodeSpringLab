@@ -302,7 +302,7 @@ iframe_or_message <- function(path, resource_prefix, height = "calc(100vh - 210p
   tags$iframe(
     class = "qc-report-frame",
     src = file.path(resource_prefix, rel),
-    style = sprintf("width: 100%%; height: %s; min-height: 900px; border: 1px solid #d7e0ea;", height_css)
+    style = sprintf("width: 100%%; height: %s; min-height: 680px; border: 1px solid #d7e0ea;", height_css)
   )
 }
 
@@ -2056,7 +2056,8 @@ ui <- fluidPage(
       .qc-report-frame {
         display: block;
         width: 100%;
-        min-width: 1320px;
+        max-width: 100%;
+        min-width: 0;
       }
       .container-fluid {
         max-width: 1920px;
