@@ -806,11 +806,14 @@ format_gsea_table <- function(df) {
 }
 
 pathway_pdf_relpath <- function(treatment_value, control_value, pathway_name, heatmap = FALSE) {
-  fname <- if (heatmap) paste0(pathway_name, ".heatmap.pdf") else paste0(pathway_name, ".pdf")
-  rel <- file.path(gseapy_comparison_rel(treatment_value, control_value), "gsea", fname)
-  full <- file.path(gseapy_dir, rel)
-  if (!file.exists(full)) return(NULL)
-  file.path("gseapy_results", rel)
+  stems <- unique(c(pathway_name, sanitize_filename(pathway_name)))
+  suffix <- if (heatmap) ".heatmap.pdf" else ".pdf"
+  for (stem in stems[nzchar(stems)]) {
+    rel <- file.path(gseapy_comparison_rel(treatment_value, control_value), "gsea", paste0(stem, suffix))
+    full <- file.path(gseapy_dir, rel)
+    if (file.exists(full)) return(file.path("gseapy_results", rel))
+  }
+  NULL
 }
 
 pdf_render_relpath <- function(resource_rel) {
