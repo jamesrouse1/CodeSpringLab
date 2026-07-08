@@ -1,6 +1,5 @@
-
-import config
 import config_store
+import types
 import pandas as pd
 import os
 import time
@@ -32,7 +31,18 @@ try:
 except ImportError:
     imgkit = None
 
-config = importlib.reload(config)
+def _load_config_module():
+    try:
+        cfg = importlib.import_module("config")
+        return importlib.reload(cfg)
+    except ImportError:
+        return types.SimpleNamespace(
+            project_name="example_dataset",
+            parameters_exist="n",
+            results_directory="../../csl_results/"
+        )
+
+config = _load_config_module()
 
 project_name=getattr(config, 'project_name', 'example_dataset')
 param=getattr(config, 'parameters_exist', 'n')
@@ -107,7 +117,7 @@ def _save_config_updates(**updates):
     config_store.save_config_values(values, analysis_type=_analysis_type())
 
     importlib.invalidate_caches()
-    cfg = importlib.reload(config)
+    cfg = _load_config_module()
     project_name = getattr(cfg, "project_name", project_name)
     param = getattr(cfg, "parameters_exist", param)
     res_dir = getattr(cfg, "results_directory", res_dir)
@@ -731,7 +741,7 @@ def filetransfer_Prep():
         inpath_design=_config_value("inpath_design")
         scriptpath_listdir=_config_value("scriptpath_listdir")
         scriptpath_copy=_config_value("scriptpath_copy")
-        print("Using saved project setup from config.py.")
+        print("Using saved project setup from the project config.")
 
     #command = "sbatch "+scriptpath_listdir+" "+read_path_original+" "+project_name
     ##command = "source "+scriptpath_listdir+" "+read_path_original+" "+project_name
@@ -1533,7 +1543,7 @@ def shiny_Prep(data_dir=None, inpath_design=None):
     global project_name
     global res_dir
 
-    cfg = importlib.reload(config)
+    cfg = _load_config_module()
     project_name = getattr(cfg, "project_name", project_name)
     res_dir = getattr(cfg, "results_directory", res_dir)
 
