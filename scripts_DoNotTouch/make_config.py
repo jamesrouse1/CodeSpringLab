@@ -40,10 +40,20 @@ def _new_project_values(analysis_type, active_values):
         if candidate_values.get("parameters_exist", "n") == "n":
             if len(str(candidate_values.get("genome", "")).strip()) == 0:
                 print("No saved genome was found for this existing project.")
-                print("Specify genome index: 0 human, 1 mouse")
+                print("Specify species index: 0 human, 1 mouse")
                 genome_list = ["human", "mouse"]
                 genome_index = int(input())
                 candidate_values["genome"] = genome_list[genome_index]
+            if len(str(candidate_values.get("genome_version", "")).strip()) == 0:
+                genome = str(candidate_values.get("genome", "mouse")).strip().lower()
+                if genome == "human":
+                    print("Specify human genome/reference index: 0 human_gencode50, 1 human_gencode42")
+                    genome_versions = ["human_gencode50", "human_gencode42"]
+                else:
+                    print("Specify mouse genome/reference index: 0 mouse_gencodeM39, 1 mouse_gencodeM29")
+                    genome_versions = ["mouse_gencodeM39", "mouse_gencodeM29"]
+                genome_version_index = int(input())
+                candidate_values["genome_version"] = genome_versions[genome_version_index]
             if len(str(candidate_values.get("inpath_design", "")).strip()) == 0:
                 print("No design_matrix.txt was found under this project.")
                 print("Paste the path to design_matrix.txt or its folder:")

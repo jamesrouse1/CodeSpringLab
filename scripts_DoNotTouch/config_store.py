@@ -6,7 +6,7 @@ import re
 
 CONFIG_KEYS = [
     "analysis_type", "project_name", "parameters_exist", "results_directory",
-    "read_path_original", "read_path_destination", "genome", "pairing",
+    "read_path_original", "read_path_destination", "genome", "genome_version", "pairing",
     "inpath_design", "scriptpath_listdir", "scriptpath_copy",
     "feature", "featurecounts_feature", "outpath_counts", "outpath_deseq2",
     "refcond", "compared", "redundant", "geneset",

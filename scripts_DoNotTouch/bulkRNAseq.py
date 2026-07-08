@@ -297,6 +297,108 @@ def _normalize_yes_no(value):
         return "n"
     return value
 
+_RNASEQ_REFERENCE_CATALOG = {
+    "human": {
+        "human_gencode50": {
+            "label": "Human GRCh38 / GENCODE v50",
+            "star_index": "/grid/bsr/data/data/utama/genome/human_gencode50/STAR_index",
+            "kallisto_index": "/grid/bsr/data/data/utama/genome/human_gencode50/gencode.v50.transcripts.idx",
+            "rsem_index": "/grid/bsr/data/data/utama/genome/human_gencode50/rsem_index/rsem",
+            "gtf": "/grid/bsr/data/data/utama/genome/human_gencode50/gencode.v50.primary_assembly.annotation.gtf",
+            "strand_bed": "/grid/bsr/data/data/utama/genome/human_gencode50/gencode.v50.annotation_forStrandDetect_geneID.bed"
+        },
+        "human_gencode42": {
+            "label": "Human hg38 / GENCODE v42 legacy",
+            "star_index": "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/hg38_p13_gencode_rel42_all_starindex",
+            "kallisto_index": "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v45.transcripts.idx",
+            "rsem_index": "/grid/bsr/data/data/utama/genome/human_rsem_index_star_gencode_hg38_p13_rel42_v2.7.2b/human_gencode",
+            "gtf": "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf",
+            "strand_bed": "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation_forStrandDetect_geneID.bed"
+        }
+    },
+    "mouse": {
+        "mouse_gencodeM39": {
+            "label": "Mouse GRCm39 / GENCODE M39",
+            "star_index": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/STAR_index",
+            "kallisto_index": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.transcripts.idx",
+            "rsem_index": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/rsem_index/rsem",
+            "gtf": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.primary_assembly.annotation.gtf",
+            "strand_bed": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.annotation_forStrandDetect_geneID.bed"
+        },
+        "mouse_gencodeM29": {
+            "label": "Mouse GRCm39 / GENCODE M29 legacy",
+            "star_index": "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/GRCm39_M29_gencode_starindex",
+            "kallisto_index": "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.transcripts.idx",
+            "rsem_index": "/grid/bsr/data/data/utama/genome/mouse_rsem_index_star_gencode_GRCm39_M29_v2.7.10a/mouse_gencode",
+            "gtf": "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation.gtf",
+            "strand_bed": "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation_forStrandDetect_geneID.bed"
+        }
+    }
+}
+
+def _genome_species(genome=None):
+    genome = str(genome if genome is not None else _config_value("genome", "mouse")).strip().lower()
+    if genome in ["human", "mouse"]:
+        return genome
+    if genome.startswith("human"):
+        return "human"
+    if genome.startswith("mouse"):
+        return "mouse"
+    return "mouse"
+
+def _reference_key(genome=None, genome_version=None):
+    species = _genome_species(genome)
+    key = str(genome_version if genome_version is not None else _config_value("genome_version", "")).strip()
+    if key in _RNASEQ_REFERENCE_CATALOG[species]:
+        return key
+    genome_key = str(genome if genome is not None else _config_value("genome", "")).strip()
+    if genome_key in _RNASEQ_REFERENCE_CATALOG[species]:
+        return genome_key
+    if species == "human":
+        return "human_gencode42"
+    return "mouse_gencodeM29"
+
+def _rnaseq_reference(genome=None, genome_version=None):
+    species = _genome_species(genome)
+    key = _reference_key(genome, genome_version)
+    ref = dict(_RNASEQ_REFERENCE_CATALOG[species][key])
+    ref["species"] = species
+    ref["key"] = key
+    return ref
+
+def _prompt_genome_reference():
+    print("==================================")
+    print("Select species:")
+    species_list = pd.Series(["human", "mouse"])
+    print("Index")
+    print(species_list)
+    print("==================================")
+    print("Specify the index to the species:(e.g 0)")
+    print("\033[91m"+"If you want to use our example dataset, type the number"+"\033[94m"+" 1"+"\x1b[0m")
+    species = species_list[int(input())]
+
+    refs = _RNASEQ_REFERENCE_CATALOG[species]
+    ref_keys = list(refs.keys())
+    ref_labels = pd.Series([refs[key]["label"] for key in ref_keys])
+    print("==================================")
+    print("Select genome/reference version:")
+    print("Index")
+    print(ref_labels)
+    print("==================================")
+    print("Specify the index to the genome/reference version:(e.g 0)")
+    genome_version = ref_keys[int(input())]
+    print("Using reference: "+refs[genome_version]["label"])
+    return species, genome_version
+
+def _saved_or_prompt_genome_reference():
+    genome = str(_config_value("genome", "")).strip()
+    genome_version = str(_config_value("genome_version", "")).strip()
+    if len(genome) > 0 and len(genome_version) > 0:
+        ref = _rnaseq_reference(genome, genome_version)
+        print("Using saved RNA-seq reference: "+ref["label"])
+        return ref["species"], ref["key"]
+    return _prompt_genome_reference()
+
 _FASTQ_SUFFIXES = [".fastq.gz", ".fq.gz", ".fastq", ".fq"]
 
 def _fastq_files(folder):
@@ -566,16 +668,7 @@ def filetransfer_Prep():
 
         inpath_design = _prompt_design_matrix_for_new_rna_project(read_path_original, pairing)
 
-        print("==================================")
-        print("Here's the list of available genomes:")
-        genome_list = pd.Series(['human','mouse'])
-        print("Index")
-        print(genome_list)
-        print("==================================")
-        print("Specify the index to the genome:(e.g 0)")
-        print(red+"If you want to use our example dataset, type the number"+blue+" 1"+reset)
-        genome_index = int(input())
-        genome = genome_list[genome_index]
+        genome, genome_version = _prompt_genome_reference()
 
         print("==================================")
         print("Do you want to copy your fastq files to your home folder? Only recommended if the files are not in your lab/home folder yet or they will be removed in the near future:(y/n)")
@@ -605,6 +698,7 @@ def filetransfer_Prep():
                              read_path_original=read_path_original,
                              read_path_destination=read_path_destination,
                              genome=genome,
+                             genome_version=genome_version,
                              pairing=pairing,
                              inpath_design=inpath_design,
                              scriptpath_listdir=scriptpath_listdir,
@@ -944,10 +1038,10 @@ def star_Prep(genome,pairing,read_dir,inpath_design):
 
     print("STAR alignment results will be stored in "+res_dir+project_name+"/data/star/")
     
-    if genome == 'mouse':
-        genome_index_path = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/GRCm39_M29_gencode_starindex"
-    elif genome == 'human':
-        genome_index_path = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/hg38_p13_gencode_rel42_all_starindex"
+    ref = _rnaseq_reference(genome)
+    genome = ref["species"]
+    genome_index_path = ref["star_index"]
+    print("Using STAR reference: "+ref["label"])
     
     read1_list, read2_list = _design_fastq_lists(inpath_design, read_dir, pairing, use_trimmed=(usetrim == 'y'))
     out_prefix_list = out_dir+prefix+'/'+prefix
@@ -957,17 +1051,17 @@ def star_Prep(genome,pairing,read_dir,inpath_design):
     else:
         scriptpath_star = '../scripts_DoNotTouch/STAR/qsub_star_SE.sh'
 
-    _save_config_updates(genome=genome, pairing=pairing, inpath_design=inpath_design, read_path_destination=read_dir, out_dir_star=out_dir)
+    _save_config_updates(genome=genome, genome_version=ref["key"], pairing=pairing, inpath_design=inpath_design, read_path_destination=read_dir, out_dir_star=out_dir)
     return genome_index_path,read1_list,read2_list,out_prefix_list,out_dir,scriptpath_star
 
 def star_PrepDirect():
     
-    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    genome, genome_version = _saved_or_prompt_genome_reference()
     pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
     read_path_destination = _saved_or_prompt("read_path_destination",
                                              "Specify the path to fastq folder used for alignment:",
                                              default=res_dir+project_name+"/data/fastq/")
-    _save_config_updates(genome=genome, pairing=pairing, read_path_destination=read_path_destination)
+    _save_config_updates(genome=genome, genome_version=genome_version, pairing=pairing, read_path_destination=read_path_destination)
     return genome,pairing,_with_slash(read_path_destination)
 
 def star_RunAlignment(genome_index_path,read1_list,read2_list,out_prefix_list,out_dir,scriptpath_star):
@@ -1043,10 +1137,10 @@ def kallisto_Prep(genome,pairing,read_dir,inpath_design):
 
     print("Kallisto pseudo-alignment results will be stored in "+res_dir+project_name+"/data/kallisto/")
     
-    if genome == 'mouse':
-        genome_index_path = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.transcripts.idx"
-    elif genome == 'human':
-        genome_index_path = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v45.transcripts.idx"
+    ref = _rnaseq_reference(genome)
+    genome = ref["species"]
+    genome_index_path = ref["kallisto_index"]
+    print("Using kallisto reference: "+ref["label"])
     
     read1_list, read2_list = _design_fastq_lists(inpath_design, read_dir, pairing, use_trimmed=(usetrim == 'y'))
     out_prefix_list = out_dir_kal+prefix+'/'
@@ -1056,17 +1150,17 @@ def kallisto_Prep(genome,pairing,read_dir,inpath_design):
     else:
         scriptpath_kallisto = '../scripts_DoNotTouch/Kallisto/qsub_kallisto_SE.sh'
 
-    _save_config_updates(genome=genome, pairing=pairing, inpath_design=inpath_design, read_path_destination=read_dir, out_dir_kallisto=out_dir_kal, feature='gene_id')
+    _save_config_updates(genome=genome, genome_version=ref["key"], pairing=pairing, inpath_design=inpath_design, read_path_destination=read_dir, out_dir_kallisto=out_dir_kal, feature='gene_id')
     return genome_index_path,read1_list,read2_list,out_prefix_list,out_dir_kal,scriptpath_kallisto
 
 def kallisto_PrepDirect():
     
-    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    genome, genome_version = _saved_or_prompt_genome_reference()
     pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
     read_path_destination = _saved_or_prompt("read_path_destination",
                                              "Specify the path to fastq folder used for alignment:",
                                              default=res_dir+project_name+"/data/fastq/")
-    _save_config_updates(genome=genome, pairing=pairing, read_path_destination=read_path_destination)
+    _save_config_updates(genome=genome, genome_version=genome_version, pairing=pairing, read_path_destination=read_path_destination)
     return genome,pairing,_with_slash(read_path_destination)
 
 def kallisto_RunAlignment(genome_index_path,read1_list,read2_list,out_prefix_list,out_dir_kal,scriptpath_kallisto):
@@ -1150,12 +1244,11 @@ def featurecounts_Prep(genome,out_dir,pairing):
     for i in range(len(prefix)):
         os.makedirs(count_dir+prefix[i],exist_ok=True)
     
-    if genome == 'mouse':
-        GTF = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation.gtf"
-        strandBED = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation_forStrandDetect_geneID.bed"
-    elif genome == 'human':
-        GTF = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf"
-        strandBED = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation_forStrandDetect_geneID.bed"
+    ref = _rnaseq_reference(genome)
+    genome = ref["species"]
+    GTF = ref["gtf"]
+    strandBED = ref["strand_bed"]
+    print("Using featureCounts reference: "+ref["label"])
     
     if pairing == "y":
         scriptpath_featurecounts = '../scripts_DoNotTouch/featureCounts/qsub_featurecounts_PE.sh'
@@ -1168,6 +1261,7 @@ def featurecounts_Prep(genome,out_dir,pairing):
     bam_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bam'
 
     _save_config_updates(genome=genome,
+                         genome_version=ref["key"],
                          pairing=pairing,
                          out_dir_star=out_dir,
                          out_dir_featurecounts=count_dir,
@@ -1176,12 +1270,12 @@ def featurecounts_Prep(genome,out_dir,pairing):
 
 def featurecounts_PrepDirect():
     
-    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    genome, genome_version = _saved_or_prompt_genome_reference()
     pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
     out_dir = _saved_or_prompt("out_dir_star",
                                "Specify the path to alignment folder used for quantification:",
                                default=res_dir+project_name+"/data/star/")
-    _save_config_updates(genome=genome, pairing=pairing, out_dir_star=out_dir)
+    _save_config_updates(genome=genome, genome_version=genome_version, pairing=pairing, out_dir_star=out_dir)
     return genome,pairing,_with_slash(out_dir)
 
 def featurecounts_RunQuantification(scriptpath_featurecounts,GTF,bam_list,count_prefix_list,feature,strandBED):
@@ -1248,12 +1342,11 @@ def rsem_Prep(genome,out_dir,pairing):
     for i in range(len(prefix)):
         os.makedirs(count_dir+prefix[i],exist_ok=True)
     
-    if genome == 'mouse':
-        rsem_index = "/grid/bsr/data/data/utama/genome/mouse_rsem_index_star_gencode_GRCm39_M29_v2.7.10a/mouse_gencode"
-        strandBED = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation_forStrandDetect_geneID.bed"
-    elif genome == 'human':
-        rsem_index = "/grid/bsr/data/data/utama/genome/human_rsem_index_star_gencode_hg38_p13_rel42_v2.7.2b/human_gencode"
-        strandBED = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation_forStrandDetect_geneID.bed"
+    ref = _rnaseq_reference(genome)
+    genome = ref["species"]
+    rsem_index = ref["rsem_index"]
+    strandBED = ref["strand_bed"]
+    print("Using RSEM reference: "+ref["label"])
     
     if pairing == "y":
         scriptpath_rsem = '../scripts_DoNotTouch/RSEM/qsub_RSEM_PE.sh'
@@ -1266,17 +1359,17 @@ def rsem_Prep(genome,out_dir,pairing):
     bam_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bam'
     bamTranscript_list = out_dir+prefix+'/'+prefix+'Aligned.toTranscriptome.out.bam'
 
-    _save_config_updates(genome=genome, pairing=pairing, out_dir_star=out_dir, out_dir_rsem=count_dir, feature=feature)
+    _save_config_updates(genome=genome, genome_version=ref["key"], pairing=pairing, out_dir_star=out_dir, out_dir_rsem=count_dir, feature=feature)
     return scriptpath_rsem,rsem_index,bam_list,count_prefix_list,prefix,feature,strandBED,bamTranscript_list
 
 def rsem_PrepDirect():
     
-    genome = _saved_or_prompt("genome", "Specify genome:(e.g human, mouse, etc)")
+    genome, genome_version = _saved_or_prompt_genome_reference()
     pairing = _saved_or_prompt("pairing", "Are the reads paired-end:(e.g y/n)")
     out_dir = _saved_or_prompt("out_dir_star",
                                "Specify the path to alignment folder used for quantification:",
                                default=res_dir+project_name+"/data/star/")
-    _save_config_updates(genome=genome, pairing=pairing, out_dir_star=out_dir)
+    _save_config_updates(genome=genome, genome_version=genome_version, pairing=pairing, out_dir_star=out_dir)
     return genome,pairing,_with_slash(out_dir)
 
 def rsem_RunQuantification(scriptpath_rsem,rsem_index,bam_list,count_prefix_list,feature,strandBED,bamTranscript_list):
@@ -2027,15 +2120,21 @@ def _default_gtf_paths(genome):
     paths = []
     if genome == "human":
         env_path = os.environ.get("CSL_HUMAN_GTF", "")
+        selected_gtf = _rnaseq_reference("human").get("gtf", "")
         paths.extend([
             env_path,
+            selected_gtf,
+            "/grid/bsr/data/data/utama/genome/human_gencode50/gencode.v50.primary_assembly.annotation.gtf",
             "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf",
             "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.annotation.gtf",
         ])
     elif genome == "mouse":
         env_path = os.environ.get("CSL_MOUSE_GTF", "")
+        selected_gtf = _rnaseq_reference("mouse").get("gtf", "")
         paths.extend([
             env_path,
+            selected_gtf,
+            "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.primary_assembly.annotation.gtf",
             "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation.gtf",
             "/grid/bsr/data/data/utama/genome/mm39_gencode/gencode.vM29.annotation.gtf",
         ])
