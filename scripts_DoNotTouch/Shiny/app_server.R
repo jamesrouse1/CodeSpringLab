@@ -2823,7 +2823,7 @@ server <- function(input, output, session) {
       if (identical(featurecounts_raw_label_mode(), "gene_name")) {
         tags$span(class = "tiny-note", "featureCounts was run with gene_name; using gene names directly.")
       } else if (file.exists(aggregated_path)) {
-        tags$span(class = "tiny-note", "Using saved duplicate-combined gene-name count matrix.")
+        tags$span(class = "tiny-note", "Using saved gene-name count matrix.")
       } else if (file.exists(converted_path)) {
         tags$span(class = "tiny-note", "Using saved gene-name count matrix.")
       } else {
@@ -2874,11 +2874,11 @@ server <- function(input, output, session) {
       tags$div(
         style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
         if (identical(featurecounts_raw_label_mode(), "gene_name") && file.exists(aggregated_path)) {
-          sprintf("featureCounts was run with gene_name; showing saved duplicate-combined gene-name counts: %s", aggregated_path)
+          "Showing gene-name counts."
         } else if (file.exists(aggregated_path)) {
-          sprintf("Showing saved duplicate-combined gene-name counts: %s", aggregated_path)
+          "Showing gene-name counts."
         } else if (file.exists(converted_path)) {
-          sprintf("Showing saved gene-name counts: %s", converted_path)
+          "Showing gene-name counts."
         } else {
           "Gene-name counts could not be saved from the current raw count matrix."
         }
