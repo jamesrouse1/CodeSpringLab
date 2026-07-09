@@ -505,6 +505,28 @@ def _clean_sample_name(sample):
     sample = re.sub(r"[^A-Za-z0-9_]+", "_", str(sample).strip()).strip("_")
     return sample or "sample"
 
+def _sample_log_args(tool, sample):
+    global project_name
+    global res_dir
+    log_dir = os.path.join(res_dir, project_name, "log")
+    os.makedirs(log_dir, exist_ok=True)
+    tool = _clean_sample_name(tool)
+    sample = _clean_sample_name(sample)
+    stdout_path = os.path.join(log_dir, "output_"+tool+"_"+sample+".txt")
+    stderr_path = os.path.join(log_dir, "error_"+tool+"_"+sample+".txt")
+    open(stdout_path, "w").close()
+    open(stderr_path, "w").close()
+    return "-e "+stderr_path, "-o "+stdout_path
+
+def _sample_from_path(path):
+    base = os.path.basename(os.path.normpath(str(path)))
+    for suffix in ["Aligned.sortedByCoord.out.bam", "Aligned.toTranscriptome.out.bam", "_counts.txt", ".genes.results", ".isoforms.results"]:
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+    if base.endswith(".fastq.gz"):
+        base = _fastq_sample_stem(base)
+    return _clean_sample_name(base)
+
 def _unique_sample_name(sample, used_samples):
     sample = _clean_sample_name(sample)
     if sample not in used_samples:
@@ -895,8 +917,7 @@ def fastqc_RunQC(readlist,outdir_fastqc,read_path_destination,scriptpath_fastqc)
     
     jobid = []
     for file in readlist:
-        stderr = "-e "+res_dir+project_name+"/log/error_fastQC.txt"
-        stdout = "-o "+res_dir+project_name+"/log/output_fastQC.txt"
+        stderr, stdout = _sample_log_args("fastQC", _sample_from_path(file))
         command = "sbatch "+stderr+" "+stdout+" "+scriptpath_fastqc+" "+read_path_destination+file+" "+outdir_fastqc+"/."+" "+project_name
         #command = "source "+scriptpath_fastqc+" "+read_path_destination+file+" "+outdir_fastqc+"/."+" "+project_name 
         job = os.popen(command).read().splitlines()
@@ -1018,8 +1039,7 @@ def cutadapt_RunTrimming(adapter,adapter2,minlen,read1_list,read2_list,trimmed1_
     
     jobid = []
     for i in range(len(read1_list)):
-        stderr = "-e "+res_dir+project_name+"/log/error_cutadapt.txt"
-        stdout = "-o "+res_dir+project_name+"/log/output_cutadapt.txt"
+        stderr, stdout = _sample_log_args("cutadapt", _sample_from_path(read1_list[i]))
         command = "sbatch "+stderr+" "+stdout+" "+scriptpath_cutadapt+" "+minlen+" "+adapter+" "+adapter2+" "+trimmed1_list[i]+" "+trimmed2_list[i]+" "+read1_list[i]+" "+read2_list[i]+" "+project_name
         #command = "source "+scriptpath_cutadapt+" "+minlen+" "+adapter+" "+adapter2+" "+trimmed1_list[i]+" "+trimmed2_list[i]+" "+read1_list[i]+" "+read2_list[i]+" "+project_name 
         job = os.popen(command).read().splitlines()
@@ -1090,8 +1110,7 @@ def star_RunAlignment(genome_index_path,read1_list,read2_list,out_prefix_list,ou
     
     jobid = []
     for i in range(len(out_prefix_list)):
-        stderr = "-e "+res_dir+project_name+"/log/error_star.txt"
-        stdout = "-o "+res_dir+project_name+"/log/output_star.txt"
+        stderr, stdout = _sample_log_args("star", _sample_from_path(out_prefix_list[i]))
         command = "sbatch "+stderr+" "+stdout+" "+scriptpath_star+" "+out_prefix_list[i]+" "+genome_index_path+" "+read1_list[i]+" "+read2_list[i]+" "+project_name
         #command = "source "+scriptpath_star+" "+out_prefix_list[i]+" "+genome_index_path+" "+read1_list[i]+" "+read2_list[i]+" "+project_name
         job = os.popen(command).read().splitlines()
@@ -1189,8 +1208,7 @@ def kallisto_RunAlignment(genome_index_path,read1_list,read2_list,out_prefix_lis
     
     jobid = []
     for i in range(len(out_prefix_list)):
-        stderr = "-e "+res_dir+project_name+"/log/error_kallisto.txt"
-        stdout = "-o "+res_dir+project_name+"/log/output_kallisto.txt"
+        stderr, stdout = _sample_log_args("kallisto", _sample_from_path(out_prefix_list[i]))
         command = "sbatch "+stderr+" "+stdout+" "+scriptpath_kallisto+" "+out_prefix_list[i]+" "+genome_index_path+" "+read1_list[i]+" "+read2_list[i]+" "+project_name
         #command = "source "+scriptpath_kallisto+" "+out_prefix_list[i]+" "+genome_index_path+" "+read1_list[i]+" "+read2_list[i]+" "+project_name
         job = os.popen(command).read().splitlines()
@@ -1304,8 +1322,7 @@ def featurecounts_RunQuantification(scriptpath_featurecounts,GTF,bam_list,count_
     
     jobid = []
     for i in range(len(bam_list)):
-        stderr = "-e "+res_dir+project_name+"/log/error_featurecounts.txt"
-        stdout = "-o "+res_dir+project_name+"/log/output_featurecounts.txt"
+        stderr, stdout = _sample_log_args("featurecounts", _sample_from_path(bam_list[i]))
         command = "sbatch "+stderr+" "+stdout+" "+scriptpath_featurecounts+" "+bam_list[i]+" "+GTF+" "+feature+" "+count_prefix_list[i]+" "+strandBED+" "+project_name
         #command = "source "+scriptpath_featurecounts+" "+bam_list[i]+" "+GTF+" "+feature+" "+count_prefix_list[i]+" "+strandBED+" "+project_name
         job = os.popen(command).read().splitlines()
@@ -1398,8 +1415,7 @@ def rsem_RunQuantification(scriptpath_rsem,rsem_index,bam_list,count_prefix_list
     
     jobid = []
     for i in range(len(bam_list)):
-        stderr = "-e "+res_dir+project_name+"/log/error_rsem.txt"
-        stdout = "-o "+res_dir+project_name+"/log/output_rsem.txt"
+        stderr, stdout = _sample_log_args("rsem", _sample_from_path(bam_list[i]))
         command = "sbatch "+stderr+" "+stdout+" "+scriptpath_rsem+" "+bam_list[i]+" "+rsem_index+" "+feature+" "+count_prefix_list[i]+" "+strandBED+" "+bamTranscript_list[i]+" "+project_name
         #command = "source "+scriptpath_rsem+" "+bam_list[i]+" "+rsem_index+" "+feature+" "+count_prefix_list[i]+" "+strandBED+" "+bamTranscript_list[i]+" "+project_name
         job = os.popen(command).read().splitlines()
@@ -1526,8 +1542,7 @@ def deseq2_RunDE(scriptpath_deseq2,Rpath_deseq2,inpath_counts,inpath_design,outp
     global res_dir
     
     jobid = []
-    stderr = "-e "+res_dir+project_name+"/log/error_deseq2.txt"
-    stdout = "-o "+res_dir+project_name+"/log/output_deseq2.txt"
+    stderr, stdout = _sample_log_args("deseq2", str(compared)+"_vs_"+str(refcond))
     command = "sbatch "+stderr+" "+stdout+" "+scriptpath_deseq2+" "+Rpath_deseq2+" "+inpath_counts+"/count_matrix.txt"+" "+inpath_design+"/design_matrix.txt"+" "+outpath+" "+refcond+" "+compared+" "+redundant+" "+project_name
     #command = "source "+scriptpath_deseq2+" "+Rpath_deseq2+" "+inpath_counts+"/count_matrix.txt"+" "+inpath_design+"/design_matrix.txt"+" "+outpath+" "+refcond+" "+compared+" "+redundant+" "+project_name
     job = os.popen(command).read().splitlines()
