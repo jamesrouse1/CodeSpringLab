@@ -1121,6 +1121,21 @@ normalized_counts_gene_name_path <- function(treatment_value, control_value) {
   normalized_counts_path(treatment_value, control_value, "gene_name")
 }
 
+normalized_counts_raw_label_mode <- function(treatment_value, control_value) {
+  path <- normalized_counts_path(treatment_value, control_value, "gene_id")
+  df <- read_normalized_counts(path)
+  if (is.null(df) || !"gene_label" %in% colnames(df) || !nrow(df)) return("gene_id")
+  if (looks_like_gene_id(df$gene_label)) "gene_id" else "gene_name"
+}
+
+normalized_counts_label_choices <- function(treatment_value, control_value) {
+  raw_mode <- normalized_counts_raw_label_mode(treatment_value, control_value)
+  if (identical(raw_mode, "gene_name") && !file.exists(normalized_counts_path(treatment_value, control_value, "gene_name"))) {
+    return(c("Gene name" = "gene_name"))
+  }
+  c("Gene ID" = "gene_id", "Gene name" = "gene_name")
+}
+
 available_deseq2_label_modes <- function(treatment_value = NULL, control_value = NULL) {
   choices <- c("Gene ID" = "gene_id", "Gene name" = "gene_name")
   keep <- vapply(unname(choices), function(mode) {
@@ -1617,11 +1632,11 @@ counts_subtabs <- c(
             selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
           uiOutput("deseq_treatment_ui"),
           uiOutput("deseq_control_ui"),
-          selectInput("deseq_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id", selectize = FALSE),
+          uiOutput("deseq_label_mode_ui"),
           selectizeInput("deseq_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
           uiOutput("deseq_convert_ui"),
           tags$hr(),
-          helpText("Shows DESeq2 normalized counts. Gene-name mode saves a duplicate-combined converted table beside the original normalized-counts file.")
+          helpText("Shows DESeq2 normalized counts for the selected comparison.")
         ),
         mainPanel(
           uiOutput("deseq_status_ui"),
@@ -3157,12 +3172,33 @@ server <- function(input, output, session) {
       selectInput("deseq_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
     })
 
+    output$deseq_label_mode_ui <- renderUI({
+      req(input$deseq_treatment, input$deseq_control)
+      choices <- normalized_counts_label_choices(input$deseq_treatment, input$deseq_control)
+      default_mode <- normalized_counts_raw_label_mode(input$deseq_treatment, input$deseq_control)
+      selected <- value_or(input$deseq_label_mode, default_mode)
+      if (!selected %in% unname(choices)) selected <- default_mode
+      if (!selected %in% unname(choices)) selected <- unname(choices)[1]
+      selectInput("deseq_label_mode", "Gene label", choices = choices, selected = selected, selectize = FALSE)
+    })
+
+    deseq_effective_label_mode <- reactive({
+      req(input$deseq_treatment, input$deseq_control)
+      selected <- value_or(input$deseq_label_mode, normalized_counts_raw_label_mode(input$deseq_treatment, input$deseq_control))
+      if (identical(selected, "gene_id") && identical(normalized_counts_raw_label_mode(input$deseq_treatment, input$deseq_control), "gene_name")) {
+        return("gene_name")
+      }
+      selected
+    })
+
     deseq_counts_raw_df <- reactive({
       req(input$deseq_compare_col)
       if (identical(input$deseq_compare_col, "NA")) return(NULL)
       req(input$deseq_treatment, input$deseq_control)
+      raw_mode <- normalized_counts_raw_label_mode(input$deseq_treatment, input$deseq_control)
+      mode <- deseq_effective_label_mode()
       path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_id")
-      if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) {
+      if (identical(mode, "gene_name") && !identical(raw_mode, "gene_name")) {
         gene_name_run_path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_name")
         if (file.exists(gene_name_run_path)) {
           path <- gene_name_run_path
@@ -3182,13 +3218,8 @@ server <- function(input, output, session) {
     output$deseq_convert_ui <- renderUI({
       df <- deseq_counts_raw_df()
       if (is.null(df)) return(NULL)
-      if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) {
-        path <- normalized_counts_gene_name_path(input$deseq_treatment, input$deseq_control)
-        if (file.exists(path)) {
-          tags$span(class = "tiny-note", "Using saved duplicate-combined gene-name normalized counts.")
-        } else {
-          tags$span(class = "tiny-note", "Using gene-name DESeq2 results when available.")
-        }
+      if (identical(deseq_effective_label_mode(), "gene_name")) {
+        tags$span(class = "tiny-note", "Showing gene-name normalized counts.")
       }
     })
 
@@ -3213,8 +3244,10 @@ server <- function(input, output, session) {
         ))
       }
       req(input$deseq_treatment, input$deseq_control)
+      raw_mode <- normalized_counts_raw_label_mode(input$deseq_treatment, input$deseq_control)
+      mode <- deseq_effective_label_mode()
       path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_id")
-      if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) {
+      if (identical(mode, "gene_name") && !identical(raw_mode, "gene_name")) {
         gene_name_run_path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_name")
         saved_path <- normalized_counts_gene_name_path(input$deseq_treatment, input$deseq_control)
         if (!file.exists(gene_name_run_path) && !file.exists(saved_path)) save_normalized_counts_gene_names(input$deseq_treatment, input$deseq_control)
@@ -3233,7 +3266,7 @@ server <- function(input, output, session) {
           input$deseq_treatment,
           input$deseq_control,
           input$deseq_compare_col,
-          if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"
+          if (identical(deseq_effective_label_mode(), "gene_name")) "gene names" else "gene IDs"
         )
       )
     })
