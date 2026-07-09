@@ -1552,7 +1552,7 @@ counts_subtabs <- list(
     sidebarLayout(
       sidebarPanel(
         selectizeInput("gene_query", "Search gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
-        selectInput("featurecounts_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id", selectize = FALSE),
+        uiOutput("featurecounts_label_mode_ui"),
         uiOutput("featurecounts_convert_ui"),
         tags$hr(),
         helpText("Search the raw featureCounts matrix. Gene-name mode saves a converted table in the counts folder and combines duplicate gene names by summing counts.")
@@ -2734,12 +2734,46 @@ server <- function(input, output, session) {
     content = function(file) write_csv_download(safe_download_df(featurecounts_sample_table_df()), file)
   )
 
+  featurecounts_raw_label_mode <- function() {
+    if (!count_matrix_available || !"Geneid" %in% colnames(count_matrix_nonzero_df)) return("gene_id")
+    if (looks_like_gene_id(count_matrix_nonzero_df$Geneid)) "gene_id" else "gene_name"
+  }
+
+  save_featurecounts_existing_gene_names <- function() {
+    out_path <- aggregated_gene_name_matrix_path(count_matrix_path)
+    if (file.exists(out_path)) {
+      return(list(ok = TRUE, message = sprintf("Using saved duplicate-combined gene-name count matrix: %s", out_path), path = out_path))
+    }
+    df <- count_matrix_nonzero_df
+    if (is.null(df) || !nrow(df) || !"Geneid" %in% colnames(df)) {
+      return(list(ok = FALSE, message = "Raw count matrix was not available.", path = NA_character_))
+    }
+    colnames(df)[colnames(df) == "Geneid"] <- "gene_name"
+    df <- aggregate_display_matrix(df, "gene_name")
+    write.table(df, out_path, sep = "\t", quote = FALSE, row.names = FALSE)
+    list(ok = TRUE, message = sprintf("Saved duplicate-combined gene-name count matrix to %s.", out_path), path = out_path)
+  }
+
+  output$featurecounts_label_mode_ui <- renderUI({
+    raw_mode <- featurecounts_raw_label_mode()
+    choices <- if (identical(raw_mode, "gene_name")) {
+      c("Gene name" = "gene_name")
+    } else {
+      c("Gene ID" = "gene_id", "Gene name" = "gene_name")
+    }
+    selected <- value_or(input$featurecounts_label_mode, raw_mode)
+    if (!selected %in% unname(choices)) selected <- raw_mode
+    selectInput("featurecounts_label_mode", "Gene label", choices = choices, selected = selected, selectize = FALSE)
+  })
+
   output$featurecounts_convert_ui <- renderUI({
     if (!count_matrix_available) return(NULL)
     if (identical(value_or(input$featurecounts_label_mode, "gene_id"), "gene_name")) {
       converted_path <- gene_name_matrix_path(count_matrix_path)
       aggregated_path <- aggregated_gene_name_matrix_path(count_matrix_path)
-      if (file.exists(aggregated_path)) {
+      if (identical(featurecounts_raw_label_mode(), "gene_name")) {
+        tags$span(class = "tiny-note", "featureCounts was run with gene_name; using gene names directly.")
+      } else if (file.exists(aggregated_path)) {
         tags$span(class = "tiny-note", "Using saved duplicate-combined gene-name count matrix.")
       } else if (file.exists(converted_path)) {
         tags$span(class = "tiny-note", "Using saved gene-name count matrix.")
@@ -2752,6 +2786,17 @@ server <- function(input, output, session) {
   featurecounts_display_df <- reactive({
     if (identical(value_or(input$featurecounts_label_mode, "gene_id"), "gene_name")) {
       aggregated_path <- aggregated_gene_name_matrix_path(count_matrix_path)
+      if (identical(featurecounts_raw_label_mode(), "gene_name")) {
+        if (!file.exists(aggregated_path)) {
+          save_featurecounts_existing_gene_names()
+        }
+        df <- read_saved_count_matrix(aggregated_path)
+        if (!is.null(df) && "gene_name" %in% colnames(df)) {
+          colnames(df)[colnames(df) == "gene_name"] <- "Geneid"
+          return(df)
+        }
+        return(aggregate_display_matrix(count_matrix_nonzero_df, "Geneid"))
+      }
       if (!file.exists(aggregated_path)) {
         save_aggregated_gene_name_matrix(count_matrix_path, "featurecounts")
       }
@@ -2779,7 +2824,9 @@ server <- function(input, output, session) {
       converted_path <- gene_name_matrix_path(count_matrix_path)
       tags$div(
         style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-        if (file.exists(aggregated_path)) {
+        if (identical(featurecounts_raw_label_mode(), "gene_name") && file.exists(aggregated_path)) {
+          sprintf("featureCounts was run with gene_name; showing saved duplicate-combined gene-name counts: %s", aggregated_path)
+        } else if (file.exists(aggregated_path)) {
           sprintf("Showing saved duplicate-combined gene-name counts: %s", aggregated_path)
         } else if (file.exists(converted_path)) {
           sprintf("Showing saved gene-name counts: %s", converted_path)
