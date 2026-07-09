@@ -1256,7 +1256,7 @@ def _prompt_featurecounts_feature():
     feature_default = str(_config_value("featurecounts_feature", "")).strip()
     if feature_default not in valid:
         legacy_default = str(_config_value("feature", "")).strip()
-        feature_default = legacy_default if legacy_default in valid else "gene_id"
+        feature_default = legacy_default if legacy_default in valid else "gene_name"
 
     while True:
         print("========================================")
