@@ -6,7 +6,7 @@
 
 CodeSpringLab is a collection of bulk sequencing workflows and helper scripts developed by the Bioinformatics Shared Resource at Cold Spring Harbor Laboratory.
 
-Developed by James Rouse, Rad Utama, and Alex Dobin.
+Developed by Rad Utama, Alex Dobin, and James Rouse.
 
 First release: March 2023
 
