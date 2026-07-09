@@ -224,7 +224,10 @@ rsem_saved_matrices <- if (dir.exists(counts_dir)) list.files(counts_dir, patter
 kallisto_available <- length(kallisto_sample_names) > 0 || length(kallisto_saved_matrices) > 0
 rsem_available <- (dir.exists(rsem_dir) && length(list.files(rsem_dir, pattern = "\\.(genes|isoforms)\\.results$", recursive = TRUE)) > 0) || length(rsem_saved_matrices) > 0
 deseq2_available <- dir.exists(deseq2_dir) && length(list.files(deseq2_dir, pattern = "^normalized_counts_.*\\.txt$", recursive = FALSE)) > 0
-gseapy_available <- dir.exists(gseapy_dir) && length(list.files(gseapy_dir, pattern = "report\\.gseapy\\..*\\.csv$", recursive = TRUE)) > 0
+gseapy_results_available <- function() {
+  dir.exists(gseapy_dir) && length(list.files(gseapy_dir, pattern = "report\\.gseapy\\..*\\.csv$", recursive = TRUE, full.names = TRUE)) > 0
+}
+gseapy_available <- gseapy_results_available()
 
 design_samples <- unique(as.character(design_df$sample))
 design_samples <- design_samples[!is.na(design_samples) & nzchar(design_samples)]
@@ -3554,7 +3557,7 @@ server <- function(input, output, session) {
     })
   }
 
-  if (gseapy_available) {
+  {
     get_gsea_values <- reactive({
       if (is.null(input$gsea_compare_col) || identical(input$gsea_compare_col, "NA") || !nzchar(input$gsea_compare_col)) {
         return(character(0))
@@ -3601,7 +3604,7 @@ server <- function(input, output, session) {
     })
 
     output$gsea_status_ui <- renderUI({
-      if (!gseapy_available) {
+      if (!gseapy_results_available()) {
         return(status_box("GSEA results have not been generated yet.", "warning"))
       }
       if (!nrow(design_df) || !length(comparison_columns)) {
@@ -3695,18 +3698,6 @@ server <- function(input, output, session) {
         plot_block("Pathway Heatmap", heatmap_rel)
       )
     })
-  } else {
-    output$gsea_treatment_ui <- renderUI(selectInput("gsea_treatment", "Treatment", choices = character(0), selected = character(0), selectize = FALSE))
-    output$gsea_control_ui <- renderUI(selectInput("gsea_control", "Control", choices = character(0), selected = character(0), selectize = FALSE))
-    output$gsea_collection_ui <- renderUI(selectInput("gsea_collection", "Pathway collection", choices = character(0), selected = character(0), selectize = FALSE))
-    output$gsea_pathway_ui <- renderUI(selectizeInput("gsea_pathway", "Pathway", choices = character(0), selected = character(0), multiple = FALSE, options = list(dropdownParent = "body")))
-    output$gsea_status_ui <- renderUI({
-      status_box("GSEA results have not been generated yet.", "warning")
-    })
-    output$gsea_pathway_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
-    output$gsea_all_pathways_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
-    output$gsea_summary_plots_ui <- renderUI({ tags$p("GSEA summary plots are not available yet.") })
-    output$gsea_pathway_plots_ui <- renderUI({ tags$p("No pathway-specific GSEA plots are available yet.") })
   }
 
   if (kallisto_available) {
