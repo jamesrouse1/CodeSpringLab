@@ -663,6 +663,24 @@ value_or <- function(x, default) {
   if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) default else x
 }
 
+pvalue_columns <- function(df) {
+  if (is.null(df) || !NCOL(df)) return(character(0))
+  names(df)[grepl("(^p$|pvalue|p\\.value|p_value|p-val|p\\.val|padj|adj\\.p|fdr|qvalue|q\\.value|q_value|q-val)", names(df), ignore.case = TRUE)]
+}
+
+pvalue_render_js <- function(digits = 3) {
+  DT::JS(sprintf(
+    "function(data, type, row, meta) {
+       if (type === 'display' || type === 'filter') {
+         var x = parseFloat(data);
+         if (!isNaN(x) && isFinite(x)) return x.toExponential(%d);
+       }
+       return data;
+     }",
+    digits
+  ))
+}
+
 table_widget <- function(id) {
   tags$div(
     class = "table-scroll-shell",
@@ -675,6 +693,13 @@ table_widget <- function(id) {
 }
 
 simple_dt <- function(df, page_length = 50, scroll_y = "520px", dom = "lfrtip", container = NULL) {
+  pvalue_cols_all <- pvalue_columns(df)
+  pvalue_targets <- match(pvalue_cols_all, names(df), nomatch = 0) - 1
+  pvalue_targets <- pvalue_targets[pvalue_targets >= 0]
+  column_defs <- c(
+    list(list(width = "118px", targets = "_all")),
+    lapply(pvalue_targets, function(target) list(targets = target, render = pvalue_render_js(3)))
+  )
   dt_args <- list(
     data = df,
     rownames = FALSE,
@@ -691,18 +716,19 @@ simple_dt <- function(df, page_length = 50, scroll_y = "520px", dom = "lfrtip", 
       processing = FALSE,
       searchDelay = 350,
       autoWidth = FALSE,
-      columnDefs = list(list(width = "118px", targets = "_all"))
+      columnDefs = column_defs
     )
   )
   if (!is.null(container)) dt_args$container <- container
   dt <- do.call(DT::datatable, dt_args)
   numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   if (length(numeric_cols)) {
+    pvalue_cols <- intersect(numeric_cols, pvalue_cols_all)
     integer_cols <- numeric_cols[vapply(df[numeric_cols], function(x) {
       finite <- x[is.finite(x) & !is.na(x)]
       length(finite) == 0 || all(abs(finite - round(finite)) < 1e-8)
     }, logical(1))]
-    decimal_cols <- setdiff(numeric_cols, integer_cols)
+    decimal_cols <- setdiff(numeric_cols, c(integer_cols, pvalue_cols))
     if (length(integer_cols)) dt <- DT::formatRound(dt, columns = integer_cols, digits = 0)
     if (length(decimal_cols)) dt <- DT::formatRound(dt, columns = decimal_cols, digits = 2)
   }
@@ -724,13 +750,18 @@ matrix_id_cols <- function(df) {
 format_numeric_commas <- function(df) {
   if (is.null(df) || !nrow(df)) return(df)
   out <- df
+  p_cols <- pvalue_columns(out)
   for (nm in colnames(out)) {
     if (is.numeric(out[[nm]])) {
-      out[[nm]] <- ifelse(
-        is.na(out[[nm]]),
-        NA_character_,
-        prettyNum(out[[nm]], big.mark = ",", scientific = FALSE, trim = TRUE)
-      )
+      if (nm %in% p_cols) {
+        out[[nm]] <- ifelse(is.na(out[[nm]]), NA_character_, sprintf("%.3e", out[[nm]]))
+      } else {
+        out[[nm]] <- ifelse(
+          is.na(out[[nm]]),
+          NA_character_,
+          prettyNum(out[[nm]], big.mark = ",", scientific = FALSE, trim = TRUE)
+        )
+      }
     }
   }
   out
