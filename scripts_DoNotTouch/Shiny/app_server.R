@@ -1117,6 +1117,10 @@ first_normalized_counts_path <- function(label_mode = "gene_id") {
   first_or_null(sort(files))
 }
 
+normalized_counts_gene_name_path <- function(treatment_value, control_value) {
+  sub("(\\.txt|\\.tsv)$", "_aggregated.txt", gene_name_matrix_path(normalized_counts_path(treatment_value, control_value, "gene_id")))
+}
+
 available_deseq2_label_modes <- function(treatment_value = NULL, control_value = NULL) {
   choices <- c("Gene ID" = "gene_id", "Gene name" = "gene_name")
   keep <- vapply(unname(choices), function(mode) {
@@ -1548,9 +1552,10 @@ counts_subtabs <- list(
     sidebarLayout(
       sidebarPanel(
         selectizeInput("gene_query", "Search gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
+        selectInput("featurecounts_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id", selectize = FALSE),
         uiOutput("featurecounts_convert_ui"),
         tags$hr(),
-        helpText("Search the raw featureCounts matrix and optionally flip between gene_id and gene_name using the local GTF.")
+        helpText("Search the raw featureCounts matrix. Gene-name mode saves a converted table in the counts folder and combines duplicate gene names by summing counts.")
       ),
       mainPanel(
         uiOutput("featurecounts_status_ui"),
@@ -1597,10 +1602,11 @@ counts_subtabs <- c(
             selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
           uiOutput("deseq_treatment_ui"),
           uiOutput("deseq_control_ui"),
+          selectInput("deseq_label_mode", "Gene label", choices = c("Gene ID" = "gene_id", "Gene name" = "gene_name"), selected = "gene_id", selectize = FALSE),
           selectizeInput("deseq_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
           uiOutput("deseq_convert_ui"),
           tags$hr(),
-          helpText("Shows DESeq2 normalized counts for an available treatment vs control comparison.")
+          helpText("Shows DESeq2 normalized counts. Gene-name mode saves a duplicate-combined converted table beside the original normalized-counts file.")
         ),
         mainPanel(
           uiOutput("deseq_status_ui"),
@@ -1664,6 +1670,7 @@ app_tabs <- list(
         uiOutput("deg_treatment_ui"),
         uiOutput("deg_control_ui"),
         selectizeInput("deg_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
+        uiOutput("deg_label_mode_ui"),
         uiOutput("deg_convert_ui"),
         selectInput("deg_p_col", "P-value column", choices = c("padj", "pvalue"), selected = "padj", selectize = FALSE),
         numericInput("deg_p_cutoff", "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.001),
@@ -2448,6 +2455,33 @@ server <- function(input, output, session) {
     NULL
   }
 
+  save_normalized_counts_gene_names <- function(treatment_value, control_value) {
+    base_path <- normalized_counts_path(treatment_value, control_value, "gene_id")
+    out_path <- normalized_counts_gene_name_path(treatment_value, control_value)
+    if (file.exists(out_path)) {
+      return(list(ok = TRUE, message = sprintf("Using saved gene-name normalized counts: %s", out_path), path = out_path))
+    }
+    df <- read_normalized_counts(base_path)
+    if (is.null(df) || !"gene_label" %in% colnames(df) || !nrow(df)) {
+      return(list(ok = FALSE, message = "Normalized-counts file was not found or was empty.", path = NA_character_))
+    }
+    if (!looks_like_gene_id(df$gene_label)) {
+      return(list(ok = TRUE, message = "DESeq2 normalized-count labels already look like gene names.", path = base_path))
+    }
+    species <- detect_species_from_ids(df$gene_label)
+    map_df <- get_gtf_map(species)
+    conv <- convert_gene_labels(df$gene_label, map_df)
+    mapped <- sum(!is.na(conv$values) & nzchar(conv$values) & conv$values != df$gene_label)
+    if (mapped == 0) {
+      return(list(ok = FALSE, message = sprintf("No DESeq2 normalized-count gene IDs were mapped using the %s GTF.", value_or(species, "detected")), path = NA_character_))
+    }
+    df$gene_label <- conv$values
+    df <- aggregate_display_matrix(df, "gene_label")
+    colnames(df)[colnames(df) == "gene_label"] <- "gene_name"
+    write.table(df, out_path, sep = "\t", quote = FALSE, row.names = FALSE)
+    list(ok = TRUE, message = sprintf("Saved duplicate-combined DESeq2 gene-name normalized counts (%s IDs mapped) to %s.", mapped, out_path), path = out_path)
+  }
+
   aggregate_gene_name_df <- function(df, label_col = "gene_name", keep_cols = character(0)) {
     if (is.null(df) || !nrow(df) || !label_col %in% colnames(df)) return(df)
     df <- df[!is.na(df[[label_col]]) & nzchar(as.character(df[[label_col]])), , drop = FALSE]
@@ -2464,7 +2498,7 @@ server <- function(input, output, session) {
     sub("(\\.txt|\\.tsv)$", "_aggregated.txt", gene_name_matrix_path(path))
   }
 
-  save_aggregated_gene_name_matrix <- function(path, mode = c("rsem", "kallisto")) {
+  save_aggregated_gene_name_matrix <- function(path, mode = c("rsem", "kallisto", "featurecounts", "deseq")) {
     mode <- match.arg(mode)
     gene_path <- gene_name_matrix_path(path)
     if (!file.exists(gene_path)) {
@@ -2482,7 +2516,7 @@ server <- function(input, output, session) {
     list(ok = TRUE, message = sprintf("Saved duplicate-combined gene-name matrix with %s genes to %s.", nrow(out), out_file), path = out_file)
   }
 
-  save_gene_name_matrix <- function(path, mode = c("rsem", "kallisto")) {
+  save_gene_name_matrix <- function(path, mode = c("rsem", "kallisto", "featurecounts", "deseq")) {
     mode <- match.arg(mode)
     df <- read_saved_count_matrix(path)
     if (is.null(df) || !nrow(df)) {
@@ -2535,7 +2569,8 @@ server <- function(input, output, session) {
       out <- df
     }
     write.table(out, out_file, sep = "\t", quote = FALSE, row.names = FALSE)
-    list(ok = TRUE, message = sprintf("Saved RSEM gene-name matrix (%s IDs mapped) to %s.", mapped, out_file), path = out_file)
+    label <- switch(mode, rsem = "RSEM", kallisto = "Kallisto", featurecounts = "featureCounts", deseq = "DESeq2")
+    list(ok = TRUE, message = sprintf("Saved %s gene-name matrix (%s IDs mapped) to %s.", label, mapped, out_file), path = out_file)
   }
 
   current_resource_prefix <- reactive({
@@ -2700,45 +2735,57 @@ server <- function(input, output, session) {
   )
 
   output$featurecounts_convert_ui <- renderUI({
-    if (count_matrix_available && "Geneid" %in% colnames(count_matrix_nonzero_df) && looks_like_gene_id(count_matrix_nonzero_df$Geneid)) {
-      tagList(
-        actionButton("featurecounts_convert_btn", "Convert Ensembl IDs to gene names"),
-        actionButton("featurecounts_aggregate_btn", "Combine duplicate gene names")
-      )
+    if (!count_matrix_available) return(NULL)
+    if (identical(value_or(input$featurecounts_label_mode, "gene_id"), "gene_name")) {
+      converted_path <- gene_name_matrix_path(count_matrix_path)
+      aggregated_path <- aggregated_gene_name_matrix_path(count_matrix_path)
+      if (file.exists(aggregated_path)) {
+        tags$span(class = "tiny-note", "Using saved duplicate-combined gene-name count matrix.")
+      } else if (file.exists(converted_path)) {
+        tags$span(class = "tiny-note", "Using saved gene-name count matrix.")
+      } else {
+        tags$span(class = "tiny-note", "Gene-name count matrix will be saved automatically.")
+      }
     }
   })
 
   featurecounts_display_df <- reactive({
-    df <- count_matrix_nonzero_df
-    if ("Geneid" %in% colnames(df) && looks_like_gene_id(df$Geneid) && (value_or(input$featurecounts_convert_btn, 0)) %% 2 == 1) {
-      species <- detect_species_from_ids(df$Geneid)
-      map_df <- get_gtf_map(species)
-      conv <- convert_gene_labels(df$Geneid, map_df)
-      df$Geneid <- conv$values
-      if (value_or(input$featurecounts_aggregate_btn, 0) > 0) {
-        df <- aggregate_display_matrix(df, "Geneid")
+    if (identical(value_or(input$featurecounts_label_mode, "gene_id"), "gene_name")) {
+      aggregated_path <- aggregated_gene_name_matrix_path(count_matrix_path)
+      if (!file.exists(aggregated_path)) {
+        save_aggregated_gene_name_matrix(count_matrix_path, "featurecounts")
+      }
+      df <- read_saved_count_matrix(aggregated_path)
+      if (!is.null(df) && "gene_name" %in% colnames(df)) {
+        colnames(df)[colnames(df) == "gene_name"] <- "Geneid"
+        return(df)
+      }
+      converted_path <- gene_name_matrix_path(count_matrix_path)
+      df <- read_saved_count_matrix(converted_path)
+      if (!is.null(df) && "gene_name" %in% colnames(df)) {
+        colnames(df)[colnames(df) == "gene_name"] <- "Geneid"
+        return(df)
       }
     }
-    df
+    count_matrix_nonzero_df
   })
 
   output$featurecounts_status_ui <- renderUI({
     if (!count_matrix_available) {
       return(status_box("Raw count matrix has not been generated yet.", "warning"))
     }
-    if ("Geneid" %in% colnames(count_matrix_nonzero_df) && looks_like_gene_id(count_matrix_nonzero_df$Geneid) && (value_or(input$featurecounts_convert_btn, 0)) %% 2 == 1) {
-      species <- detect_species_from_ids(count_matrix_nonzero_df$Geneid)
-      map_df <- get_gtf_map(species)
-      conv <- convert_gene_labels(head(count_matrix_nonzero_df$Geneid, 100), map_df)
+    if (identical(value_or(input$featurecounts_label_mode, "gene_id"), "gene_name")) {
+      aggregated_path <- aggregated_gene_name_matrix_path(count_matrix_path)
+      converted_path <- gene_name_matrix_path(count_matrix_path)
       tags$div(
         style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-        sprintf(
-          "FeatureCounts display converted from %s to %s using %s GTF%s.",
-          conv$from,
-          conv$to,
-          value_or(species, "detected"),
-          if (value_or(input$featurecounts_aggregate_btn, 0) > 0) " and duplicate gene names were summed" else ""
-        )
+        if (file.exists(aggregated_path)) {
+          sprintf("Showing saved duplicate-combined gene-name counts: %s", aggregated_path)
+        } else if (file.exists(converted_path)) {
+          sprintf("Showing saved gene-name counts: %s", converted_path)
+        } else {
+          "Gene-name counts could not be saved from the current raw count matrix."
+        }
       )
     } else {
       NULL
@@ -2821,43 +2868,25 @@ server <- function(input, output, session) {
       if (!file.exists(base_path)) {
         return(tags$span(class = "tiny-note", "Saved RSEM matrix not found yet. Run the RSEM step first."))
       }
-      if (file.exists(converted_path)) {
-        aggregated_path <- aggregated_gene_name_matrix_path(base_path)
-        return(tagList(
-          tags$span(class = "tiny-note", "Gene-name matrix saved in counts folder."),
-          actionButton("rsem_aggregate_gene_names", "Combine duplicate gene names"),
-          if (file.exists(aggregated_path)) tags$span(class = "tiny-note", " Duplicate-combined matrix also saved.") else NULL
-        ))
+      if (identical(value_or(input$rsem_label_mode, "gene_id"), "gene_name")) {
+        if (!file.exists(converted_path)) save_gene_name_matrix(base_path, "rsem")
+        return(tags$span(class = "tiny-note", if (file.exists(converted_path)) "Using saved RSEM gene-name matrix." else "RSEM gene-name matrix could not be saved."))
       }
-      tagList(
-        actionButton("rsem_save_gene_names", "Save gene-name matrix"),
-        actionButton("rsem_aggregate_gene_names", "Save and combine duplicate gene names")
-      )
+      NULL
     })
-
-    observeEvent(input$rsem_save_gene_names, {
-      req(input$rsem_type, input$rsem_metric)
-      base_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, "gene_id")
-      res <- save_gene_name_matrix(base_path, "rsem")
-      rsem_conversion_status(res$message)
-      rsem_label_status(res$message)
-      rsem_matrix_cache[[base_path]] <- NULL
-      rsem_loaded(TRUE)
-    }, ignoreInit = TRUE)
-
-    observeEvent(input$rsem_aggregate_gene_names, {
-      req(input$rsem_type, input$rsem_metric)
-      base_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, "gene_id")
-      res <- save_aggregated_gene_name_matrix(base_path, "rsem")
-      rsem_conversion_status(res$message)
-      rsem_label_status(res$message)
-      rsem_matrix_cache[[base_path]] <- NULL
-      rsem_loaded(TRUE)
-    }, ignoreInit = TRUE)
 
     get_rsem_matrix <- reactive({
       req(input$rsem_type, input$rsem_metric)
-      matrix_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, value_or(input$rsem_label_mode, "gene_id"))
+      label_mode <- value_or(input$rsem_label_mode, "gene_id")
+      if (identical(label_mode, "gene_name")) {
+        base_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, "gene_id")
+        converted_path <- gene_name_matrix_path(base_path)
+        if (!file.exists(converted_path)) {
+          res <- save_gene_name_matrix(base_path, "rsem")
+          rsem_conversion_status(res$message)
+        }
+      }
+      matrix_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, label_mode)
       cache_key <- matrix_path
       cached <- rsem_matrix_cache[[cache_key]]
       if (is.null(cached)) {
@@ -3036,9 +3065,19 @@ server <- function(input, output, session) {
       req(input$deseq_compare_col)
       if (identical(input$deseq_compare_col, "NA")) return(NULL)
       req(input$deseq_treatment, input$deseq_control)
-      path <- normalized_counts_path(input$deseq_treatment, input$deseq_control)
+      path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_id")
+      if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) {
+        gene_name_run_path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_name")
+        if (file.exists(gene_name_run_path)) {
+          path <- gene_name_run_path
+        } else {
+          saved <- save_normalized_counts_gene_names(input$deseq_treatment, input$deseq_control)
+          if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
+        }
+      }
       df <- read_normalized_counts(path)
       if (is.null(df)) return(NULL)
+      if ("gene_name" %in% colnames(df) && !"gene_label" %in% colnames(df)) colnames(df)[colnames(df) == "gene_name"] <- "gene_label"
       keep_samples <- design_df$sample[design_df[[input$deseq_compare_col]] %in% c(input$deseq_treatment, input$deseq_control)]
       keep_cols <- c("gene_label", intersect(keep_samples, colnames(df)))
       df[, keep_cols, drop = FALSE]
@@ -3046,21 +3085,20 @@ server <- function(input, output, session) {
 
     output$deseq_convert_ui <- renderUI({
       df <- deseq_counts_raw_df()
-      if (!is.null(df) && "gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label)) {
-        actionButton("deseq_convert_btn", "Convert Ensembl IDs to gene names")
+      if (is.null(df)) return(NULL)
+      if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) {
+        path <- normalized_counts_gene_name_path(input$deseq_treatment, input$deseq_control)
+        if (file.exists(path)) {
+          tags$span(class = "tiny-note", "Using saved duplicate-combined gene-name normalized counts.")
+        } else {
+          tags$span(class = "tiny-note", "Using gene-name DESeq2 results when available.")
+        }
       }
     })
 
     deseq_counts_df <- reactive({
       df <- deseq_counts_raw_df()
       if (is.null(df)) return(NULL)
-      if ("gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label) && (value_or(input$deseq_convert_btn, 0)) %% 2 == 1) {
-        species <- detect_species_from_ids(df$gene_label)
-        map_df <- get_gtf_map(species)
-        conv <- convert_gene_labels(df$gene_label, map_df)
-        df$gene_label <- conv$values
-        df <- aggregate_display_matrix(df, "gene_label")
-      }
       df
     })
 
@@ -3079,7 +3117,12 @@ server <- function(input, output, session) {
         ))
       }
       req(input$deseq_treatment, input$deseq_control)
-      path <- normalized_counts_path(input$deseq_treatment, input$deseq_control)
+      path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_id")
+      if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) {
+        gene_name_run_path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_name")
+        saved_path <- normalized_counts_gene_name_path(input$deseq_treatment, input$deseq_control)
+        if (file.exists(gene_name_run_path)) path <- gene_name_run_path else if (file.exists(saved_path)) path <- saved_path
+      }
       if (!file.exists(path)) {
         return(tags$div(
           style = "margin-bottom: 12px; padding: 10px 12px; background: #fdeeee; border: 1px solid #efb0b0; border-radius: 6px;",
@@ -3088,7 +3131,13 @@ server <- function(input, output, session) {
       }
       tags$div(
         style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-        sprintf("Showing normalized counts for %s vs %s using %s.", input$deseq_treatment, input$deseq_control, input$deseq_compare_col)
+        sprintf(
+          "Showing normalized counts for %s vs %s using %s (%s).",
+          input$deseq_treatment,
+          input$deseq_control,
+          input$deseq_compare_col,
+          if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"
+        )
       )
     })
 
@@ -3159,6 +3208,14 @@ server <- function(input, output, session) {
       selectInput("deg_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
     })
 
+    output$deg_label_mode_ui <- renderUI({
+      choices <- available_deseq2_label_modes(value_or(input$deg_treatment, ""), value_or(input$deg_control, ""))
+      if (!length(choices)) choices <- c("Gene ID" = "gene_id")
+      selected <- value_or(input$deg_label_mode, unname(choices)[1])
+      if (!selected %in% unname(choices)) selected <- unname(choices)[1]
+      selectInput("deg_label_mode", "DESeq2 result labels", choices = choices, selected = selected, selectize = FALSE)
+    })
+
     get_plot_values <- reactive({
       if (is.null(input$plot_compare_col) || identical(input$plot_compare_col, "NA") || !nzchar(input$plot_compare_col)) {
         return(character(0))
@@ -3198,25 +3255,16 @@ server <- function(input, output, session) {
       req(input$deg_compare_col)
       if (identical(input$deg_compare_col, "NA")) return(NULL)
       req(input$deg_treatment, input$deg_control)
-      read_deg_table(deg_table_path(input$deg_treatment, input$deg_control))
+      read_deg_table(deg_table_path(input$deg_treatment, input$deg_control, value_or(input$deg_label_mode, "gene_id")))
     })
 
     output$deg_convert_ui <- renderUI({
-      df <- deg_raw_df()
-      if (!is.null(df) && "gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label)) {
-        actionButton("deg_convert_btn", "Convert Ensembl IDs to gene names")
-      }
+      NULL
     })
 
     deg_df <- reactive({
       df <- deg_raw_df()
       if (is.null(df)) return(NULL)
-      if ("gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label) && (value_or(input$deg_convert_btn, 0)) %% 2 == 1) {
-        species <- detect_species_from_ids(df$gene_label)
-        map_df <- get_gtf_map(species)
-        conv <- convert_gene_labels(df$gene_label, map_df)
-        df$gene_label <- conv$values
-      }
       df
     })
 
@@ -3248,7 +3296,7 @@ server <- function(input, output, session) {
         ))
       }
       req(input$deg_treatment, input$deg_control)
-      path <- deg_table_path(input$deg_treatment, input$deg_control)
+      path <- deg_table_path(input$deg_treatment, input$deg_control, value_or(input$deg_label_mode, "gene_id"))
       if (!file.exists(path)) {
         return(tags$div(
           style = "margin-bottom: 12px; padding: 10px 12px; background: #fdeeee; border: 1px solid #efb0b0; border-radius: 6px;",
@@ -3257,7 +3305,13 @@ server <- function(input, output, session) {
       }
       tags$div(
         style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-        sprintf("Showing DEG results for %s vs %s using %s.", input$deg_treatment, input$deg_control, input$deg_compare_col)
+        sprintf(
+          "Showing DEG results for %s vs %s using %s (%s).",
+          input$deg_treatment,
+          input$deg_control,
+          input$deg_compare_col,
+          if (identical(value_or(input$deg_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"
+        )
       )
     })
 
@@ -3956,7 +4010,16 @@ server <- function(input, output, session) {
 
     get_kallisto_matrix <- function() {
       req(input$kallisto_matrix_metric)
-      matrix_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, value_or(input$kallisto_label_mode, "target_id"))
+      label_mode <- value_or(input$kallisto_label_mode, "target_id")
+      if (identical(label_mode, "gene_name")) {
+        base_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, "target_id")
+        converted_path <- gene_name_matrix_path(base_path)
+        if (!file.exists(converted_path)) {
+          res <- save_gene_name_matrix(base_path, "kallisto")
+          kallisto_conversion_status(res$message)
+        }
+      }
+      matrix_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, label_mode)
       cached <- kallisto_matrix_cache()
       if (!is.null(cached) && identical(kallisto_matrix_cache_path(), matrix_path)) return(cached)
       if (file.exists(matrix_path)) {
@@ -3975,39 +4038,12 @@ server <- function(input, output, session) {
       if (!file.exists(base_path)) {
         return(tags$span(class = "tiny-note", "Saved Kallisto matrix not found yet. Run the Kallisto step first."))
       }
-      if (file.exists(converted_path)) {
-        aggregated_path <- aggregated_gene_name_matrix_path(base_path)
-        return(tagList(
-          tags$span(class = "tiny-note", "Gene-name matrix saved in counts folder."),
-          actionButton("kallisto_aggregate_gene_names", "Combine duplicate gene names"),
-          if (file.exists(aggregated_path)) tags$span(class = "tiny-note", " Duplicate-combined matrix also saved.") else NULL
-        ))
+      if (identical(value_or(input$kallisto_label_mode, "target_id"), "gene_name")) {
+        if (!file.exists(converted_path)) save_gene_name_matrix(base_path, "kallisto")
+        return(tags$span(class = "tiny-note", if (file.exists(converted_path)) "Using saved Kallisto gene-name matrix." else "Kallisto gene-name matrix could not be saved."))
       }
-      tagList(
-        actionButton("kallisto_save_gene_names", "Save gene-name matrix"),
-        actionButton("kallisto_aggregate_gene_names", "Save and combine duplicate gene names")
-      )
+      NULL
     })
-
-    observeEvent(input$kallisto_save_gene_names, {
-      req(input$kallisto_matrix_metric)
-      base_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, "target_id")
-      res <- save_gene_name_matrix(base_path, "kallisto")
-      kallisto_conversion_status(res$message)
-      kallisto_matrix_cache(NULL)
-      kallisto_matrix_cache_path(NULL)
-      kallisto_table_loaded(TRUE)
-    }, ignoreInit = TRUE)
-
-    observeEvent(input$kallisto_aggregate_gene_names, {
-      req(input$kallisto_matrix_metric)
-      base_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, "target_id")
-      res <- save_aggregated_gene_name_matrix(base_path, "kallisto")
-      kallisto_conversion_status(res$message)
-      kallisto_matrix_cache(NULL)
-      kallisto_matrix_cache_path(NULL)
-      kallisto_table_loaded(TRUE)
-    }, ignoreInit = TRUE)
 
     output$kallisto_status_ui <- renderUI({
       if (!kallisto_available) {
