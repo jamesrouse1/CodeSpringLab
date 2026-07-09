@@ -63,6 +63,7 @@ human_gtf_path <- pick_first_existing("gencode.v42.chr_patch_hapl_scaff.annotati
   "/grid/bsr/data/data/utama/genome/hg38_p13_gencode"
 ))
 deseq2_dir <- file.path(data_dir, "deseq2")
+deseq2_gene_name_dir <- file.path(data_dir, "deseq2_gene_name")
 gseapy_dir <- file.path(data_dir, "gseapy")
 logo_search_dirs <- unique(c(
   path.expand(unlist(config_value("logo_search_dirs", character(0)))),
@@ -318,7 +319,12 @@ kallisto_saved_matrices <- if (dir.exists(counts_dir)) list.files(counts_dir, pa
 rsem_saved_matrices <- if (dir.exists(counts_dir)) list.files(counts_dir, pattern = "^rsem_.*_matrix.*\\.txt$", full.names = TRUE) else character(0)
 kallisto_available <- length(kallisto_sample_names) > 0 || length(kallisto_saved_matrices) > 0
 rsem_available <- (dir.exists(rsem_dir) && length(list.files(rsem_dir, pattern = "\\.(genes|isoforms)\\.results$", recursive = TRUE)) > 0) || length(rsem_saved_matrices) > 0
-deseq2_available <- dir.exists(deseq2_dir) && length(list.files(deseq2_dir, pattern = "^normalized_counts_.*\\.txt$", recursive = FALSE)) > 0
+deseq2_output_dirs <- c(deseq2_dir, deseq2_gene_name_dir)
+deseq2_available <- any(vapply(
+  deseq2_output_dirs,
+  function(d) dir.exists(d) && length(list.files(d, pattern = "^normalized_counts_.*\\.txt$", recursive = FALSE)) > 0,
+  logical(1)
+))
 gseapy_results_available <- function() {
   dir.exists(gseapy_dir) && length(list.files(gseapy_dir, pattern = "report\\.gseapy\\..*\\.csv$", recursive = TRUE, full.names = TRUE)) > 0
 }
@@ -351,6 +357,7 @@ if (length(samples)) {
 if (dir.exists(fastqc_dir)) addResourcePath("fastqc_results", fastqc_dir)
 if (dir.exists(fastqc_cutadapt_dir)) addResourcePath("fastqc_cutadapt_results", fastqc_cutadapt_dir)
 if (dir.exists(deseq2_dir)) addResourcePath("deseq2_results", deseq2_dir)
+if (dir.exists(deseq2_gene_name_dir)) addResourcePath("deseq2_gene_name_results", deseq2_gene_name_dir)
 if (dir.exists(gseapy_dir)) addResourcePath("gseapy_results", gseapy_dir)
 if (!is.null(logo_csl_path)) addResourcePath("logo_csl_asset", dirname(logo_csl_path))
 if (!is.null(logo_path)) addResourcePath("logo_asset", dirname(logo_path))
@@ -1071,12 +1078,16 @@ pdf_canvas_block <- function(title, rel) {
   )
 }
 
-normalized_counts_path <- function(treatment_value, control_value) {
-  file.path(deseq2_dir, sprintf("normalized_counts_%s_vs_%s(ref).txt", treatment_value, control_value))
+deseq2_result_dir <- function(label_mode = "gene_id") {
+  if (identical(value_or(label_mode, "gene_id"), "gene_name")) deseq2_gene_name_dir else deseq2_dir
 }
 
-deg_table_path <- function(treatment_value, control_value) {
-  file.path(deseq2_dir, sprintf("DEG_%s_vs_%s(ref).txt", treatment_value, control_value))
+normalized_counts_path <- function(treatment_value, control_value, label_mode = "gene_id") {
+  file.path(deseq2_result_dir(label_mode), sprintf("normalized_counts_%s_vs_%s(ref).txt", treatment_value, control_value))
+}
+
+deg_table_path <- function(treatment_value, control_value, label_mode = "gene_id") {
+  file.path(deseq2_result_dir(label_mode), sprintf("DEG_%s_vs_%s(ref).txt", treatment_value, control_value))
 }
 
 pca_plot_path <- function(compare_col, treatment_value, control_value) {
@@ -1098,11 +1109,25 @@ read_normalized_counts <- function(path) {
   df[order(df$gene_label), , drop = FALSE]
 }
 
-first_normalized_counts_path <- function() {
-  files <- if (dir.exists(deseq2_dir)) {
-    list.files(deseq2_dir, pattern = "^normalized_counts_.*\\.txt$", full.names = TRUE)
+first_normalized_counts_path <- function(label_mode = "gene_id") {
+  search_dir <- deseq2_result_dir(label_mode)
+  files <- if (dir.exists(search_dir)) {
+    list.files(search_dir, pattern = "^normalized_counts_.*\\.txt$", full.names = TRUE)
   } else character(0)
   first_or_null(sort(files))
+}
+
+available_deseq2_label_modes <- function(treatment_value = NULL, control_value = NULL) {
+  choices <- c("Gene ID" = "gene_id", "Gene name" = "gene_name")
+  keep <- vapply(unname(choices), function(mode) {
+    if (!is.null(treatment_value) && !is.null(control_value) && nzchar(treatment_value) && nzchar(control_value)) {
+      return(file.exists(deg_table_path(treatment_value, control_value, mode)) ||
+        file.exists(normalized_counts_path(treatment_value, control_value, mode)))
+    }
+    search_dir <- deseq2_result_dir(mode)
+    dir.exists(search_dir) && length(list.files(search_dir, pattern = "^(DEG|normalized_counts)_.*\\.txt$", full.names = TRUE)) > 0
+  }, logical(1))
+  choices[keep]
 }
 
 expression_matrix_from_df <- function(df, sample_ids = samples) {
@@ -1689,7 +1714,8 @@ app_tabs <- list(
             choices = c("NA" = "NA", comparison_columns),
             selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
           uiOutput("plot_treatment_ui"),
-          uiOutput("plot_control_ui")
+          uiOutput("plot_control_ui"),
+          uiOutput("plot_deseq_label_mode_ui")
         ),
         conditionalPanel(
           "input.plot_subtab == 'PCA'",
@@ -3151,6 +3177,23 @@ server <- function(input, output, session) {
       selectInput("plot_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
     })
 
+    output$plot_deseq_label_mode_ui <- renderUI({
+      treatment_value <- value_or(input$plot_treatment, "")
+      control_value <- value_or(input$plot_control, "")
+      choices <- available_deseq2_label_modes(treatment_value, control_value)
+      if (!length(choices)) choices <- available_deseq2_label_modes()
+      if (!length(choices)) choices <- c("Gene ID" = "gene_id")
+      selected <- value_or(input$plot_deseq_label_mode, unname(choices)[1])
+      if (!selected %in% unname(choices)) selected <- unname(choices)[1]
+      selectInput(
+        "plot_deseq_label_mode",
+        "DESeq2 result labels",
+        choices = choices,
+        selected = selected,
+        selectize = FALSE
+      )
+    })
+
     deg_raw_df <- reactive({
       req(input$deg_compare_col)
       if (identical(input$deg_compare_col, "NA")) return(NULL)
@@ -3181,7 +3224,7 @@ server <- function(input, output, session) {
       req(input$plot_compare_col)
       if (identical(input$plot_compare_col, "NA")) return(NULL)
       req(input$plot_treatment, input$plot_control)
-      read_deg_table(deg_table_path(input$plot_treatment, input$plot_control))
+      read_deg_table(deg_table_path(input$plot_treatment, input$plot_control, value_or(input$plot_deseq_label_mode, "gene_id")))
     })
 
     plot_deg_df <- reactive({
@@ -3230,11 +3273,12 @@ server <- function(input, output, session) {
         return(status_box("Select a comparison column to view plots for a tested comparison.", "warning"))
       }
       req(input$plot_treatment, input$plot_control)
-      path <- deg_table_path(input$plot_treatment, input$plot_control)
+      path <- deg_table_path(input$plot_treatment, input$plot_control, value_or(input$plot_deseq_label_mode, "gene_id"))
       if (!file.exists(path)) {
         return(status_box(sprintf("This comparison has not been tested: %s vs %s.", input$plot_treatment, input$plot_control), "error"))
       }
-      status_box(sprintf("Plotting %s vs %s using %s.", input$plot_treatment, input$plot_control, input$plot_compare_col), "info")
+      label_text <- if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"
+      status_box(sprintf("Plotting %s vs %s using %s (%s).", input$plot_treatment, input$plot_control, input$plot_compare_col, label_text), "info")
     })
 
     deg_norm_counts_df <- reactive({
@@ -3253,7 +3297,7 @@ server <- function(input, output, session) {
       req(input$plot_compare_col)
       if (identical(input$plot_compare_col, "NA")) return(NULL)
       req(input$plot_treatment, input$plot_control)
-      path <- normalized_counts_path(input$plot_treatment, input$plot_control)
+      path <- normalized_counts_path(input$plot_treatment, input$plot_control, value_or(input$plot_deseq_label_mode, "gene_id"))
       df <- read_normalized_counts(path)
       if (is.null(df)) return(NULL)
       keep_samples <- design_df$sample[design_df[[input$plot_compare_col]] %in% c(input$plot_treatment, input$plot_control)]
@@ -3300,9 +3344,10 @@ server <- function(input, output, session) {
       }
       selected_path <- NULL
       if (!is.null(input$plot_treatment) && !is.null(input$plot_control)) {
-        candidate <- normalized_counts_path(input$plot_treatment, input$plot_control)
+        candidate <- normalized_counts_path(input$plot_treatment, input$plot_control, value_or(input$plot_deseq_label_mode, "gene_id"))
         if (file.exists(candidate)) selected_path <- candidate
       }
+      if (is.null(selected_path)) selected_path <- first_normalized_counts_path(value_or(input$plot_deseq_label_mode, "gene_id"))
       if (is.null(selected_path)) selected_path <- first_normalized_counts_path()
       read_normalized_counts(selected_path)
     })
@@ -3403,7 +3448,7 @@ server <- function(input, output, session) {
         vp$plot_df,
         labels = vp$labels,
         title = sprintf("%s vs %s", value_or(input$plot_treatment, "treatment"), value_or(input$plot_control, "control")),
-        subtitle = vp$p_col,
+        subtitle = sprintf("%s, %s", vp$p_col, if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"),
         p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
         lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
         style = value_or(input$volcano_style, "publication"),
@@ -3423,16 +3468,18 @@ server <- function(input, output, session) {
 
     observeEvent(input$save_volcano_btn, {
       vp <- volcano_plot_state()
+      label_suffix <- if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene_name" else "gene_id"
       default_name <- sprintf(
-        "volcano_%s_%s_vs_%s.png",
+        "volcano_%s_%s_vs_%s_%s.png",
         value_or(input$plot_compare_col, "comparison"),
         value_or(input$plot_treatment, "treatment"),
-        value_or(input$plot_control, "control")
+        value_or(input$plot_control, "control"),
+        label_suffix
       )
       filename <- sanitize_filename(input$volcano_filename)
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
-      out_path <- file.path(deseq2_dir, filename)
+      out_path <- file.path(deseq2_result_dir(value_or(input$plot_deseq_label_mode, "gene_id")), filename)
       display_width <- as.numeric(value_or(input$volcano_plot_width, 900))
       display_height <- as.numeric(value_or(input$volcano_plot_height, 700))
       save_mode <- value_or(input$volcano_save_mode, "double")
@@ -3450,7 +3497,7 @@ server <- function(input, output, session) {
         vp$plot_df,
         labels = vp$labels,
         title = sprintf("%s vs %s", value_or(input$plot_treatment, "treatment"), value_or(input$plot_control, "control")),
-        subtitle = vp$p_col,
+        subtitle = sprintf("%s, %s", vp$p_col, if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"),
         p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
         lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
         style = value_or(input$volcano_style, "publication"),
@@ -3618,16 +3665,18 @@ server <- function(input, output, session) {
 
     observeEvent(input$save_heatmap_btn, {
       hp <- heatmap_plot_state()
+      label_suffix <- if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene_name" else "gene_id"
       default_name <- sprintf(
-        "heatmap_%s_%s_vs_%s.png",
+        "heatmap_%s_%s_vs_%s_%s.png",
         value_or(input$plot_compare_col, "comparison"),
         value_or(input$plot_treatment, "treatment"),
-        value_or(input$plot_control, "control")
+        value_or(input$plot_control, "control"),
+        label_suffix
       )
       filename <- sanitize_filename(input$heatmap_filename)
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
-      out_path <- file.path(deseq2_dir, filename)
+      out_path <- file.path(deseq2_result_dir(value_or(input$plot_deseq_label_mode, "gene_id")), filename)
       display_width <- as.numeric(value_or(input$heatmap_plot_width, 900))
       display_height <- as.numeric(value_or(input$heatmap_plot_height, 700))
       save_mode <- value_or(input$heatmap_save_mode, "double")
