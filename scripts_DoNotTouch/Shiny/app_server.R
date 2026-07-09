@@ -1118,15 +1118,26 @@ first_normalized_counts_path <- function(label_mode = "gene_id") {
 }
 
 normalized_counts_gene_name_path <- function(treatment_value, control_value) {
-  sub("(\\.txt|\\.tsv)$", "_aggregated.txt", gene_name_matrix_path(normalized_counts_path(treatment_value, control_value, "gene_id")))
+  normalized_counts_path(treatment_value, control_value, "gene_name")
 }
 
 available_deseq2_label_modes <- function(treatment_value = NULL, control_value = NULL) {
   choices <- c("Gene ID" = "gene_id", "Gene name" = "gene_name")
   keep <- vapply(unname(choices), function(mode) {
     if (!is.null(treatment_value) && !is.null(control_value) && nzchar(treatment_value) && nzchar(control_value)) {
-      return(file.exists(deg_table_path(treatment_value, control_value, mode)) ||
-        file.exists(normalized_counts_path(treatment_value, control_value, mode)))
+      if (identical(mode, "gene_name")) {
+        return(file.exists(deg_table_path(treatment_value, control_value, "gene_name")) ||
+          file.exists(normalized_counts_path(treatment_value, control_value, "gene_name")) ||
+          file.exists(deg_table_path(treatment_value, control_value, "gene_id")) ||
+          file.exists(normalized_counts_path(treatment_value, control_value, "gene_id")))
+      }
+      return(file.exists(deg_table_path(treatment_value, control_value, "gene_id")) ||
+        file.exists(normalized_counts_path(treatment_value, control_value, "gene_id")))
+    }
+    if (identical(mode, "gene_name")) {
+      return(any(vapply(c(deseq2_gene_name_dir, deseq2_dir), function(search_dir) {
+        dir.exists(search_dir) && length(list.files(search_dir, pattern = "^(DEG|normalized_counts)_.*\\.txt$", full.names = TRUE)) > 0
+      }, logical(1))))
     }
     search_dir <- deseq2_result_dir(mode)
     dir.exists(search_dir) && length(list.files(search_dir, pattern = "^(DEG|normalized_counts)_.*\\.txt$", full.names = TRUE)) > 0
@@ -2478,8 +2489,42 @@ server <- function(input, output, session) {
     df$gene_label <- conv$values
     df <- aggregate_display_matrix(df, "gene_label")
     colnames(df)[colnames(df) == "gene_label"] <- "gene_name"
+    dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
     write.table(df, out_path, sep = "\t", quote = FALSE, row.names = FALSE)
     list(ok = TRUE, message = sprintf("Saved duplicate-combined DESeq2 gene-name normalized counts (%s IDs mapped) to %s.", mapped, out_path), path = out_path)
+  }
+
+  save_deg_gene_names <- function(treatment_value, control_value) {
+    base_path <- deg_table_path(treatment_value, control_value, "gene_id")
+    out_path <- deg_table_path(treatment_value, control_value, "gene_name")
+    if (file.exists(out_path)) {
+      return(list(ok = TRUE, message = sprintf("Using saved gene-name DEG table: %s", out_path), path = out_path))
+    }
+    df <- read_deg_table(base_path)
+    if (is.null(df) || !"gene_label" %in% colnames(df) || !nrow(df)) {
+      return(list(ok = FALSE, message = "DEG table was not found or was empty.", path = NA_character_))
+    }
+    if (!looks_like_gene_id(df$gene_label)) {
+      dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+      out <- df[, setdiff(colnames(df), "gene_label"), drop = FALSE]
+      rownames(out) <- make.unique(as.character(df$gene_label))
+      write.table(out, out_path, sep = "\t", quote = FALSE, row.names = TRUE)
+      return(list(ok = TRUE, message = sprintf("DEG labels already look like gene names; saved copy to %s.", out_path), path = out_path))
+    }
+    species <- detect_species_from_ids(df$gene_label)
+    map_df <- get_gtf_map(species)
+    conv <- convert_gene_labels(df$gene_label, map_df)
+    mapped <- sum(!is.na(conv$values) & nzchar(conv$values) & conv$values != df$gene_label)
+    if (mapped == 0) {
+      return(list(ok = FALSE, message = sprintf("No DEG gene IDs were mapped using the %s GTF.", value_or(species, "detected")), path = NA_character_))
+    }
+    out <- df[, setdiff(colnames(df), "gene_label"), drop = FALSE]
+    out$original_gene_id <- df$gene_label
+    out <- out[, c("original_gene_id", setdiff(colnames(out), "original_gene_id")), drop = FALSE]
+    rownames(out) <- make.unique(as.character(conv$values))
+    dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+    write.table(out, out_path, sep = "\t", quote = FALSE, row.names = TRUE)
+    list(ok = TRUE, message = sprintf("Saved gene-name DEG table (%s IDs mapped) to %s.", mapped, out_path), path = out_path)
   }
 
   aggregate_gene_name_df <- function(df, label_col = "gene_name", keep_cols = character(0)) {
@@ -3168,6 +3213,7 @@ server <- function(input, output, session) {
       if (identical(value_or(input$deseq_label_mode, "gene_id"), "gene_name")) {
         gene_name_run_path <- normalized_counts_path(input$deseq_treatment, input$deseq_control, "gene_name")
         saved_path <- normalized_counts_gene_name_path(input$deseq_treatment, input$deseq_control)
+        if (!file.exists(gene_name_run_path) && !file.exists(saved_path)) save_normalized_counts_gene_names(input$deseq_treatment, input$deseq_control)
         if (file.exists(gene_name_run_path)) path <- gene_name_run_path else if (file.exists(saved_path)) path <- saved_path
       }
       if (!file.exists(path)) {
@@ -3302,7 +3348,13 @@ server <- function(input, output, session) {
       req(input$deg_compare_col)
       if (identical(input$deg_compare_col, "NA")) return(NULL)
       req(input$deg_treatment, input$deg_control)
-      read_deg_table(deg_table_path(input$deg_treatment, input$deg_control, value_or(input$deg_label_mode, "gene_id")))
+      label_mode <- value_or(input$deg_label_mode, "gene_id")
+      path <- deg_table_path(input$deg_treatment, input$deg_control, label_mode)
+      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+        saved <- save_deg_gene_names(input$deg_treatment, input$deg_control)
+        if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
+      }
+      read_deg_table(path)
     })
 
     output$deg_convert_ui <- renderUI({
@@ -3319,7 +3371,13 @@ server <- function(input, output, session) {
       req(input$plot_compare_col)
       if (identical(input$plot_compare_col, "NA")) return(NULL)
       req(input$plot_treatment, input$plot_control)
-      read_deg_table(deg_table_path(input$plot_treatment, input$plot_control, value_or(input$plot_deseq_label_mode, "gene_id")))
+      label_mode <- value_or(input$plot_deseq_label_mode, "gene_id")
+      path <- deg_table_path(input$plot_treatment, input$plot_control, label_mode)
+      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+        saved <- save_deg_gene_names(input$plot_treatment, input$plot_control)
+        if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
+      }
+      read_deg_table(path)
     })
 
     plot_deg_df <- reactive({
@@ -3343,7 +3401,12 @@ server <- function(input, output, session) {
         ))
       }
       req(input$deg_treatment, input$deg_control)
-      path <- deg_table_path(input$deg_treatment, input$deg_control, value_or(input$deg_label_mode, "gene_id"))
+      label_mode <- value_or(input$deg_label_mode, "gene_id")
+      path <- deg_table_path(input$deg_treatment, input$deg_control, label_mode)
+      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+        saved <- save_deg_gene_names(input$deg_treatment, input$deg_control)
+        if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
+      }
       if (!file.exists(path)) {
         return(tags$div(
           style = "margin-bottom: 12px; padding: 10px 12px; background: #fdeeee; border: 1px solid #efb0b0; border-radius: 6px;",
@@ -3374,7 +3437,12 @@ server <- function(input, output, session) {
         return(status_box("Select a comparison column to view plots for a tested comparison.", "warning"))
       }
       req(input$plot_treatment, input$plot_control)
-      path <- deg_table_path(input$plot_treatment, input$plot_control, value_or(input$plot_deseq_label_mode, "gene_id"))
+      label_mode <- value_or(input$plot_deseq_label_mode, "gene_id")
+      path <- deg_table_path(input$plot_treatment, input$plot_control, label_mode)
+      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+        saved <- save_deg_gene_names(input$plot_treatment, input$plot_control)
+        if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
+      }
       if (!file.exists(path)) {
         return(status_box(sprintf("This comparison has not been tested: %s vs %s.", input$plot_treatment, input$plot_control), "error"))
       }
@@ -3398,7 +3466,12 @@ server <- function(input, output, session) {
       req(input$plot_compare_col)
       if (identical(input$plot_compare_col, "NA")) return(NULL)
       req(input$plot_treatment, input$plot_control)
-      path <- normalized_counts_path(input$plot_treatment, input$plot_control, value_or(input$plot_deseq_label_mode, "gene_id"))
+      label_mode <- value_or(input$plot_deseq_label_mode, "gene_id")
+      path <- normalized_counts_path(input$plot_treatment, input$plot_control, label_mode)
+      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+        saved <- save_normalized_counts_gene_names(input$plot_treatment, input$plot_control)
+        if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
+      }
       df <- read_normalized_counts(path)
       if (is.null(df)) return(NULL)
       keep_samples <- design_df$sample[design_df[[input$plot_compare_col]] %in% c(input$plot_treatment, input$plot_control)]
@@ -3445,7 +3518,12 @@ server <- function(input, output, session) {
       }
       selected_path <- NULL
       if (!is.null(input$plot_treatment) && !is.null(input$plot_control)) {
-        candidate <- normalized_counts_path(input$plot_treatment, input$plot_control, value_or(input$plot_deseq_label_mode, "gene_id"))
+        label_mode <- value_or(input$plot_deseq_label_mode, "gene_id")
+        candidate <- normalized_counts_path(input$plot_treatment, input$plot_control, label_mode)
+        if (identical(label_mode, "gene_name") && !file.exists(candidate)) {
+          saved <- save_normalized_counts_gene_names(input$plot_treatment, input$plot_control)
+          if (isTRUE(saved$ok) && file.exists(saved$path)) candidate <- saved$path
+        }
         if (file.exists(candidate)) selected_path <- candidate
       }
       if (is.null(selected_path)) selected_path <- first_normalized_counts_path(value_or(input$plot_deseq_label_mode, "gene_id"))
