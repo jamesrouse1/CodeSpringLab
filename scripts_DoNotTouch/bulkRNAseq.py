@@ -1130,20 +1130,23 @@ def star_ListDir(directory):
     os.makedirs(starlogdir,exist_ok=True)
     
     dirlist = pd.Series(os.listdir(directory))
-    
-    i = 0
+    log_parts = []
 
     for file in dirlist:
-        i += 1
-        
-        logfile = directory+file+"/"+file+"Log.final.out"
+        logfile = os.path.join(directory,file,file+"Log.final.out")
+        if not os.path.exists(logfile):
+            print("WARNING: STAR Log.final.out not found yet: "+logfile)
+            continue
 
         log_df = pd.read_table(logfile,comment='#',header=None,sep="\t",index_col=[0])
+        log_df.index = log_df.index.astype(str).str.replace(r'\|$', '', regex=True).str.strip()
         log_raw = log_df.rename({log_df.columns[0]:file},axis='columns')
-        if i == 1 :
-            log_matrix = log_raw
-        else :
-            log_matrix = pd.concat([log_matrix,log_raw],axis=1)
+        log_parts.append(log_raw)
+
+    if len(log_parts) == 0:
+        raise FileNotFoundError("No STAR Log.final.out files were found.")
+
+    log_matrix = pd.concat(log_parts,axis=1)
 
     log_matrix.to_csv(starlogdir+'summary_matrix.txt',sep='\t')        
     
@@ -1228,19 +1231,21 @@ def featurecounts_ListDir(prefix,count_prefix_list):
     os.makedirs(outpath_counts,exist_ok=True)
     print("Featurecounts summary matrix is stored in "+res_dir+project_name+"/data/counts/")
     
-    i = 0
-
-    for file in count_prefix_list:
-        i += 1
-        
+    log_parts = []
+    for i, file in enumerate(count_prefix_list):
         logfile = file+"_counts.txt.summary"
+        if not os.path.exists(logfile):
+            print("WARNING: featureCounts summary file not found yet: "+logfile)
+            continue
+        log_df = pd.read_table(logfile,comment='#',header=0,sep="\t",index_col=[0])
+        sample_name = str(prefix[i])
+        log_raw = log_df.iloc[:,[0]].rename({log_df.columns[0]:sample_name},axis='columns')
+        log_parts.append(log_raw)
 
-        log_df = pd.read_table(logfile,comment='#',header=None,sep="\t",index_col=[0])
-        log_raw = log_df.rename({log_df.columns[0]:prefix[i-1]},axis='columns')
-        if i == 1 :
-            log_matrix = log_raw
-        else :
-            log_matrix = pd.concat([log_matrix,log_raw],axis=1)
+    if len(log_parts) == 0:
+        raise FileNotFoundError("No featureCounts *.summary files were found.")
+
+    log_matrix = pd.concat(log_parts,axis=1)
 
     log_matrix.to_csv(outpath_counts+'featurecounts_summary.txt',sep='\t')        
     
@@ -1356,7 +1361,7 @@ def featurecounts_CreateCountMatrix():
         else :
             count_matrix = pd.concat([count_matrix,count_raw],axis=1)
 
-    count_matrix.columns=count_matrix.columns.str.rstrip('_counts.txt')
+    count_matrix.columns=count_matrix.columns.str.replace(r'_counts\.txt$', '', regex=True)
     count_matrix.to_csv(outpath_counts+'count_matrix.txt',sep='\t')
 
     _save_config_updates(outpath_counts=outpath_counts)

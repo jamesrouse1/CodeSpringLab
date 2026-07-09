@@ -120,6 +120,85 @@ available_qc_samples <- function(base_dir) {
   sort(unique(ids[ids != files]))
 }
 
+build_star_summary_from_outputs <- function(star_dir, out_path) {
+  files <- if (dir.exists(star_dir)) list.files(star_dir, pattern = "Log\\.final\\.out$", recursive = TRUE, full.names = TRUE) else character(0)
+  if (!length(files)) return(NULL)
+  read_one <- function(path) {
+    sample <- basename(dirname(path))
+    if (!nzchar(sample) || identical(sample, ".")) sample <- sub("Log\\.final\\.out$", "", basename(path))
+    x <- tryCatch(read.delim(path, header = FALSE, sep = "\t", quote = "", comment.char = "", stringsAsFactors = FALSE, check.names = FALSE), error = function(e) NULL)
+    if (is.null(x) || ncol(x) < 2 || !nrow(x)) return(NULL)
+    metric <- trimws(gsub("\\|$", "", trimws(as.character(x[[1]]))))
+    value <- trimws(as.character(x[[2]]))
+    data.frame(metric = metric, value = value, sample = sample, stringsAsFactors = FALSE)
+  }
+  parts <- Filter(Negate(is.null), lapply(files, read_one))
+  if (!length(parts)) return(NULL)
+  out <- Reduce(function(a, b) merge(a, b, by = "metric", all = TRUE), lapply(parts, function(x) {
+    y <- x[, c("metric", "value")]
+    names(y)[2] <- unique(x$sample)[1]
+    y
+  }))
+  dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+  write.table(out, out_path, sep = "\t", quote = FALSE, row.names = FALSE)
+  out
+}
+
+build_featurecounts_outputs_from_samples <- function(feature_dir, count_path, summary_path) {
+  files <- if (dir.exists(feature_dir)) list.files(feature_dir, pattern = "_counts\\.txt$", recursive = TRUE, full.names = TRUE) else character(0)
+  if (!length(files)) return(list(count_matrix = NULL, summary = NULL))
+  read_counts <- function(path) {
+    x <- tryCatch(read.table(path, sep = "\t", header = TRUE, quote = "\"", comment.char = "#", check.names = FALSE), error = function(e) NULL)
+    if (is.null(x) || !nrow(x)) return(NULL)
+    gene_col <- intersect(c("Geneid", "gene_id", "gene_name", "GeneID"), names(x))[1]
+    if (is.na(gene_col)) gene_col <- names(x)[1]
+    count_col <- tail(names(x), 1)
+    sample <- basename(dirname(path))
+    if (!nzchar(sample) || identical(sample, "featurecounts")) sample <- sub("_counts\\.txt$", "", basename(path))
+    data.frame(Geneid = x[[gene_col]], value = suppressWarnings(as.numeric(x[[count_col]])), sample = sample, stringsAsFactors = FALSE)
+  }
+  count_parts <- Filter(Negate(is.null), lapply(files, read_counts))
+  count_matrix <- NULL
+  if (length(count_parts)) {
+    count_matrix <- Reduce(function(a, b) merge(a, b, by = "Geneid", all = TRUE), lapply(count_parts, function(x) {
+      y <- x[, c("Geneid", "value")]
+      names(y)[2] <- unique(x$sample)[1]
+      y
+    }))
+    count_matrix[is.na(count_matrix)] <- 0
+    dir.create(dirname(count_path), recursive = TRUE, showWarnings = FALSE)
+    write.table(count_matrix, count_path, sep = "\t", quote = FALSE, row.names = FALSE)
+  }
+  read_summary <- function(path) {
+    summary_file <- paste0(path, ".summary")
+    sample <- basename(dirname(path))
+    if (!nzchar(sample) || identical(sample, "featurecounts")) sample <- sub("_counts\\.txt$", "", basename(path))
+    if (!file.exists(summary_file)) {
+      counts <- read_counts(path)
+      if (is.null(counts)) return(NULL)
+      return(data.frame(Status = "Assigned", value = sum(counts$value, na.rm = TRUE), sample = sample, stringsAsFactors = FALSE))
+    }
+    x <- tryCatch(read.table(summary_file, sep = "\t", header = TRUE, quote = "\"", comment.char = "", check.names = FALSE), error = function(e) NULL)
+    if (is.null(x) || !nrow(x)) return(NULL)
+    names(x)[1] <- "Status"
+    value_col <- setdiff(names(x), "Status")[1]
+    data.frame(Status = x$Status, value = suppressWarnings(as.numeric(x[[value_col]])), sample = sample, stringsAsFactors = FALSE)
+  }
+  summary_parts <- Filter(Negate(is.null), lapply(files, read_summary))
+  summary <- NULL
+  if (length(summary_parts)) {
+    summary <- Reduce(function(a, b) merge(a, b, by = "Status", all = TRUE), lapply(summary_parts, function(x) {
+      y <- x[, c("Status", "value")]
+      names(y)[2] <- unique(x$sample)[1]
+      y
+    }))
+    summary[is.na(summary)] <- 0
+    dir.create(dirname(summary_path), recursive = TRUE, showWarnings = FALSE)
+    write.table(summary, summary_path, sep = "\t", quote = FALSE, row.names = FALSE)
+  }
+  list(count_matrix = count_matrix, summary = summary)
+}
+
 design_df <- safe_read_delim(design_matrix_path, check.names = FALSE, stringsAsFactors = FALSE)
 if (is.null(design_df)) {
   design_df <- data.frame(sample = character(0), filename = character(0), stringsAsFactors = FALSE)
@@ -163,6 +242,9 @@ star_raw <- safe_read_delim(
   sep = "\t",
   header = TRUE
 )
+if (is.null(star_raw) || !ncol(star_raw)) {
+  star_raw <- build_star_summary_from_outputs(file.path(data_dir, "star"), star_summary_path)
+}
 if (!is.null(star_raw) && ncol(star_raw) > 0) {
   colnames(star_raw)[1] <- "metric"
 }
@@ -183,6 +265,11 @@ if (!is.null(star_raw) && "metric" %in% colnames(star_raw)) {
 }
 
 count_matrix_df <- safe_read_delim(count_matrix_path, check.names = FALSE, stringsAsFactors = FALSE)
+featurecounts_rebuilt <- NULL
+if (is.null(count_matrix_df) || !ncol(count_matrix_df)) {
+  featurecounts_rebuilt <- build_featurecounts_outputs_from_samples(file.path(data_dir, "featurecounts"), count_matrix_path, featurecounts_summary_path)
+  count_matrix_df <- featurecounts_rebuilt$count_matrix
+}
 if (is.null(count_matrix_df)) {
   count_matrix_df <- data.frame(Geneid = character(0), stringsAsFactors = FALSE)
 }
@@ -199,6 +286,14 @@ featurecounts_raw <- safe_read_delim(
   sep = "\t",
   header = TRUE
 )
+featurecounts_malformed <- !is.null(featurecounts_raw) &&
+  all(c("sample", "total_counts") %in% tolower(colnames(featurecounts_raw)))
+if (is.null(featurecounts_raw) || !ncol(featurecounts_raw) || featurecounts_malformed) {
+  if (is.null(featurecounts_rebuilt)) {
+    featurecounts_rebuilt <- build_featurecounts_outputs_from_samples(file.path(data_dir, "featurecounts"), count_matrix_path, featurecounts_summary_path)
+  }
+  featurecounts_raw <- featurecounts_rebuilt$summary
+}
 if (!is.null(featurecounts_raw) && ncol(featurecounts_raw) > 0) {
   colnames(featurecounts_raw)[1] <- "Status"
   featurecounts_raw$Status <- trimws(featurecounts_raw$Status)
@@ -2296,6 +2391,40 @@ server <- function(input, output, session) {
     NULL
   }
 
+  aggregate_gene_name_df <- function(df, label_col = "gene_name", keep_cols = character(0)) {
+    if (is.null(df) || !nrow(df) || !label_col %in% colnames(df)) return(df)
+    df <- df[!is.na(df[[label_col]]) & nzchar(as.character(df[[label_col]])), , drop = FALSE]
+    sample_cols <- setdiff(colnames(df), unique(c(label_col, keep_cols, "gene_id", "Geneid", "transcript_id", "target_id", "gene_symbol", "transcript_name", "biotype")))
+    numeric_cols <- sample_cols[vapply(df[, sample_cols, drop = FALSE], function(x) any(!is.na(suppressWarnings(as.numeric(x)))), logical(1))]
+    if (!length(numeric_cols)) return(df)
+    for (col in numeric_cols) df[[col]] <- suppressWarnings(as.numeric(df[[col]]))
+    agg <- aggregate(df[, numeric_cols, drop = FALSE], by = list(df[[label_col]]), FUN = sum, na.rm = TRUE)
+    colnames(agg)[1] <- label_col
+    agg[order(agg[[label_col]]), , drop = FALSE]
+  }
+
+  aggregated_gene_name_matrix_path <- function(path) {
+    sub("(\\.txt|\\.tsv)$", "_aggregated.txt", gene_name_matrix_path(path))
+  }
+
+  save_aggregated_gene_name_matrix <- function(path, mode = c("rsem", "kallisto")) {
+    mode <- match.arg(mode)
+    gene_path <- gene_name_matrix_path(path)
+    if (!file.exists(gene_path)) {
+      saved <- save_gene_name_matrix(path, mode)
+      if (!isTRUE(saved$ok)) return(saved)
+      gene_path <- saved$path
+    }
+    df <- read_saved_count_matrix(gene_path)
+    if (is.null(df) || !nrow(df) || !"gene_name" %in% colnames(df)) {
+      return(list(ok = FALSE, message = "Gene-name matrix was not found or did not contain a gene_name column.", path = NA_character_))
+    }
+    out <- aggregate_gene_name_df(df, "gene_name")
+    out_file <- aggregated_gene_name_matrix_path(path)
+    write.table(out, out_file, sep = "\t", quote = FALSE, row.names = FALSE)
+    list(ok = TRUE, message = sprintf("Saved duplicate-combined gene-name matrix with %s genes to %s.", nrow(out), out_file), path = out_file)
+  }
+
   save_gene_name_matrix <- function(path, mode = c("rsem", "kallisto")) {
     mode <- match.arg(mode)
     df <- read_saved_count_matrix(path)
@@ -2515,7 +2644,10 @@ server <- function(input, output, session) {
 
   output$featurecounts_convert_ui <- renderUI({
     if (count_matrix_available && "Geneid" %in% colnames(count_matrix_nonzero_df) && looks_like_gene_id(count_matrix_nonzero_df$Geneid)) {
-      actionButton("featurecounts_convert_btn", "Convert Ensembl IDs to gene names")
+      tagList(
+        actionButton("featurecounts_convert_btn", "Convert Ensembl IDs to gene names"),
+        actionButton("featurecounts_aggregate_btn", "Combine duplicate gene names")
+      )
     }
   })
 
@@ -2526,7 +2658,9 @@ server <- function(input, output, session) {
       map_df <- get_gtf_map(species)
       conv <- convert_gene_labels(df$Geneid, map_df)
       df$Geneid <- conv$values
-      df <- aggregate_display_matrix(df, "Geneid")
+      if (value_or(input$featurecounts_aggregate_btn, 0) > 0) {
+        df <- aggregate_display_matrix(df, "Geneid")
+      }
     }
     df
   })
@@ -2541,7 +2675,13 @@ server <- function(input, output, session) {
       conv <- convert_gene_labels(head(count_matrix_nonzero_df$Geneid, 100), map_df)
       tags$div(
         style = "margin-bottom: 12px; padding: 10px 12px; background: #eef5ff; border: 1px solid #b9d0f5; border-radius: 6px;",
-        sprintf("FeatureCounts display converted from %s to %s using %s GTF.", conv$from, conv$to, value_or(species, "detected"))
+        sprintf(
+          "FeatureCounts display converted from %s to %s using %s GTF%s.",
+          conv$from,
+          conv$to,
+          value_or(species, "detected"),
+          if (value_or(input$featurecounts_aggregate_btn, 0) > 0) " and duplicate gene names were summed" else ""
+        )
       )
     } else {
       NULL
@@ -2625,15 +2765,33 @@ server <- function(input, output, session) {
         return(tags$span(class = "tiny-note", "Saved RSEM matrix not found yet. Run the RSEM step first."))
       }
       if (file.exists(converted_path)) {
-        return(tags$span(class = "tiny-note", "Gene-name matrix saved in counts folder."))
+        aggregated_path <- aggregated_gene_name_matrix_path(base_path)
+        return(tagList(
+          tags$span(class = "tiny-note", "Gene-name matrix saved in counts folder."),
+          actionButton("rsem_aggregate_gene_names", "Combine duplicate gene names"),
+          if (file.exists(aggregated_path)) tags$span(class = "tiny-note", " Duplicate-combined matrix also saved.") else NULL
+        ))
       }
-      actionButton("rsem_save_gene_names", "Save gene-name matrix")
+      tagList(
+        actionButton("rsem_save_gene_names", "Save gene-name matrix"),
+        actionButton("rsem_aggregate_gene_names", "Save and combine duplicate gene names")
+      )
     })
 
     observeEvent(input$rsem_save_gene_names, {
       req(input$rsem_type, input$rsem_metric)
       base_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, "gene_id")
       res <- save_gene_name_matrix(base_path, "rsem")
+      rsem_conversion_status(res$message)
+      rsem_label_status(res$message)
+      rsem_matrix_cache[[base_path]] <- NULL
+      rsem_loaded(TRUE)
+    }, ignoreInit = TRUE)
+
+    observeEvent(input$rsem_aggregate_gene_names, {
+      req(input$rsem_type, input$rsem_metric)
+      base_path <- rsem_saved_matrix_path(input$rsem_type, input$rsem_metric, "gene_id")
+      res <- save_aggregated_gene_name_matrix(base_path, "rsem")
       rsem_conversion_status(res$message)
       rsem_label_status(res$message)
       rsem_matrix_cache[[base_path]] <- NULL
@@ -3738,15 +3896,33 @@ server <- function(input, output, session) {
         return(tags$span(class = "tiny-note", "Saved Kallisto matrix not found yet. Run the Kallisto step first."))
       }
       if (file.exists(converted_path)) {
-        return(tags$span(class = "tiny-note", "Gene-name matrix saved in counts folder."))
+        aggregated_path <- aggregated_gene_name_matrix_path(base_path)
+        return(tagList(
+          tags$span(class = "tiny-note", "Gene-name matrix saved in counts folder."),
+          actionButton("kallisto_aggregate_gene_names", "Combine duplicate gene names"),
+          if (file.exists(aggregated_path)) tags$span(class = "tiny-note", " Duplicate-combined matrix also saved.") else NULL
+        ))
       }
-      actionButton("kallisto_save_gene_names", "Save gene-name matrix")
+      tagList(
+        actionButton("kallisto_save_gene_names", "Save gene-name matrix"),
+        actionButton("kallisto_aggregate_gene_names", "Save and combine duplicate gene names")
+      )
     })
 
     observeEvent(input$kallisto_save_gene_names, {
       req(input$kallisto_matrix_metric)
       base_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, "target_id")
       res <- save_gene_name_matrix(base_path, "kallisto")
+      kallisto_conversion_status(res$message)
+      kallisto_matrix_cache(NULL)
+      kallisto_matrix_cache_path(NULL)
+      kallisto_table_loaded(TRUE)
+    }, ignoreInit = TRUE)
+
+    observeEvent(input$kallisto_aggregate_gene_names, {
+      req(input$kallisto_matrix_metric)
+      base_path <- kallisto_saved_matrix_path(input$kallisto_matrix_metric, "target_id")
+      res <- save_aggregated_gene_name_matrix(base_path, "kallisto")
       kallisto_conversion_status(res$message)
       kallisto_matrix_cache(NULL)
       kallisto_matrix_cache_path(NULL)
