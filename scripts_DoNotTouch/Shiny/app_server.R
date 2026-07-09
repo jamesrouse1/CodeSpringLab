@@ -267,7 +267,8 @@ normalize_sample_token <- function(x) {
 
 find_qc_html <- function(base_dir, sample_name, read_name, suffix) {
   if (!dir.exists(base_dir)) return(file.path(base_dir, paste0(sample_name, "_", read_name, "_001_", suffix, ".html")))
-  sample_stem <- sample_fastq_stems[[sample_name]]
+  sample_key <- as.character(value_or(sample_name, ""))
+  sample_stem <- unname(sample_fastq_stems[sample_key])
   if (is.null(sample_stem) || length(sample_stem) == 0 || is.na(sample_stem)) sample_stem <- sample_name
   candidates <- unique(c(sample_name, sample_stem, gsub("_", "", sample_name), gsub("_", "", sample_stem)))
   candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
@@ -276,7 +277,7 @@ find_qc_html <- function(base_dir, sample_name, read_name, suffix) {
   if (length(hit)) return(hit[1])
 
   files <- list.files(base_dir, pattern = paste0("([._-]", read_name, "([._-]?[0-9]*)?)_", suffix, "\\.html$"), full.names = TRUE, ignore.case = TRUE)
-  if (!length(files)) return(expected[1])
+  if (!length(files)) return(first_or_null(expected))
   file_stems <- sub(paste0("_", suffix, "\\.html$"), "", basename(files), ignore.case = TRUE)
   file_stems <- sub(paste0("([._-]", read_name, "([._-]?[0-9]*)?)$"), "", file_stems, ignore.case = TRUE)
   file_keys <- normalize_sample_token(file_stems)
@@ -284,7 +285,7 @@ find_qc_html <- function(base_dir, sample_name, read_name, suffix) {
   idx <- match(cand_keys, file_keys, nomatch = 0)
   idx <- idx[idx > 0]
   if (length(idx)) return(files[idx[1]])
-  expected[1]
+  first_or_null(expected)
 }
 
 qc_file_map <- function(sample_name, read_name = c("R1", "R2"), trimmed = FALSE) {
