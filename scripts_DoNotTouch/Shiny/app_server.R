@@ -65,6 +65,8 @@ human_gtf_path <- pick_first_existing("gencode.v42.chr_patch_hapl_scaff.annotati
 deseq2_dir <- file.path(data_dir, "deseq2")
 deseq2_gene_name_dir <- file.path(data_dir, "deseq2_gene_name")
 gseapy_dir <- file.path(data_dir, "gseapy")
+dir.create(deseq2_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(deseq2_gene_name_dir, recursive = TRUE, showWarnings = FALSE)
 logo_search_dirs <- unique(c(
   path.expand(unlist(config_value("logo_search_dirs", character(0)))),
   path.expand("~/CodeSpringLab/scripts_DoNotTouch"),
@@ -895,6 +897,7 @@ download_table_button <- function(id, label) {
 
 gseapy_comparison_dir <- function(treatment_value, control_value) {
   if (!dir.exists(gseapy_dir)) return(NULL)
+  has_reports <- function(p) dir.exists(p) && length(list.files(p, pattern = "^report\\.gseapy\\..*\\.csv$", recursive = TRUE, full.names = TRUE)) > 0
   candidates <- unique(c(
     sprintf("%s_vs_%s", treatment_value, control_value),
     sprintf("%s_vs_%s", sanitize_filename(treatment_value), sanitize_filename(control_value)),
@@ -902,13 +905,14 @@ gseapy_comparison_dir <- function(treatment_value, control_value) {
     sprintf("%s_vs_%s", sanitize_filename(control_value), sanitize_filename(treatment_value))
   ))
   paths <- file.path(gseapy_dir, candidates)
-  hits <- paths[dir.exists(paths) & vapply(paths, function(p) length(list.files(p, pattern = "^report\\.gseapy\\..*\\.csv$", recursive = FALSE)) > 0, logical(1))]
+  hits <- paths[vapply(paths, has_reports, logical(1))]
   if (length(hits)) return(hits[1])
   dirs <- list.dirs(gseapy_dir, recursive = FALSE, full.names = TRUE)
-  dirs_with_reports <- dirs[vapply(dirs, function(p) length(list.files(p, pattern = "^report\\.gseapy\\..*\\.csv$", recursive = FALSE)) > 0, logical(1))]
+  dirs_with_reports <- dirs[vapply(dirs, has_reports, logical(1))]
   if (length(dirs_with_reports) == 1) return(dirs_with_reports[1])
   paths[1]
 }
+
 
 gseapy_comparison_rel <- function(treatment_value, control_value) {
   comp_dir <- gseapy_comparison_dir(treatment_value, control_value)
@@ -919,17 +923,28 @@ gseapy_comparison_rel <- function(treatment_value, control_value) {
   if (startsWith(full, prefix)) substring(full, nchar(prefix) + 1) else basename(full)
 }
 
+gseapy_report_path <- function(comp_dir, collection_name) {
+  if (is.null(comp_dir) || !dir.exists(comp_dir) || is.null(collection_name) || !nzchar(collection_name)) return(NULL)
+  direct <- file.path(comp_dir, sprintf("report.gseapy.%s.csv", collection_name))
+  if (file.exists(direct)) return(direct)
+  files <- list.files(comp_dir, pattern = "^report\\.gseapy\\..*\\.csv$", recursive = TRUE, full.names = TRUE)
+  hit <- files[basename(files) == sprintf("report.gseapy.%s.csv", collection_name)]
+  if (length(hit)) hit[1] else NULL
+}
+
 list_gseapy_collections <- function(comp_dir) {
   if (is.null(comp_dir) || !dir.exists(comp_dir)) return(character(0))
-  files <- list.files(comp_dir, pattern = "^report\\.gseapy\\..*\\.csv$", full.names = FALSE)
-  sub("^report\\.gseapy\\.(.*)\\.csv$", "\\1", files)
+  files <- list.files(comp_dir, pattern = "^report\\.gseapy\\..*\\.csv$", recursive = TRUE, full.names = TRUE)
+  collections <- sub("^report\\.gseapy\\.(.*)\\.csv$", "\\1", basename(files))
+  sort(unique(collections[nzchar(collections)]))
 }
 
 read_gseapy_report <- function(comp_dir, collection_name) {
-  path <- file.path(comp_dir, sprintf("report.gseapy.%s.csv", collection_name))
-  if (!file.exists(path)) return(NULL)
+  path <- gseapy_report_path(comp_dir, collection_name)
+  if (is.null(path) || !file.exists(path)) return(NULL)
   read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
 }
+
 
 format_gsea_table <- function(df) {
   if (is.null(df) || !nrow(df)) return(df)
@@ -949,13 +964,20 @@ format_gsea_table <- function(df) {
 pathway_pdf_relpath <- function(treatment_value, control_value, pathway_name, heatmap = FALSE) {
   stems <- unique(c(pathway_name, sanitize_filename(pathway_name)))
   suffix <- if (heatmap) ".heatmap.pdf" else ".pdf"
+  comp_dir <- gseapy_comparison_dir(treatment_value, control_value)
+  if (is.null(comp_dir) || !dir.exists(comp_dir)) return(NULL)
+  root <- normalizePath(gseapy_dir, winslash = "/", mustWork = FALSE)
   for (stem in stems[nzchar(stems)]) {
-    rel <- file.path(gseapy_comparison_rel(treatment_value, control_value), "gsea", paste0(stem, suffix))
-    full <- file.path(gseapy_dir, rel)
-    if (file.exists(full)) return(file.path("gseapy_results", rel))
+    hits <- list.files(comp_dir, pattern = paste0("^", stem, suffix, "$"), recursive = TRUE, full.names = TRUE)
+    if (length(hits)) {
+      full <- normalizePath(hits[1], winslash = "/", mustWork = FALSE)
+      rel <- if (startsWith(full, paste0(root, "/"))) substring(full, nchar(root) + 2) else basename(full)
+      return(file.path("gseapy_results", rel))
+    }
   }
   NULL
 }
+
 
 pdf_render_relpath <- function(resource_rel) {
   if (is.null(resource_rel)) return(NULL)
@@ -3746,6 +3768,7 @@ server <- function(input, output, session) {
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
       out_path <- file.path(deseq2_result_dir(plot_effective_label_mode()), filename)
+      dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
       display_width <- as.numeric(value_or(input$volcano_plot_width, 900))
       display_height <- as.numeric(value_or(input$volcano_plot_height, 700))
       save_mode <- value_or(input$volcano_save_mode, "double")
@@ -3943,6 +3966,7 @@ server <- function(input, output, session) {
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
       out_path <- file.path(deseq2_result_dir(plot_effective_label_mode()), filename)
+      dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
       display_width <- as.numeric(value_or(input$heatmap_plot_width, 900))
       display_height <- as.numeric(value_or(input$heatmap_plot_height, 700))
       save_mode <- value_or(input$heatmap_save_mode, "double")
@@ -4168,13 +4192,24 @@ server <- function(input, output, session) {
 
     output$gsea_summary_plots_ui <- renderUI({
       req(input$gsea_treatment, input$gsea_control, input$gsea_collection)
-      comp_rel <- gseapy_comparison_rel(input$gsea_treatment, input$gsea_control)
-      dotplot_rel <- file.path("gseapy_results", comp_rel, sprintf("DotPlot_Top10.%s.png", input$gsea_collection))
-      enrich_rel <- file.path("gseapy_results", comp_rel, sprintf("EnrichmentPlot_Top10.%s.png", input$gsea_collection))
+      comp_dir <- gsea_comp_dir()
+      report_path <- gseapy_report_path(comp_dir, input$gsea_collection)
+      plot_dir <- if (!is.null(report_path)) dirname(report_path) else comp_dir
+      plot_rel <- function(filename) {
+        if (is.null(plot_dir) || !dir.exists(plot_dir)) return(NULL)
+        full <- file.path(plot_dir, filename)
+        if (!file.exists(full)) return(NULL)
+        root <- normalizePath(gseapy_dir, winslash = "/", mustWork = FALSE)
+        full_norm <- normalizePath(full, winslash = "/", mustWork = FALSE)
+        rel <- if (startsWith(full_norm, paste0(root, "/"))) substring(full_norm, nchar(root) + 2) else basename(full_norm)
+        file.path("gseapy_results", rel)
+      }
+      dotplot_rel <- plot_rel(sprintf("DotPlot_Top10.%s.png", input$gsea_collection))
+      enrich_rel <- plot_rel(sprintf("EnrichmentPlot_Top10.%s.png", input$gsea_collection))
       tags$div(
-        if (file.exists(file.path(gseapy_dir, comp_rel, sprintf("DotPlot_Top10.%s.png", input$gsea_collection))))
+        if (!is.null(dotplot_rel))
           tags$img(src = dotplot_rel, style = "max-width: 100%; border: 1px solid #ddd; margin-bottom: 12px;"),
-        if (file.exists(file.path(gseapy_dir, comp_rel, sprintf("EnrichmentPlot_Top10.%s.png", input$gsea_collection))))
+        if (!is.null(enrich_rel))
           tags$img(src = enrich_rel, style = "max-width: 100%; border: 1px solid #ddd;")
       )
     })
