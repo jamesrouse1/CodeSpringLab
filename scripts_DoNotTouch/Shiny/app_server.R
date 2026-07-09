@@ -1479,13 +1479,17 @@ draw_volcano_plot <- function(plot_df, labels, title, subtitle, p_cutoff, lfc_cu
          col = c(pal[["up"]], pal[["down"]], pal[["nonsig"]]), pch = 16, bty = "n", text.col = theme$fg, cex = 0.85)
 }
 
-make_enrichr_gene_lists <- function(df, p_col, p_cutoff, lfc_cutoff) {
+make_enrichr_gene_lists <- function(df, p_col, p_cutoff, lfc_cutoff, gene_map = NULL) {
   if (is.null(df) || !nrow(df) || !(p_col %in% colnames(df)) || !("log2FoldChange" %in% colnames(df))) {
     return(list(up = character(0), down = character(0)))
   }
   pvals <- suppressWarnings(as.numeric(df[[p_col]]))
   lfc <- suppressWarnings(as.numeric(df$log2FoldChange))
   genes <- as.character(df$gene_label)
+  if (looks_like_gene_id(genes)) {
+    conv <- convert_gene_labels(genes, gene_map)
+    genes <- conv$values
+  }
   keep <- !is.na(genes) & nzchar(genes) & !is.na(pvals) & !is.na(lfc)
   up <- genes[keep & pvals <= p_cutoff & lfc >= lfc_cutoff]
   down <- genes[keep & pvals <= p_cutoff & lfc <= (-lfc_cutoff)]
@@ -3567,11 +3571,16 @@ server <- function(input, output, session) {
         updateTextAreaInput(session, "deg_up_genes", value = "")
         updateTextAreaInput(session, "deg_down_genes", value = "")
       } else {
+        gene_map <- NULL
+        if ("gene_label" %in% colnames(df) && looks_like_gene_id(df$gene_label)) {
+          gene_map <- get_gtf_map(detect_species_from_ids(df$gene_label))
+        }
         gene_lists <- make_enrichr_gene_lists(
           df,
           p_col = input$deg_p_col,
           p_cutoff = value_or(input$deg_p_cutoff, 0.05),
-          lfc_cutoff = value_or(input$deg_lfc_cutoff, 0)
+          lfc_cutoff = value_or(input$deg_lfc_cutoff, 0),
+          gene_map = gene_map
         )
         updateTextAreaInput(session, "deg_up_genes", value = paste(gene_lists$up, collapse = "\n"))
         updateTextAreaInput(session, "deg_down_genes", value = paste(gene_lists$down, collapse = "\n"))
