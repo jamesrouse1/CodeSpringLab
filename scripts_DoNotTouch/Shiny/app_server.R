@@ -1090,6 +1090,22 @@ deg_table_path <- function(treatment_value, control_value, label_mode = "gene_id
   file.path(deseq2_result_dir(label_mode), sprintf("DEG_%s_vs_%s(ref).txt", treatment_value, control_value))
 }
 
+deg_table_raw_label_mode <- function(treatment_value, control_value) {
+  path <- deg_table_path(treatment_value, control_value, "gene_id")
+  df <- read_deg_table(path)
+  if (is.null(df) || !"gene_label" %in% colnames(df) || !nrow(df)) return("gene_id")
+  if (looks_like_gene_id(df$gene_label)) "gene_id" else "gene_name"
+}
+
+deg_table_label_choices <- function(treatment_value, control_value) {
+  raw_mode <- deg_table_raw_label_mode(treatment_value, control_value)
+  if (identical(raw_mode, "gene_name") && !file.exists(deg_table_path(treatment_value, control_value, "gene_name"))) {
+    return(c("Gene name" = "gene_name"))
+  }
+  available <- available_deseq2_label_modes(treatment_value, control_value)
+  if (length(available)) available else c("Gene ID" = "gene_id", "Gene name" = "gene_name")
+}
+
 pca_plot_path <- function(compare_col, treatment_value, control_value) {
   file.path(deseq2_dir, sprintf("pca_%s_%s_vs_%s(ref).png", compare_col, treatment_value, control_value))
 }
@@ -3339,11 +3355,23 @@ server <- function(input, output, session) {
     })
 
     output$deg_label_mode_ui <- renderUI({
-      choices <- available_deseq2_label_modes(value_or(input$deg_treatment, ""), value_or(input$deg_control, ""))
+      req(input$deg_treatment, input$deg_control)
+      choices <- deg_table_label_choices(value_or(input$deg_treatment, ""), value_or(input$deg_control, ""))
       if (!length(choices)) choices <- c("Gene ID" = "gene_id")
-      selected <- value_or(input$deg_label_mode, unname(choices)[1])
+      default_mode <- deg_table_raw_label_mode(input$deg_treatment, input$deg_control)
+      selected <- value_or(input$deg_label_mode, default_mode)
+      if (!selected %in% unname(choices)) selected <- default_mode
       if (!selected %in% unname(choices)) selected <- unname(choices)[1]
       selectInput("deg_label_mode", "DESeq2 result labels", choices = choices, selected = selected, selectize = FALSE)
+    })
+
+    deg_effective_label_mode <- reactive({
+      req(input$deg_treatment, input$deg_control)
+      selected <- value_or(input$deg_label_mode, deg_table_raw_label_mode(input$deg_treatment, input$deg_control))
+      if (identical(selected, "gene_id") && identical(deg_table_raw_label_mode(input$deg_treatment, input$deg_control), "gene_name")) {
+        return("gene_name")
+      }
+      selected
     })
 
     get_plot_values <- reactive({
@@ -3367,10 +3395,12 @@ server <- function(input, output, session) {
     output$plot_deseq_label_mode_ui <- renderUI({
       treatment_value <- value_or(input$plot_treatment, "")
       control_value <- value_or(input$plot_control, "")
-      choices <- available_deseq2_label_modes(treatment_value, control_value)
+      choices <- deg_table_label_choices(treatment_value, control_value)
       if (!length(choices)) choices <- available_deseq2_label_modes()
       if (!length(choices)) choices <- c("Gene ID" = "gene_id")
-      selected <- value_or(input$plot_deseq_label_mode, unname(choices)[1])
+      default_mode <- deg_table_raw_label_mode(treatment_value, control_value)
+      selected <- value_or(input$plot_deseq_label_mode, default_mode)
+      if (!selected %in% unname(choices)) selected <- default_mode
       if (!selected %in% unname(choices)) selected <- unname(choices)[1]
       selectInput(
         "plot_deseq_label_mode",
@@ -3381,13 +3411,23 @@ server <- function(input, output, session) {
       )
     })
 
+    plot_effective_label_mode <- reactive({
+      req(input$plot_treatment, input$plot_control)
+      selected <- value_or(input$plot_deseq_label_mode, deg_table_raw_label_mode(input$plot_treatment, input$plot_control))
+      if (identical(selected, "gene_id") && identical(deg_table_raw_label_mode(input$plot_treatment, input$plot_control), "gene_name")) {
+        return("gene_name")
+      }
+      selected
+    })
+
     deg_raw_df <- reactive({
       req(input$deg_compare_col)
       if (identical(input$deg_compare_col, "NA")) return(NULL)
       req(input$deg_treatment, input$deg_control)
-      label_mode <- value_or(input$deg_label_mode, "gene_id")
-      path <- deg_table_path(input$deg_treatment, input$deg_control, label_mode)
-      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+      raw_mode <- deg_table_raw_label_mode(input$deg_treatment, input$deg_control)
+      label_mode <- deg_effective_label_mode()
+      path <- deg_table_path(input$deg_treatment, input$deg_control, "gene_id")
+      if (identical(label_mode, "gene_name") && !identical(raw_mode, "gene_name")) {
         saved <- save_deg_gene_names(input$deg_treatment, input$deg_control)
         if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
       }
@@ -3408,9 +3448,10 @@ server <- function(input, output, session) {
       req(input$plot_compare_col)
       if (identical(input$plot_compare_col, "NA")) return(NULL)
       req(input$plot_treatment, input$plot_control)
-      label_mode <- value_or(input$plot_deseq_label_mode, "gene_id")
-      path <- deg_table_path(input$plot_treatment, input$plot_control, label_mode)
-      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+      raw_mode <- deg_table_raw_label_mode(input$plot_treatment, input$plot_control)
+      label_mode <- plot_effective_label_mode()
+      path <- deg_table_path(input$plot_treatment, input$plot_control, "gene_id")
+      if (identical(label_mode, "gene_name") && !identical(raw_mode, "gene_name")) {
         saved <- save_deg_gene_names(input$plot_treatment, input$plot_control)
         if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
       }
@@ -3438,9 +3479,10 @@ server <- function(input, output, session) {
         ))
       }
       req(input$deg_treatment, input$deg_control)
-      label_mode <- value_or(input$deg_label_mode, "gene_id")
-      path <- deg_table_path(input$deg_treatment, input$deg_control, label_mode)
-      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+      raw_mode <- deg_table_raw_label_mode(input$deg_treatment, input$deg_control)
+      label_mode <- deg_effective_label_mode()
+      path <- deg_table_path(input$deg_treatment, input$deg_control, "gene_id")
+      if (identical(label_mode, "gene_name") && !identical(raw_mode, "gene_name")) {
         saved <- save_deg_gene_names(input$deg_treatment, input$deg_control)
         if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
       }
@@ -3457,7 +3499,7 @@ server <- function(input, output, session) {
           input$deg_treatment,
           input$deg_control,
           input$deg_compare_col,
-          if (identical(value_or(input$deg_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"
+          if (identical(deg_effective_label_mode(), "gene_name")) "gene names" else "gene IDs"
         )
       )
     })
@@ -3474,16 +3516,17 @@ server <- function(input, output, session) {
         return(status_box("Select a comparison column to view plots for a tested comparison.", "warning"))
       }
       req(input$plot_treatment, input$plot_control)
-      label_mode <- value_or(input$plot_deseq_label_mode, "gene_id")
-      path <- deg_table_path(input$plot_treatment, input$plot_control, label_mode)
-      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+      raw_mode <- deg_table_raw_label_mode(input$plot_treatment, input$plot_control)
+      label_mode <- plot_effective_label_mode()
+      path <- deg_table_path(input$plot_treatment, input$plot_control, "gene_id")
+      if (identical(label_mode, "gene_name") && !identical(raw_mode, "gene_name")) {
         saved <- save_deg_gene_names(input$plot_treatment, input$plot_control)
         if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
       }
       if (!file.exists(path)) {
         return(status_box(sprintf("This comparison has not been tested: %s vs %s.", input$plot_treatment, input$plot_control), "error"))
       }
-      label_text <- if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"
+      label_text <- if (identical(plot_effective_label_mode(), "gene_name")) "gene names" else "gene IDs"
       status_box(sprintf("Plotting %s vs %s using %s (%s).", input$plot_treatment, input$plot_control, input$plot_compare_col, label_text), "info")
     })
 
@@ -3503,9 +3546,10 @@ server <- function(input, output, session) {
       req(input$plot_compare_col)
       if (identical(input$plot_compare_col, "NA")) return(NULL)
       req(input$plot_treatment, input$plot_control)
-      label_mode <- value_or(input$plot_deseq_label_mode, "gene_id")
-      path <- normalized_counts_path(input$plot_treatment, input$plot_control, label_mode)
-      if (identical(label_mode, "gene_name") && !file.exists(path)) {
+      raw_mode <- normalized_counts_raw_label_mode(input$plot_treatment, input$plot_control)
+      label_mode <- plot_effective_label_mode()
+      path <- normalized_counts_path(input$plot_treatment, input$plot_control, "gene_id")
+      if (identical(label_mode, "gene_name") && !identical(raw_mode, "gene_name")) {
         saved <- save_normalized_counts_gene_names(input$plot_treatment, input$plot_control)
         if (isTRUE(saved$ok) && file.exists(saved$path)) path <- saved$path
       }
@@ -3555,15 +3599,16 @@ server <- function(input, output, session) {
       }
       selected_path <- NULL
       if (!is.null(input$plot_treatment) && !is.null(input$plot_control)) {
-        label_mode <- value_or(input$plot_deseq_label_mode, "gene_id")
-        candidate <- normalized_counts_path(input$plot_treatment, input$plot_control, label_mode)
-        if (identical(label_mode, "gene_name") && !file.exists(candidate)) {
+        raw_mode <- normalized_counts_raw_label_mode(input$plot_treatment, input$plot_control)
+        label_mode <- plot_effective_label_mode()
+        candidate <- normalized_counts_path(input$plot_treatment, input$plot_control, "gene_id")
+        if (identical(label_mode, "gene_name") && !identical(raw_mode, "gene_name")) {
           saved <- save_normalized_counts_gene_names(input$plot_treatment, input$plot_control)
           if (isTRUE(saved$ok) && file.exists(saved$path)) candidate <- saved$path
         }
         if (file.exists(candidate)) selected_path <- candidate
       }
-      if (is.null(selected_path)) selected_path <- first_normalized_counts_path(value_or(input$plot_deseq_label_mode, "gene_id"))
+      if (is.null(selected_path)) selected_path <- first_normalized_counts_path(plot_effective_label_mode())
       if (is.null(selected_path)) selected_path <- first_normalized_counts_path()
       read_normalized_counts(selected_path)
     })
@@ -3669,7 +3714,7 @@ server <- function(input, output, session) {
         vp$plot_df,
         labels = vp$labels,
         title = sprintf("%s vs %s", value_or(input$plot_treatment, "treatment"), value_or(input$plot_control, "control")),
-        subtitle = sprintf("%s, %s", vp$p_col, if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"),
+        subtitle = sprintf("%s, %s", vp$p_col, if (identical(plot_effective_label_mode(), "gene_name")) "gene names" else "gene IDs"),
         p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
         lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
         style = value_or(input$volcano_style, "publication"),
@@ -3689,7 +3734,7 @@ server <- function(input, output, session) {
 
     observeEvent(input$save_volcano_btn, {
       vp <- volcano_plot_state()
-      label_suffix <- if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene_name" else "gene_id"
+      label_suffix <- if (identical(plot_effective_label_mode(), "gene_name")) "gene_name" else "gene_id"
       default_name <- sprintf(
         "volcano_%s_%s_vs_%s_%s.png",
         value_or(input$plot_compare_col, "comparison"),
@@ -3700,7 +3745,7 @@ server <- function(input, output, session) {
       filename <- sanitize_filename(input$volcano_filename)
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
-      out_path <- file.path(deseq2_result_dir(value_or(input$plot_deseq_label_mode, "gene_id")), filename)
+      out_path <- file.path(deseq2_result_dir(plot_effective_label_mode()), filename)
       display_width <- as.numeric(value_or(input$volcano_plot_width, 900))
       display_height <- as.numeric(value_or(input$volcano_plot_height, 700))
       save_mode <- value_or(input$volcano_save_mode, "double")
@@ -3718,7 +3763,7 @@ server <- function(input, output, session) {
         vp$plot_df,
         labels = vp$labels,
         title = sprintf("%s vs %s", value_or(input$plot_treatment, "treatment"), value_or(input$plot_control, "control")),
-        subtitle = sprintf("%s, %s", vp$p_col, if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene names" else "gene IDs"),
+        subtitle = sprintf("%s, %s", vp$p_col, if (identical(plot_effective_label_mode(), "gene_name")) "gene names" else "gene IDs"),
         p_cutoff = as.numeric(value_or(input$volcano_p_cutoff, 0.05)),
         lfc_cutoff = as.numeric(value_or(input$volcano_lfc_cutoff, 1)),
         style = value_or(input$volcano_style, "publication"),
@@ -3886,7 +3931,7 @@ server <- function(input, output, session) {
 
     observeEvent(input$save_heatmap_btn, {
       hp <- heatmap_plot_state()
-      label_suffix <- if (identical(value_or(input$plot_deseq_label_mode, "gene_id"), "gene_name")) "gene_name" else "gene_id"
+      label_suffix <- if (identical(plot_effective_label_mode(), "gene_name")) "gene_name" else "gene_id"
       default_name <- sprintf(
         "heatmap_%s_%s_vs_%s_%s.png",
         value_or(input$plot_compare_col, "comparison"),
@@ -3897,7 +3942,7 @@ server <- function(input, output, session) {
       filename <- sanitize_filename(input$heatmap_filename)
       if (!nzchar(filename)) filename <- default_name
       if (!grepl("\\.png$", filename, ignore.case = TRUE)) filename <- paste0(filename, ".png")
-      out_path <- file.path(deseq2_result_dir(value_or(input$plot_deseq_label_mode, "gene_id")), filename)
+      out_path <- file.path(deseq2_result_dir(plot_effective_label_mode()), filename)
       display_width <- as.numeric(value_or(input$heatmap_plot_width, 900))
       display_height <- as.numeric(value_or(input$heatmap_plot_height, 700))
       save_mode <- value_or(input$heatmap_save_mode, "double")
