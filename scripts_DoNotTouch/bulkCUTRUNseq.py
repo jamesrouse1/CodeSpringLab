@@ -32,8 +32,8 @@ CONFIG_KEYS = config_store.CONFIG_KEYS
 REFERENCE_DEFAULTS = {
     "mouse": {
         "genome_version": "mouse_gencodeM39",
-        "genome_index_path": "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/GRCm39_M29_gencode_bowtie2index/GRCm39_M29_gencode",
-        "chromsize": "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/chrom.sizes",
+        "genome_index_path": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/bowtie2_index/GRCm39_gencodeM39",
+        "chromsize": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/GRCm39.chrom.sizes",
         "effective_genome_size": "2654621783",
         "macs2_genome_size": "mm",
         "homer_species": "mm39"

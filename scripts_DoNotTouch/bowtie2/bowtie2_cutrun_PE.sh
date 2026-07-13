@@ -12,11 +12,11 @@ max_fragment="${8:-1000}"
 dedup_mode="${9:-keepdup}"
 remove_mito="${10:-y}"
 
-module load EBModules
-module load Bowtie2/2.4.4-GCC-10.3.0
-module load SAMtools/1.14-GCC-10.3.0
-module load BEDTools/2.30.0-GCC-10.3.0
-module load picard/2.21.6-Java-11
+module load EB5 || module load EB5Modules || module load EBModules || true
+module load Bowtie2/2.5.4-GCC-14.3.0 || module load Bowtie2/2.4.4-GCC-10.3.0
+module load SAMtools/1.22.1-GCC-14.3.0 || module load SAMtools/1.14-GCC-10.3.0
+module load BEDTools/2.31.1-GCC-14.3.0 || module load BEDTools/2.30.0-GCC-10.3.0 || module load BEDTools
+module load picard/3.4.0-Java-21 || module load picard/2.21.6-Java-11 || module load picard
 
 out_dir="$(dirname "$out_prefix")"
 sample="$(basename "$out_prefix")"
