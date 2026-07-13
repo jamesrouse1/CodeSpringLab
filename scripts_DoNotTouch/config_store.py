@@ -13,13 +13,18 @@ CONFIG_KEYS = [
     "visualizer_data_dir",
     "out_dir_star", "out_dir_kallisto", "out_dir_featurecounts", "out_dir_rsem",
     "out_dir_bowtie2", "out_peak_macs2", "outpath_diffbind", "outpath_homer",
-    "tracks_dir", "qval", "removeDup"
+    "tracks_dir", "qval", "removeDup",
+    "out_peak_seacr", "peakcaller", "seacr_stringency", "seacr_norm",
+    "dedup_target_reads", "dedup_control_reads", "minimum_alignment_q_score",
+    "max_fragment_length", "normalisation_mode", "remove_mitochondrial_reads",
+    "spikein_genome", "igg_control_column"
 ]
 
 ANALYSIS_LABELS = {
     "rna": "RNA-seq",
     "atac": "ATAC-seq",
-    "chip": "ChIP-seq"
+    "chip": "ChIP-seq",
+    "cutrun": "CUT&RUN"
 }
 
 REQUIRED_SETUP_KEYS = [
@@ -135,6 +140,16 @@ def infer_standard_project_values(values, analysis_type=None):
         for key, path in standard_dirs.items():
             if len(str(values.get(key, "")).strip()) == 0 and os.path.isdir(path):
                 values[key] = path
+    elif analysis_type == "cutrun":
+        standard_dirs = {
+            "out_dir_bowtie2": os.path.join(data_dir, "bowtie2"),
+            "out_peak_seacr": os.path.join(data_dir, "seacr"),
+            "out_peak_macs2": os.path.join(data_dir, "macs2"),
+            "tracks_dir": os.path.join(data_dir, "tracks")
+        }
+        for key, path in standard_dirs.items():
+            if len(str(values.get(key, "")).strip()) == 0 and os.path.isdir(path):
+                values[key] = path
 
     values["parameters_exist"] = "y" if setup_is_complete(values) else "n"
     return values
@@ -194,6 +209,8 @@ def infer_analysis_type(default=None):
         return "rna"
     if "bulkatacseq" in joined or "atac" in joined:
         return "atac"
+    if "bulkcutrunseq" in joined or "cutrun" in joined or "cutandrun" in joined or "cut_n_run" in joined:
+        return "cutrun"
     if "bulkchipseq" in joined or "chip" in joined:
         return "chip"
     return default or "rna"
