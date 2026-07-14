@@ -1,6 +1,6 @@
 # Bundled SEACR
 
-CodeSpringLab bundles `SEACR_1.3.sh` for CUT&RUN peak calling so the CUT&RUN workflow can run without an extra manual download step.
+CodeSpringLab bundles both `SEACR_1.3.sh` and its required companion `SEACR_1.3.R` for CUT&RUN peak calling so the workflow can run without an extra manual download step.
 
 Source:
 

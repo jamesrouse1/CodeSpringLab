@@ -9,9 +9,11 @@ out_prefix="$5"
 project_name="$6"
 target_fragments="${7:-none}"
 
-seacr_script="../scripts_DoNotTouch/SEACR/SEACR_1.3.sh"
-if [[ ! -s "$seacr_script" ]]; then
-  echo "ERROR: SEACR was not found at $seacr_script" >&2
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+seacr_script="${script_dir}/SEACR_1.3.sh"
+seacr_r_script="${script_dir}/SEACR_1.3.R"
+if [[ ! -s "$seacr_script" || ! -s "$seacr_r_script" ]]; then
+  echo "ERROR: The bundled SEACR 1.3 shell and R scripts were not both found in ${script_dir}" >&2
   echo "Install once from the CodeSpringLab folder with:" >&2
   echo "  bash ../scripts_DoNotTouch/SEACR/download_seacr.sh" >&2
   exit 2
