@@ -61,13 +61,17 @@ If another spike-in genome was used, pass `spikein_index_path="/path/to/index/pr
 
 ## SEACR setup
 
-The server does not currently expose a `seacr` module. Install the SEACR script once from the CodeSpringLab folder:
+SEACR is bundled in CodeSpringLab at:
+
+```text
+../scripts_DoNotTouch/SEACR/SEACR_1.3.sh
+```
+
+Use the `seacr_Prep()` and `seacr_RunPeakCalling()` functions directly. To refresh the bundled SEACR copy from the Fred Hutch repository, run:
 
 ```bash
 bash ../scripts_DoNotTouch/SEACR/download_seacr.sh
 ```
-
-Then use the `seacr_Prep()` and `seacr_RunPeakCalling()` functions.
 
 ## Minimal notebook-style run
 
