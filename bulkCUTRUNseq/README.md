@@ -10,6 +10,7 @@ This module is the first CodeSpringLab implementation for CUT&RUN/CUT&Tag-style 
 4. Adapter trimming with cutadapt
 5. Bowtie2 alignment and CUT&RUN fragment files
 6. Peak calling with SEACR or MACS2
+7. Peak QC with consensus SEACR peaks, consensus peak counts, and FRiP summaries
 
 ## Design matrix
 
@@ -37,10 +38,14 @@ sample	include	target	condition	replicate	control_sample	filename
 - mitochondrial reads removed from fragment signal
 - target duplicate reads kept by default
 - IgG/control duplicate reads deduplicated by default
-- SEACR expects raw paired-fragment bedgraphs
+- CPM-normalized fragment bedGraph and bigWig tracks are written by default
+- optional spike-in alignment/normalization can be enabled with a spike-in Bowtie2 index prefix
+- SEACR uses the selected normalized paired-fragment bedGraph when available
 - MACS2 uses `BAMPE` and `--keep-dup all`
 
 These defaults follow common CUT&RUN conventions, where identical fragment starts can reflect real antibody-tethered cleavage rather than PCR duplicates, but IgG controls often have higher nonspecific duplication.
+
+Spike-in normalization is off by default. If E. coli or another spike-in genome was included experimentally and indexed with Bowtie2, pass `normalization_mode="spikein"` and `spikein_index_path="/path/to/index/prefix"` to `bowtie2_Prep()`. If spike-in reads are very low, use CPM or no normalization instead.
 
 ## Best-practice references used for this first pass
 
@@ -80,4 +85,7 @@ jobid = csl.bowtie2_RunAlignment(*bt)
 
 script_seacr, seacr_table = csl.seacr_Prep(inpath_design=inpath_design)
 jobid = csl.seacr_RunPeakCalling(script_seacr, seacr_table)
+
+peakqc = csl.peakqc_Prep()
+jobid = csl.peakqc_Run(*peakqc)
 ```

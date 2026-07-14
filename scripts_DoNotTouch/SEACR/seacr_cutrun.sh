@@ -7,6 +7,7 @@ norm="${3:-norm}"
 stringency="${4:-stringent}"
 out_prefix="$5"
 project_name="$6"
+target_fragments="${7:-none}"
 
 seacr_script="../scripts_DoNotTouch/SEACR/SEACR_1.3.sh"
 if [[ ! -s "$seacr_script" ]]; then
@@ -31,3 +32,14 @@ echo -e "target_bedgraph\t${target_bedgraph}" > "${out_prefix}_seacr_summary.txt
 echo -e "control_bedgraph\t${control_bedgraph}" >> "${out_prefix}_seacr_summary.txt"
 echo -e "normalization\t${norm}" >> "${out_prefix}_seacr_summary.txt"
 echo -e "stringency\t${stringency}" >> "${out_prefix}_seacr_summary.txt"
+
+peak_bed="${out_prefix}.${stringency}.bed"
+if [[ -s "$peak_bed" && "$target_fragments" != "none" && -s "$target_fragments" ]]; then
+  total_fragments="$(wc -l < "$target_fragments")"
+  fragments_in_peaks="$(bedtools intersect -u -a "$target_fragments" -b "$peak_bed" | wc -l)"
+  frip="$(awk -v a="$fragments_in_peaks" -v b="$total_fragments" 'BEGIN{if (b>0) printf "%.6f", a/b; else print "NA"}')"
+  echo -e "target_fragments\t${target_fragments}" >> "${out_prefix}_seacr_summary.txt"
+  echo -e "total_fragments\t${total_fragments}" >> "${out_prefix}_seacr_summary.txt"
+  echo -e "fragments_in_peaks\t${fragments_in_peaks}" >> "${out_prefix}_seacr_summary.txt"
+  echo -e "frip\t${frip}" >> "${out_prefix}_seacr_summary.txt"
+fi

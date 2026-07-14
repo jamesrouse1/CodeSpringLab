@@ -12,12 +12,12 @@ CONFIG_KEYS = [
     "refcond", "compared", "redundant", "geneset",
     "visualizer_data_dir",
     "out_dir_star", "out_dir_kallisto", "out_dir_featurecounts", "out_dir_rsem",
-    "out_dir_bowtie2", "out_peak_macs2", "outpath_diffbind", "outpath_homer",
+    "out_dir_bowtie2", "out_dir_peakqc", "out_peak_macs2", "outpath_diffbind", "outpath_homer",
     "tracks_dir", "qval", "removeDup",
     "out_peak_seacr", "peakcaller", "seacr_stringency", "seacr_norm",
     "dedup_target_reads", "dedup_control_reads", "minimum_alignment_q_score",
-    "max_fragment_length", "normalisation_mode", "remove_mitochondrial_reads",
-    "spikein_genome", "igg_control_column"
+    "max_fragment_length", "normalisation_mode", "normalization_mode", "remove_mitochondrial_reads",
+    "spikein_genome", "spikein_index_path", "spikein_name", "spikein_min_reads", "igg_control_column"
 ]
 
 ANALYSIS_LABELS = {
@@ -143,6 +143,7 @@ def infer_standard_project_values(values, analysis_type=None):
     elif analysis_type == "cutrun":
         standard_dirs = {
             "out_dir_bowtie2": os.path.join(data_dir, "bowtie2"),
+            "out_dir_peakqc": os.path.join(data_dir, "cutrun_peak_qc"),
             "out_peak_seacr": os.path.join(data_dir, "seacr"),
             "out_peak_macs2": os.path.join(data_dir, "macs2"),
             "tracks_dir": os.path.join(data_dir, "tracks")

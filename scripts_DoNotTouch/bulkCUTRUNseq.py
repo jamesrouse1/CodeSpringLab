@@ -34,6 +34,8 @@ REFERENCE_DEFAULTS = {
         "genome_version": "mouse_gencodeM39",
         "genome_index_path": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/bowtie2_index/GRCm39_gencodeM39",
         "chromsize": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/GRCm39.chrom.sizes",
+        "spikein_index_path": "none",
+        "spikein_name": "spikein",
         "effective_genome_size": "2654621783",
         "macs2_genome_size": "mm",
         "homer_species": "mm39"
@@ -42,6 +44,8 @@ REFERENCE_DEFAULTS = {
         "genome_version": "human_gencode50",
         "genome_index_path": "/grid/bsr/data/data/utama/genome/human_gencode50/bowtie2_index/GRCh38_gencode50",
         "chromsize": "/grid/bsr/data/data/utama/genome/human_gencode50/GRCh38.chrom.sizes",
+        "spikein_index_path": "none",
+        "spikein_name": "spikein",
         "effective_genome_size": "2913022398",
         "macs2_genome_size": "hs",
         "homer_species": "hg38"
@@ -387,7 +391,9 @@ def cutadapt_RunTrimming(adapter, adapter2, minlen, read1_list, read2_list, trim
     return jobid
 
 
-def bowtie2_Prep(genome=None, pairing=None, read_dir=None, inpath_design=None, use_trimmed=None, mapq=None, max_fragment_length=None, dedup_target_reads=None, dedup_control_reads=None, remove_mitochondrial_reads=None):
+def bowtie2_Prep(genome=None, pairing=None, read_dir=None, inpath_design=None, use_trimmed=None, mapq=None, max_fragment_length=None,
+                 dedup_target_reads=None, dedup_control_reads=None, remove_mitochondrial_reads=None,
+                 normalization_mode=None, spikein_index_path=None, spikein_name=None, spikein_min_reads=None):
     data_dir, _ = _project_dirs()
     genome = str(genome or _config_value("genome", "mouse")).strip().lower()
     pairing = str(pairing or _config_value("pairing", "y")).strip().lower()
@@ -402,6 +408,10 @@ def bowtie2_Prep(genome=None, pairing=None, read_dir=None, inpath_design=None, u
     dedup_target_reads = str(dedup_target_reads if dedup_target_reads is not None else _config_value("dedup_target_reads", "n")).lower()
     dedup_control_reads = str(dedup_control_reads if dedup_control_reads is not None else _config_value("dedup_control_reads", "y")).lower()
     remove_mitochondrial_reads = str(remove_mitochondrial_reads if remove_mitochondrial_reads is not None else _config_value("remove_mitochondrial_reads", "y")).lower()
+    normalization_mode = str(normalization_mode or _config_value("normalization_mode", _config_value("normalisation_mode", "CPM"))).strip()
+    spikein_index_path = str(spikein_index_path or _config_value("spikein_index_path", _config_value("spikein_genome", "none"))).strip()
+    spikein_name = str(spikein_name or _config_value("spikein_name", "spikein")).strip() or "spikein"
+    spikein_min_reads = str(spikein_min_reads or _config_value("spikein_min_reads", "1000")).strip() or "1000"
 
     ref = cutrun_reference(genome)
     design = _included_design(_read_design(inpath_design))
@@ -432,18 +442,24 @@ def bowtie2_Prep(genome=None, pairing=None, read_dir=None, inpath_design=None, u
         max_fragment_length=max_fragment_length,
         dedup_target_reads=dedup_target_reads,
         dedup_control_reads=dedup_control_reads,
-        remove_mitochondrial_reads=remove_mitochondrial_reads
+        remove_mitochondrial_reads=remove_mitochondrial_reads,
+        normalization_mode=normalization_mode,
+        normalisation_mode=normalization_mode,
+        spikein_index_path=spikein_index_path,
+        spikein_genome=spikein_index_path,
+        spikein_name=spikein_name,
+        spikein_min_reads=spikein_min_reads
     )
     print("Bowtie2 CUT&RUN alignment results will be stored in " + out_dir + "/")
-    return ref["genome_index_path"], read1_list, read2_list, out_prefix_list, out_dir, ref["chromsize"], scriptpath_bowtie2, mapq, max_fragment_length, dedup_mode_list, remove_mitochondrial_reads
+    return ref["genome_index_path"], read1_list, read2_list, out_prefix_list, out_dir, ref["chromsize"], scriptpath_bowtie2, mapq, max_fragment_length, dedup_mode_list, remove_mitochondrial_reads, normalization_mode, spikein_index_path, spikein_name, spikein_min_reads
 
 
-def bowtie2_RunAlignment(genome_index_path, read1_list, read2_list, out_prefix_list, out_dir, chromsize, scriptpath_bowtie2, mapq, max_fragment_length, dedup_mode_list, remove_mitochondrial_reads):
+def bowtie2_RunAlignment(genome_index_path, read1_list, read2_list, out_prefix_list, out_dir, chromsize, scriptpath_bowtie2, mapq, max_fragment_length, dedup_mode_list, remove_mitochondrial_reads, normalization_mode="CPM", spikein_index_path="none", spikein_name="spikein", spikein_min_reads="1000"):
     jobid = []
     for i in range(len(out_prefix_list)):
         stderr = "-e " + out_prefix_list[i] + "_cutrun_bowtie2.err"
         stdout = "-o " + out_prefix_list[i] + "_cutrun_bowtie2.out"
-        command = "sbatch " + stderr + " " + stdout + " " + scriptpath_bowtie2 + " " + out_prefix_list[i] + " " + genome_index_path + " " + read1_list[i] + " " + read2_list[i] + " " + chromsize + " " + project_name + " " + str(mapq) + " " + str(max_fragment_length) + " " + str(dedup_mode_list[i]) + " " + str(remove_mitochondrial_reads)
+        command = "sbatch " + stderr + " " + stdout + " " + scriptpath_bowtie2 + " " + out_prefix_list[i] + " " + genome_index_path + " " + read1_list[i] + " " + read2_list[i] + " " + chromsize + " " + project_name + " " + str(mapq) + " " + str(max_fragment_length) + " " + str(dedup_mode_list[i]) + " " + str(remove_mitochondrial_reads) + " " + str(normalization_mode) + " " + str(spikein_index_path) + " " + str(spikein_name) + " " + str(spikein_min_reads)
         job = os.popen(command).read().splitlines()
         print(job[0])
         jobid.append(job[0].split(" ")[3])
@@ -472,6 +488,23 @@ def bowtie2_Summary(directory=None):
     return summary
 
 
+def _cutrun_normalized_bedgraph(out_dir_bowtie2, sample):
+    sample_dir = os.path.join(out_dir_bowtie2, sample)
+    summary_path = os.path.join(sample_dir, sample + "_alignment_summary.txt")
+    if os.path.exists(summary_path):
+        with open(summary_path) as handle:
+            for line in handle:
+                if line.startswith("normalized_bedgraph\t"):
+                    path = line.rstrip("\n").split("\t", 1)[1]
+                    if os.path.exists(path):
+                        return path
+    for suffix in ["_fragments.spikein.bedgraph", "_fragments.CPM.bedgraph", "_fragments.raw.bedgraph"]:
+        path = os.path.join(sample_dir, sample + suffix)
+        if os.path.exists(path):
+            return path
+    return os.path.join(sample_dir, sample + "_fragments.raw.bedgraph")
+
+
 def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, seacr_norm=None, seacr_stringency=None):
     data_dir, _ = _project_dirs()
     inpath_design = _as_config_dir(inpath_design or _config_value("inpath_design"))
@@ -491,12 +524,14 @@ def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, se
             continue
         sample = str(row["sample"])
         control = str(row.get(control_column, "")).strip() if control_column in row.index else ""
-        target_bdg = os.path.join(out_dir_bowtie2, sample, sample + "_fragments.raw.bedgraph")
-        control_bdg = os.path.join(out_dir_bowtie2, control, control + "_fragments.raw.bedgraph") if control else "none"
+        target_bdg = _cutrun_normalized_bedgraph(out_dir_bowtie2, sample)
+        control_bdg = _cutrun_normalized_bedgraph(out_dir_bowtie2, control) if control else "none"
+        target_fragments = os.path.join(out_dir_bowtie2, sample, sample + "_fragments.bed")
         rows.append({
             "sample": sample,
             "target_bdg": target_bdg,
             "control_bdg": control_bdg,
+            "target_fragments": target_fragments,
             "out_prefix": os.path.join(seacr_dir, sample, sample),
             "norm": seacr_norm,
             "stringency": seacr_stringency
@@ -513,11 +548,34 @@ def seacr_RunPeakCalling(scriptpath_seacr, seacr_table):
     for _, row in seacr_table.iterrows():
         stderr = "-e " + row["out_prefix"] + "_seacr.err"
         stdout = "-o " + row["out_prefix"] + "_seacr.out"
-        command = "sbatch " + stderr + " " + stdout + " " + scriptpath_seacr + " " + row["target_bdg"] + " " + row["control_bdg"] + " " + row["norm"] + " " + row["stringency"] + " " + row["out_prefix"] + " " + project_name
+        command = "sbatch " + stderr + " " + stdout + " " + scriptpath_seacr + " " + row["target_bdg"] + " " + row["control_bdg"] + " " + row["norm"] + " " + row["stringency"] + " " + row["out_prefix"] + " " + project_name + " " + row.get("target_fragments", "none")
         job = os.popen(command).read().splitlines()
         print(job[0])
         jobid.append(job[0].split(" ")[3])
     return jobid
+
+
+def peakqc_Prep(out_peak_seacr=None, out_dir_bowtie2=None):
+    data_dir, _ = _project_dirs()
+    out_peak_seacr = _as_config_dir(out_peak_seacr or _config_value("out_peak_seacr", os.path.join(data_dir, "seacr")))
+    out_dir_bowtie2 = _as_config_dir(out_dir_bowtie2 or _config_value("out_dir_bowtie2", os.path.join(data_dir, "bowtie2")))
+    out_dir_peakqc = os.path.join(data_dir, "cutrun_peak_qc")
+    os.makedirs(out_dir_peakqc, exist_ok=True)
+    scriptpath_peakqc = "../scripts_DoNotTouch/CUTRUN/qsub_cutrun_peak_qc.sh"
+    _save_config_updates(out_peak_seacr=out_peak_seacr, out_dir_bowtie2=out_dir_bowtie2, out_dir_peakqc=out_dir_peakqc)
+    print("CUT&RUN peak QC will be stored in " + out_dir_peakqc + "/")
+    return scriptpath_peakqc, out_peak_seacr, out_dir_bowtie2, out_dir_peakqc
+
+
+def peakqc_Run(scriptpath_peakqc, out_peak_seacr, out_dir_bowtie2, out_dir_peakqc):
+    stderr = "-e " + os.path.join(out_dir_peakqc, "error_cutrun_peak_qc.txt")
+    stdout = "-o " + os.path.join(out_dir_peakqc, "output_cutrun_peak_qc.txt")
+    command = "sbatch " + stderr + " " + stdout + " " + scriptpath_peakqc + " " + out_peak_seacr + " " + out_dir_bowtie2 + " " + out_dir_peakqc + " " + project_name
+    job = os.popen(command).read().splitlines()
+    if len(job):
+        print(job[0])
+        return [job[0].split(" ")[3]]
+    return []
 
 
 def macs2_Prep(genome=None, inpath_design=None, out_dir_bowtie2=None, control_column=None, qval=None, broad=None):
