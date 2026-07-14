@@ -5,5 +5,12 @@
 #SBATCH --export=NONE
 #SBATCH --time=12:00:00
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${script_dir}/seacr_cutrun.sh" "$1" "$2" "$3" "$4" "$5" "$6" "${7:-none}"
+seacr_runner="${8:-}"
+if [[ -z "$seacr_runner" || ! -s "$seacr_runner" ]]; then
+  seacr_runner="${SLURM_SUBMIT_DIR:-$PWD}/../scripts_DoNotTouch/SEACR/seacr_cutrun.sh"
+fi
+if [[ ! -s "$seacr_runner" ]]; then
+  echo "ERROR: SEACR runner was not found at: $seacr_runner" >&2
+  exit 2
+fi
+source "$seacr_runner" "$1" "$2" "$3" "$4" "$5" "$6" "${7:-none}"
