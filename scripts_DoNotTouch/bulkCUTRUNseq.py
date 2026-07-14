@@ -181,6 +181,22 @@ def _sample_prefix_from_filename(filename):
     return name
 
 
+def _fastq_paths_from_filename(filename, read_dir, pairing="y"):
+    """Resolve design-matrix FASTQ entries without assuming _001 suffixes."""
+    parts = [p.strip() for p in str(filename).split(",") if len(p.strip()) > 0]
+    if len(parts) == 0:
+        parts = [str(filename).strip()]
+    r1_name = os.path.basename(parts[0])
+    r2_name = os.path.basename(parts[1]) if len(parts) > 1 else ""
+    if str(pairing).strip().lower() == "y":
+        if len(r2_name) == 0:
+            r2_name = re.sub(r"([._-]R)1([._-]?\d*)", r"\g<1>2\2", r1_name, flags=re.IGNORECASE)
+            if r2_name == r1_name:
+                r2_name = re.sub(r"([._-])1(\.f(ast)?q(?:\.gz)?)$", r"\g<1>2\2", r1_name, flags=re.IGNORECASE)
+        return os.path.join(read_dir, r1_name), os.path.join(read_dir, r2_name)
+    return os.path.join(read_dir, r1_name), os.path.join(read_dir, r1_name)
+
+
 def _infer_target(sample):
     sample = str(sample)
     parts = re.split(r"[_-]+", sample)
@@ -359,22 +375,21 @@ def cutadapt_Prep(directory=None, pairing=None, adapter="AGATCGGAAGAGCACACGTCTGA
 
     design = _included_design(_read_design(_config_value("inpath_design")))
     prefixes = pd.Series(design["sample"].astype(str).values)
-    filenames = design["filename"].astype(str).str.split(",").str[0].map(_sample_prefix_from_filename)
 
     outdir_cutadapt = os.path.join(data_dir, "cutadapt")
     os.makedirs(outdir_cutadapt, exist_ok=True)
     if pairing == "y":
         scriptpath_cutadapt = "../scripts_DoNotTouch/cutadapt_PE/qsub_cutadapt_PE.sh"
-        read1_list = directory + "/" + filenames + "_R1_001.fastq.gz"
-        read2_list = directory + "/" + filenames + "_R2_001.fastq.gz"
         trimmed1_list = outdir_cutadapt + "/" + prefixes + "_R1_001.fastq.gz"
         trimmed2_list = outdir_cutadapt + "/" + prefixes + "_R2_001.fastq.gz"
     else:
         scriptpath_cutadapt = "../scripts_DoNotTouch/cutadapt_SE/qsub_cutadapt_SE.sh"
-        read1_list = directory + "/" + filenames + "_R1_001.fastq.gz"
-        read2_list = directory + "/" + filenames + "_R2_001.fastq.gz"
         trimmed1_list = outdir_cutadapt + "/" + prefixes + "_R1_001.fastq.gz"
         trimmed2_list = outdir_cutadapt + "/" + prefixes + "_R2_001.fastq.gz"
+
+    read_pairs = design["filename"].astype(str).map(lambda x: _fastq_paths_from_filename(x, directory, pairing))
+    read1_list = pd.Series([pair[0] for pair in read_pairs])
+    read2_list = pd.Series([pair[1] for pair in read_pairs])
 
     _save_config_updates(read_path_destination=directory, pairing=pairing)
     print("Trimmed reads will be stored in " + outdir_cutadapt + "/")
@@ -423,13 +438,13 @@ def bowtie2_Prep(genome=None, pairing=None, read_dir=None, inpath_design=None, u
         design.loc[~design["is_control"], "dedup_mode"] = "dedup"
 
     prefixes = pd.Series(design["sample"].astype(str).values)
-    filenames = design["filename"].astype(str).str.split(",").str[0].map(_sample_prefix_from_filename)
     out_dir = os.path.join(data_dir, "bowtie2")
     for prefix in prefixes:
         os.makedirs(os.path.join(out_dir, prefix), exist_ok=True)
 
-    read1_list = read_dir + "/" + filenames + "_R1_001.fastq.gz"
-    read2_list = read_dir + "/" + filenames + "_R2_001.fastq.gz"
+    read_pairs = design["filename"].astype(str).map(lambda x: _fastq_paths_from_filename(x, read_dir, pairing))
+    read1_list = pd.Series([pair[0] for pair in read_pairs])
+    read2_list = pd.Series([pair[1] for pair in read_pairs])
     out_prefix_list = out_dir + "/" + prefixes + "/" + prefixes
     dedup_mode_list = pd.Series(design["dedup_mode"].values)
     scriptpath_bowtie2 = "../scripts_DoNotTouch/bowtie2/qsub_bowtie2_cutrun_PE.sh" if pairing == "y" else "../scripts_DoNotTouch/bowtie2/qsub_bowtie2_cutrun_SE.sh"
@@ -514,7 +529,11 @@ def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, se
     control_column = control_column or _config_value("igg_control_column", "control_sample")
     if seacr_norm is None or str(seacr_norm).strip() == "":
         normalization_mode = str(_config_value("normalization_mode", _config_value("normalisation_mode", "CPM"))).strip().lower()
-        seacr_norm = _config_value("seacr_norm", "non" if normalization_mode == "spikein" else "norm")
+        saved_norm = str(_config_value("seacr_norm", "")).strip().lower()
+        if normalization_mode == "spikein" and saved_norm in ["", "norm"]:
+            seacr_norm = "non"
+        else:
+            seacr_norm = saved_norm or "norm"
     seacr_stringency = seacr_stringency or _config_value("seacr_stringency", "stringent")
     design = _included_design(_read_design(inpath_design))
 
