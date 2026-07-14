@@ -40,8 +40,8 @@ REFERENCE_DEFAULTS = {
     },
     "human": {
         "genome_version": "human_gencode50",
-        "genome_index_path": "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/hg38_p13_gencode_bowtie2index/hg38_p13_gencode",
-        "chromsize": "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/chrom.sizes",
+        "genome_index_path": "/grid/bsr/data/data/utama/genome/human_gencode50/bowtie2_index/GRCh38_gencode50",
+        "chromsize": "/grid/bsr/data/data/utama/genome/human_gencode50/GRCh38.chrom.sizes",
         "effective_genome_size": "2913022398",
         "macs2_genome_size": "hs",
         "homer_species": "hg38"
