@@ -45,7 +45,13 @@ sample	include	target	condition	replicate	control_sample	filename
 
 These defaults follow common CUT&RUN conventions, where identical fragment starts can reflect real antibody-tethered cleavage rather than PCR duplicates, but IgG controls often have higher nonspecific duplication.
 
-Spike-in normalization is off by default. If E. coli or another spike-in genome was included experimentally and indexed with Bowtie2, pass `normalization_mode="spikein"` and `spikein_index_path="/path/to/index/prefix"` to `bowtie2_Prep()`. If spike-in reads are very low, use CPM or no normalization instead.
+Spike-in normalization is off by default. If E. coli spike-in DNA was included experimentally, pass `normalization_mode="spikein"` to `bowtie2_Prep()`. CodeSpringLab defaults to the shared E. coli K-12 Bowtie2 index prefix:
+
+```text
+/grid/bsr/data/data/utama/genome/ecoli_k12/bowtie2_index/ecoli_k12_mg1655
+```
+
+If another spike-in genome was used, pass `spikein_index_path="/path/to/index/prefix"`. If spike-in reads are very low, use CPM or no normalization instead.
 
 ## Best-practice references used for this first pass
 

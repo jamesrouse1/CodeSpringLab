@@ -7,6 +7,8 @@ import types
 import pandas as pd
 from IPython.display import Image
 
+DEFAULT_SPIKEIN_INDEX = "/grid/bsr/data/data/utama/genome/ecoli_k12/bowtie2_index/ecoli_k12_mg1655"
+DEFAULT_SPIKEIN_NAME = "ecoli"
 
 def _load_config_module():
     try:
@@ -34,8 +36,8 @@ REFERENCE_DEFAULTS = {
         "genome_version": "mouse_gencodeM39",
         "genome_index_path": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/bowtie2_index/GRCm39_gencodeM39",
         "chromsize": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/GRCm39.chrom.sizes",
-        "spikein_index_path": "none",
-        "spikein_name": "spikein",
+        "spikein_index_path": DEFAULT_SPIKEIN_INDEX,
+        "spikein_name": DEFAULT_SPIKEIN_NAME,
         "effective_genome_size": "2654621783",
         "macs2_genome_size": "mm",
         "homer_species": "mm39"
@@ -44,8 +46,8 @@ REFERENCE_DEFAULTS = {
         "genome_version": "human_gencode50",
         "genome_index_path": "/grid/bsr/data/data/utama/genome/human_gencode50/bowtie2_index/GRCh38_gencode50",
         "chromsize": "/grid/bsr/data/data/utama/genome/human_gencode50/GRCh38.chrom.sizes",
-        "spikein_index_path": "none",
-        "spikein_name": "spikein",
+        "spikein_index_path": DEFAULT_SPIKEIN_INDEX,
+        "spikein_name": DEFAULT_SPIKEIN_NAME,
         "effective_genome_size": "2913022398",
         "macs2_genome_size": "hs",
         "homer_species": "hg38"
@@ -409,8 +411,8 @@ def bowtie2_Prep(genome=None, pairing=None, read_dir=None, inpath_design=None, u
     dedup_control_reads = str(dedup_control_reads if dedup_control_reads is not None else _config_value("dedup_control_reads", "y")).lower()
     remove_mitochondrial_reads = str(remove_mitochondrial_reads if remove_mitochondrial_reads is not None else _config_value("remove_mitochondrial_reads", "y")).lower()
     normalization_mode = str(normalization_mode or _config_value("normalization_mode", _config_value("normalisation_mode", "CPM"))).strip()
-    spikein_index_path = str(spikein_index_path or _config_value("spikein_index_path", _config_value("spikein_genome", "none"))).strip()
-    spikein_name = str(spikein_name or _config_value("spikein_name", "spikein")).strip() or "spikein"
+    spikein_index_path = str(spikein_index_path or _config_value("spikein_index_path", _config_value("spikein_genome", DEFAULT_SPIKEIN_INDEX))).strip()
+    spikein_name = str(spikein_name or _config_value("spikein_name", DEFAULT_SPIKEIN_NAME)).strip() or DEFAULT_SPIKEIN_NAME
     spikein_min_reads = str(spikein_min_reads or _config_value("spikein_min_reads", "1000")).strip() or "1000"
 
     ref = cutrun_reference(genome)
@@ -454,7 +456,7 @@ def bowtie2_Prep(genome=None, pairing=None, read_dir=None, inpath_design=None, u
     return ref["genome_index_path"], read1_list, read2_list, out_prefix_list, out_dir, ref["chromsize"], scriptpath_bowtie2, mapq, max_fragment_length, dedup_mode_list, remove_mitochondrial_reads, normalization_mode, spikein_index_path, spikein_name, spikein_min_reads
 
 
-def bowtie2_RunAlignment(genome_index_path, read1_list, read2_list, out_prefix_list, out_dir, chromsize, scriptpath_bowtie2, mapq, max_fragment_length, dedup_mode_list, remove_mitochondrial_reads, normalization_mode="CPM", spikein_index_path="none", spikein_name="spikein", spikein_min_reads="1000"):
+def bowtie2_RunAlignment(genome_index_path, read1_list, read2_list, out_prefix_list, out_dir, chromsize, scriptpath_bowtie2, mapq, max_fragment_length, dedup_mode_list, remove_mitochondrial_reads, normalization_mode="CPM", spikein_index_path=DEFAULT_SPIKEIN_INDEX, spikein_name=DEFAULT_SPIKEIN_NAME, spikein_min_reads="1000"):
     jobid = []
     for i in range(len(out_prefix_list)):
         stderr = "-e " + out_prefix_list[i] + "_cutrun_bowtie2.err"
