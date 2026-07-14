@@ -6,8 +6,8 @@ bowtie2_dir="$2"
 out_dir="$3"
 project_name="$4"
 
-module load EB5 || module load EB5Modules || module load EBModules || true
-module load BEDTools/2.31.1-GCC-14.3.0 || module load BEDTools/2.30.0-GCC-10.3.0 || module load BEDTools
+module load EBModules
+module load BEDTools/2.30.0-GCC-10.3.0
 
 mkdir -p "$out_dir"
 peak_list="${out_dir}/seacr_peak_files.txt"

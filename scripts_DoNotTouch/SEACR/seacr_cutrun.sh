@@ -18,9 +18,9 @@ if [[ ! -s "$seacr_script" ]]; then
 fi
 
 mkdir -p "$(dirname "$out_prefix")"
-module load EBModules || true
-module load BEDTools/2.30.0-GCC-10.3.0 || true
-module load R/4.1.2-foss-2021a || true
+module load EBModules
+module load BEDTools/2.30.0-GCC-10.3.0
+module load R/4.1.2-foss-2021a
 
 if [[ "$control_bedgraph" == "none" || ! -s "$control_bedgraph" ]]; then
   bash "$seacr_script" "$target_bedgraph" 0.01 "$norm" "$stringency" "$out_prefix"

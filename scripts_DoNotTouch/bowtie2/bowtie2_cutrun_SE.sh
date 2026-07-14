@@ -15,11 +15,18 @@ spikein_index="${11:-none}"
 spikein_name="${12:-spikein}"
 spikein_min_reads="${13:-1000}"
 
-module load EB5 || module load EB5Modules || module load EBModules || true
-module load Bowtie2/2.5.4-GCC-14.3.0 || module load Bowtie2/2.4.4-GCC-10.3.0
-module load SAMtools/1.22.1-GCC-14.3.0 || module load SAMtools/1.14-GCC-10.3.0
-module load BEDTools/2.31.1-GCC-14.3.0 || module load BEDTools/2.30.0-GCC-10.3.0 || module load BEDTools
-module load picard/3.4.0-Java-21 || module load picard/2.21.6-Java-11 || module load picard
+# Match the tested Radutama CodeSpringLab Bowtie2/Picard module stack.
+module load EBModules
+module load Bowtie2/2.4.4-GCC-10.3.0
+module load SAMtools/1.14-GCC-10.3.0
+module load BEDTools/2.30.0-GCC-10.3.0
+module load picard/2.21.6-Java-11
+
+PICARD_JAR="${EBROOTPICARD:-}/picard.jar"
+if [[ ! -s "$PICARD_JAR" ]]; then
+  echo "ERROR: Picard 2.21.6 loaded, but picard.jar was not found at: $PICARD_JAR" >&2
+  exit 127
+fi
 
 out_dir="$(dirname "$out_prefix")"
 sample="$(basename "$out_prefix")"
@@ -44,7 +51,7 @@ bowtie2 --very-sensitive --threads 8 \
 samtools index -b "${out_prefix}Aligned.sortedByCoord.out.bam"
 samtools idxstats "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefix}_chr_counts.txt"
 
-java -jar "$EBROOTPICARD/picard.jar" MarkDuplicates \
+java -jar "$PICARD_JAR" MarkDuplicates \
   REMOVE_DUPLICATES=true \
   I="${out_prefix}Aligned.sortedByCoord.out.bam" \
   O="${out_prefix}Aligned.sortedByCoord_removeDup.out.bam" \
