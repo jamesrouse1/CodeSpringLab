@@ -512,7 +512,9 @@ def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, se
     inpath_design = _as_config_dir(inpath_design or _config_value("inpath_design"))
     out_dir_bowtie2 = _as_config_dir(out_dir_bowtie2 or _config_value("out_dir_bowtie2", os.path.join(data_dir, "bowtie2")))
     control_column = control_column or _config_value("igg_control_column", "control_sample")
-    seacr_norm = seacr_norm or _config_value("seacr_norm", "norm")
+    if seacr_norm is None or str(seacr_norm).strip() == "":
+        normalization_mode = str(_config_value("normalization_mode", _config_value("normalisation_mode", "CPM"))).strip().lower()
+        seacr_norm = _config_value("seacr_norm", "non" if normalization_mode == "spikein" else "norm")
     seacr_stringency = seacr_stringency or _config_value("seacr_stringency", "stringent")
     design = _included_design(_read_design(inpath_design))
 
