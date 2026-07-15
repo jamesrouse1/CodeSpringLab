@@ -36,6 +36,8 @@ echo -e "normalization\t${norm}" >> "${out_prefix}_seacr_summary.txt"
 echo -e "stringency\t${stringency}" >> "${out_prefix}_seacr_summary.txt"
 
 peak_bed="${out_prefix}.${stringency}.bed"
+echo -e "peak_bed\t${peak_bed}" >> "${out_prefix}_seacr_summary.txt"
+echo -e "peak_count\t$(if [[ -s "$peak_bed" ]]; then wc -l < "$peak_bed"; else echo 0; fi)" >> "${out_prefix}_seacr_summary.txt"
 if [[ -s "$peak_bed" && "$target_fragments" != "none" && -s "$target_fragments" ]]; then
   total_fragments="$(wc -l < "$target_fragments")"
   fragments_in_peaks="$(bedtools intersect -u -a "$target_fragments" -b "$peak_bed" | wc -l)"

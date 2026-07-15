@@ -15,7 +15,12 @@ bam_list="${out_dir}/bowtie2_bam_files.txt"
 summary_out="${out_dir}/cutrun_peak_qc_summary.txt"
 
 find "$seacr_dir" -mindepth 2 -type f \( -name "*.stringent.bed" -o -name "*.relaxed.bed" \) | sort > "$peak_list"
-find "$bowtie2_dir" -mindepth 2 -type f -name "*Aligned.sortedByCoord.out.bam" | sort > "$bam_list"
+: > "$bam_list"
+while IFS= read -r peak_file; do
+  sample="$(basename "$(dirname "$peak_file")")"
+  bam="${bowtie2_dir}/${sample}/${sample}Aligned.sortedByCoord.out.bam"
+  if [[ -s "$bam" ]]; then printf '%s\n' "$bam"; fi
+done < "$peak_list" | sort -u > "$bam_list"
 
 peak_count="$(wc -l < "$peak_list")"
 bam_count="$(wc -l < "$bam_list")"
@@ -62,6 +67,6 @@ find "$seacr_dir" -mindepth 2 -type f -name "*_seacr_summary.txt" | sort | while
   frip="$(awk -F'\t' '$1=="frip"{print $2}' "$summary")"
   in_peaks="$(awk -F'\t' '$1=="fragments_in_peaks"{print $2}' "$summary")"
   total="$(awk -F'\t' '$1=="total_fragments"{print $2}' "$summary")"
-  peak="$(awk -F'\t' '$1=="target_bedgraph"{print $2}' "$summary")"
+  peak="$(awk -F'\t' '$1=="peak_bed"{print $2}' "$summary")"
   echo -e "${sample}\t${frip:-NA}\t${in_peaks:-NA}\t${total:-NA}\t${peak:-NA}"
 done >> "$frip_out"

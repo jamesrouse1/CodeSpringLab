@@ -10,7 +10,7 @@ suppressPackageStartupMessages({
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 5L) {
-  stop("Usage: cutrun_diffbind.R <resolved_samples.tsv> <out_dir> <reference_condition> <min_replicates> <genome>")
+  stop("Usage: cutrun_diffbind.R <resolved_samples.tsv> <out_dir> <reference_condition> <min_replicates> <genome> [blacklist.bed|none]")
 }
 
 sample_file <- normalizePath(args[[1]], mustWork = TRUE)
@@ -18,6 +18,7 @@ out_root <- normalizePath(args[[2]], mustWork = FALSE)
 reference_condition <- args[[3]]
 min_replicates <- suppressWarnings(as.integer(args[[4]]))
 genome <- tolower(args[[5]])
+blacklist_path <- if (length(args) >= 6L) args[[6]] else "none"
 if (!is.finite(min_replicates) || min_replicates < 1L) min_replicates <- 2L
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
@@ -141,6 +142,12 @@ for (group_name in unique(samples$analysis_group)) {
       }
 
       master <- reduce(do.call(c, consensus_by_condition), ignore.strand = TRUE)
+      blacklist_gr <- NULL
+      if (!genome %in% c("human", "hg38", "grch38") && nzchar(blacklist_path) && blacklist_path != "none" && file.exists(blacklist_path)) {
+        blacklist_gr <- read_seacr(blacklist_path)
+        master <- subsetByOverlaps(master, blacklist_gr, ignore.strand = TRUE, invert = TRUE)
+      }
+      if (!length(master)) stop("No master consensus peaks remained after blacklist filtering")
       write_bed(master, file.path(out_dir, "master_consensus_peaks.bed"))
 
       sheet <- data.frame(
@@ -165,6 +172,8 @@ for (group_name in unique(samples$analysis_group)) {
       db <- dba(sampleSheet = sheet)
       if (genome %in% c("human", "hg38", "grch38")) {
         db <- dba.blacklist(db, blacklist = DBA_BLACKLIST_HG38, greylist = FALSE)
+      } else if (!is.null(blacklist_gr)) {
+        db <- dba.blacklist(db, blacklist = blacklist_gr, greylist = FALSE)
       }
 
       db <- dba.count(db, peaks = master, summits = FALSE, bSubControl = FALSE)

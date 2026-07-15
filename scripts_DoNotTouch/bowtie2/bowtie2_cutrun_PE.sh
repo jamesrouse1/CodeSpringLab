@@ -76,9 +76,14 @@ fi
 bedtools bamtobed -i "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefix}Aligned.sortedByCoord.out.bed"
 bedtools bamtobed -i "${out_prefix}Aligned.sortedByCoord_removeDup.out.bam" > "${out_prefix}Aligned.sortedByCoord_removeDup.out.bed"
 
-bedtools bamtobed -bedpe -i "$bam_for_signal" \
+# BEDPE requires the two mates to be adjacent. The signal BAM is coordinate
+# sorted for downstream tools, so make a temporary query-name-sorted copy.
+name_sorted_signal_bam="${out_prefix}_signal.name_sorted.bam"
+samtools sort -n -@ 8 -o "$name_sorted_signal_bam" "$bam_for_signal"
+bedtools bamtobed -bedpe -i "$name_sorted_signal_bam" \
   | awk -v maxfrag="$max_fragment" -v rmmito="$remove_mito" 'BEGIN{OFS="\t"} $1==$4 && $6>$2 {frag=$6-$2; if (frag <= maxfrag && frag > 0) {if (rmmito=="y" && ($1=="chrM" || $1=="MT")) next; print $1,$2,$6}}' \
   | sort -k1,1 -k2,2n > "${out_prefix}_fragments.bed"
+rm -f "$name_sorted_signal_bam"
 
 bedtools genomecov -bg -i "${out_prefix}_fragments.bed" -g "$chromsize" > "${out_prefix}_fragments.raw.bedgraph"
 
