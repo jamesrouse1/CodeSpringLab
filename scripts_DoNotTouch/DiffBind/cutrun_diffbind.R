@@ -41,6 +41,11 @@ read_seacr <- function(path) {
   GRanges(seqnames = as.character(x[[1]][keep]), ranges = IRanges(start = start[keep] + 1L, end = end[keep]))
 }
 
+combine_granges <- function(ranges) {
+  if (!length(ranges)) return(GRanges())
+  unlist(GRangesList(unname(ranges)), use.names = FALSE)
+}
+
 write_bed <- function(gr, path, extra = NULL) {
   out <- data.frame(
     chrom = as.character(seqnames(gr)),
@@ -53,7 +58,7 @@ write_bed <- function(gr, path, extra = NULL) {
 }
 
 condition_consensus <- function(peaks, support_required) {
-  merged <- reduce(do.call(c, unname(peaks)), ignore.strand = TRUE)
+  merged <- GenomicRanges::reduce(combine_granges(peaks), ignore.strand = TRUE)
   support <- Reduce(`+`, lapply(peaks, function(gr) countOverlaps(merged, gr, ignore.strand = TRUE) > 0L))
   keep <- support >= support_required
   list(peaks = merged[keep], support = support[keep])
@@ -124,6 +129,7 @@ for (group_name in unique(samples$analysis_group)) {
     run_slug <- paste(slug(cell_type), slug(mark), paste0(slug(comparison), "_vs_", slug(reference_condition)), sep = "__")
     out_dir <- file.path(out_root, run_slug)
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+    unlink(file.path(out_dir, "ERROR.txt"), force = TRUE)
 
     result <- tryCatch({
       peaksets <- setNames(lapply(analysis_samples$Peaks, read_seacr), analysis_samples$SampleID)
@@ -141,7 +147,7 @@ for (group_name in unique(samples$analysis_group)) {
         )
       }
 
-      master <- reduce(do.call(c, consensus_by_condition), ignore.strand = TRUE)
+      master <- GenomicRanges::reduce(combine_granges(consensus_by_condition), ignore.strand = TRUE)
       blacklist_gr <- NULL
       if (!genome %in% c("human", "hg38", "grch38") && nzchar(blacklist_path) && blacklist_path != "none" && file.exists(blacklist_path)) {
         blacklist_gr <- read_seacr(blacklist_path)
