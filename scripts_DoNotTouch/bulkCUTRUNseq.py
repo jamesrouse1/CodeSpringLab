@@ -550,6 +550,9 @@ def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, se
         target_bdg = _cutrun_normalized_bedgraph(out_dir_bowtie2, sample)
         control_bdg = _cutrun_normalized_bedgraph(out_dir_bowtie2, control) if control else "none"
         target_fragments = os.path.join(out_dir_bowtie2, sample, sample + "_fragments.bed")
+        row_stringency = str(row.get("seacr_stringency", "auto")).strip().lower()
+        if row_stringency not in ["stringent", "relaxed"]:
+            row_stringency = seacr_stringency
         rows.append({
             "sample": sample,
             "target_bdg": target_bdg,
@@ -557,7 +560,7 @@ def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, se
             "target_fragments": target_fragments,
             "out_prefix": os.path.join(seacr_dir, sample, sample),
             "norm": seacr_norm,
-            "stringency": seacr_stringency
+            "stringency": row_stringency
         })
         os.makedirs(os.path.join(seacr_dir, sample), exist_ok=True)
     seacr_table = pd.DataFrame(rows)

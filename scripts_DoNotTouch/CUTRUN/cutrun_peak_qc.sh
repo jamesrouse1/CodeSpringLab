@@ -14,7 +14,16 @@ peak_list="${out_dir}/seacr_peak_files.txt"
 bam_list="${out_dir}/bowtie2_bam_files.txt"
 summary_out="${out_dir}/cutrun_peak_qc_summary.txt"
 
-find "$seacr_dir" -mindepth 2 -type f \( -name "*.stringent.bed" -o -name "*.relaxed.bed" \) | sort > "$peak_list"
+: > "$peak_list"
+for sample_dir in "$seacr_dir"/*; do
+  [[ -d "$sample_dir" ]] || continue
+  newest=""
+  for candidate in "$sample_dir"/*.stringent.bed "$sample_dir"/*.relaxed.bed; do
+    [[ -s "$candidate" ]] || continue
+    if [[ -z "$newest" || "$candidate" -nt "$newest" ]]; then newest="$candidate"; fi
+  done
+  if [[ -n "$newest" ]]; then printf '%s\n' "$newest"; fi
+done | sort > "$peak_list"
 : > "$bam_list"
 while IFS= read -r peak_file; do
   sample="$(basename "$(dirname "$peak_file")")"
