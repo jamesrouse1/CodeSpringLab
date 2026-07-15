@@ -131,6 +131,8 @@ awk 'BEGIN{OFS="\t"; print "metric","value"} {n++; s+=$1; if (n==1 || $1<min) mi
 {
   echo -e "sample\t${sample}"
   echo -e "read1\t${read1}"
+  echo -e "target_genome_index\t${genome_index}"
+  echo -e "chrom_sizes\t${chromsize}"
   echo -e "mapq\t${mapq}"
   echo -e "dedup_mode\t${dedup_mode}"
   echo -e "normalization_mode\t${normalization_mode}"
