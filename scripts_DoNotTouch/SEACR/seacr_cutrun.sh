@@ -40,7 +40,7 @@ echo -e "peak_bed\t${peak_bed}" >> "${out_prefix}_seacr_summary.txt"
 echo -e "peak_count\t$(if [[ -s "$peak_bed" ]]; then wc -l < "$peak_bed"; else echo 0; fi)" >> "${out_prefix}_seacr_summary.txt"
 if [[ -s "$peak_bed" && "$target_fragments" != "none" && -s "$target_fragments" ]]; then
   total_fragments="$(wc -l < "$target_fragments")"
-  fragments_in_peaks="$(bedtools intersect -u -a "$target_fragments" -b "$peak_bed" | wc -l)"
+  fragments_in_peaks="$(bedtools intersect -nonamecheck -u -a "$target_fragments" -b "$peak_bed" | wc -l)"
   frip="$(awk -v a="$fragments_in_peaks" -v b="$total_fragments" 'BEGIN{if (b>0) printf "%.6f", a/b; else print "NA"}')"
   echo -e "target_fragments\t${target_fragments}" >> "${out_prefix}_seacr_summary.txt"
   echo -e "total_fragments\t${total_fragments}" >> "${out_prefix}_seacr_summary.txt"
