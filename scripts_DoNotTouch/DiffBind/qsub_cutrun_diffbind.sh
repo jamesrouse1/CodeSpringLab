@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-runner="${8:-}"
+runner="${11:-}"
 if [[ -z "$runner" || ! -s "$runner" ]]; then
   runner="${SLURM_SUBMIT_DIR:-$PWD}/../scripts_DoNotTouch/DiffBind/cutrun_diffbind.sh"
 fi
@@ -16,4 +16,4 @@ if [[ ! -s "$runner" ]]; then
   exit 2
 fi
 
-source "$runner" "$1" "$2" "$3" "$4" "$5" "$6" "${7:-none}"
+source "$runner" "$1" "$2" "$3" "$4" "$5" "$6" "${7:-none}" "${8:-}" "${9:-}" "${10:-}"

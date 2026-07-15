@@ -10,7 +10,7 @@ suppressPackageStartupMessages({
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 5L) {
-  stop("Usage: cutrun_diffbind.R <resolved_samples.tsv> <out_dir> <reference_condition> <min_replicates> <genome> [blacklist.bed|none]")
+  stop("Usage: cutrun_diffbind.R <resolved_samples.tsv> <out_dir> <reference_condition> <min_replicates> <genome> [blacklist.bed|none] [comparison] [cell_type] [mark]")
 }
 
 sample_file <- normalizePath(args[[1]], mustWork = TRUE)
@@ -19,6 +19,10 @@ reference_condition <- args[[3]]
 min_replicates <- suppressWarnings(as.integer(args[[4]]))
 genome <- tolower(args[[5]])
 blacklist_path <- if (length(args) >= 6L) args[[6]] else "none"
+selected_comparison <- if (length(args) >= 7L) trimws(args[[7]]) else ""
+selected_cell_type <- if (length(args) >= 8L) trimws(args[[8]]) else ""
+selected_mark <- if (length(args) >= 9L) trimws(args[[9]]) else ""
+single_comparison <- nzchar(selected_comparison) && nzchar(selected_cell_type) && nzchar(selected_mark)
 if (!is.finite(min_replicates) || min_replicates < 1L) min_replicates <- 1L
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
@@ -79,6 +83,13 @@ if (length(missing_columns)) stop("Resolved CUT&RUN sample sheet is missing colu
 
 for (field in required) samples[[field]] <- trimws(as.character(samples[[field]]))
 samples$CellType[!nzchar(samples$CellType)] <- "all"
+if (single_comparison) {
+  samples <- samples[
+    samples$CellType == selected_cell_type & samples$Mark == selected_mark & samples$Condition %in% c(reference_condition, selected_comparison),
+    , drop = FALSE
+  ]
+  if (!nrow(samples)) stop("No samples matched the selected cell type, mark, and comparison.")
+}
 samples$analysis_group <- paste(samples$CellType, samples$Mark, sep = "__")
 
 run_rows <- list()
@@ -111,7 +122,7 @@ for (group_name in unique(samples$analysis_group)) {
     next
   }
 
-  comparisons <- setdiff(conditions, reference_condition)
+  comparisons <- if (single_comparison) selected_comparison else setdiff(conditions, reference_condition)
   if (!length(comparisons)) {
     record_run(cell_type, mark, "", "skipped", nrow(group), message = "Only the reference condition is present")
     next
@@ -127,7 +138,7 @@ for (group_name in unique(samples$analysis_group)) {
     }
 
     run_slug <- paste(slug(cell_type), slug(mark), paste0(slug(comparison), "_vs_", slug(reference_condition)), sep = "__")
-    out_dir <- file.path(out_root, run_slug)
+    out_dir <- if (single_comparison) out_root else file.path(out_root, run_slug)
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
     unlink(file.path(out_dir, "ERROR.txt"), force = TRUE)
 

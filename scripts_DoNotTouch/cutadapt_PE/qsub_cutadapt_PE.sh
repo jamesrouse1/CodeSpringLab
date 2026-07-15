@@ -5,7 +5,17 @@
 #SBATCH --export=NONE
 #SBATCH --time=2-00:00:00
 
-source ../scripts_DoNotTouch/cutadapt_PE/cutadapt_PE.sh $1 $2 $3 $4 $5 $6 $7
+set -euo pipefail
+
+runner="${9:-}"
+if [[ -z "$runner" || ! -s "$runner" ]]; then
+  runner="${SLURM_SUBMIT_DIR:-$PWD}/../scripts_DoNotTouch/cutadapt_PE/cutadapt_PE.sh"
+fi
+if [[ ! -s "$runner" ]]; then
+  echo "ERROR: paired-end Cutadapt runner was not found at: $runner" >&2
+  exit 2
+fi
+source "$runner" "$1" "$2" "$3" "$4" "$5" "$6" "$7"
 
 # Ori script with grid qsub
 #qsub -l mem_free=2G -pe threads 4 -cwd -o ../../csl_results/${8}/log/output_cutadapt.txt -e ../../csl_results/${8}/log/error_cutadapt.txt -V ../scripts_DoNotTouch/cutadapt_PE/cutadapt_PE.sh $1 $2 $3 $4 $5 $6 $7
