@@ -106,7 +106,22 @@ dev.off()
 
 dbobject.DB<-dba.report(dbobject,contrast=1)
 outdifpeaks<-as.data.frame(dbobject.DB)
-write.table(outdifpeaks,file=paste(outpath,"/DifferentialPeaks_",compared,"_vs_",refcond,"_ref.txt",sep=""),sep="\t",quote=F,row.names=F)
+diffprefix<-paste(outpath,"/DifferentialPeaks_",compared,"_vs_",refcond,"_ref",sep="")
+write.table(outdifpeaks,file=paste0(diffprefix,".txt"),sep="\t",quote=F,row.names=F)
+
+required_bed_columns<-c("seqnames","start","end")
+if (all(required_bed_columns %in% colnames(outdifpeaks))) {
+  stat_columns<-setdiff(colnames(outdifpeaks), required_bed_columns)
+  peak_ids<-vapply(seq_len(nrow(outdifpeaks)), function(i) {
+    location<-paste0(outdifpeaks$seqnames[i], ":", outdifpeaks$start[i], "-", outdifpeaks$end[i])
+    stats<-vapply(stat_columns, function(column) paste0(column, "=", as.character(outdifpeaks[[column]][i])), character(1))
+    paste(c(location, stats), collapse="|")
+  }, character(1))
+  bed_score<-if ("Fold" %in% colnames(outdifpeaks)) outdifpeaks$Fold else rep(0, nrow(outdifpeaks))
+  bed_start<-pmax(as.integer(outdifpeaks$start)-1L, 0L)
+  bed<-data.frame(outdifpeaks$seqnames, bed_start, outdifpeaks$end, peak_ids, bed_score, check.names=FALSE)
+  write.table(bed,file=paste0(diffprefix,".with_stats.bed"),sep="\t",quote=F,row.names=F,col.names=F)
+}
 
 sum(dbobject.DB$Fold>0)
 sum(dbobject.DB$Fold<0)
@@ -147,4 +162,3 @@ profiles<-try(dba.plotProfile(dbobject,merge=c(DBA_REPLICATE)))
 png(paste(outpath,"/diffbind_ProfileHeatmap_byMergedContrast.png",sep=""),width=1000,height=800,res=150)
 try(dba.plotProfile(profiles))
 dev.off()
-

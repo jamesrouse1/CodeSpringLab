@@ -1,3 +1,4 @@
+set -euo pipefail
 
 module load EBModules
 module load Bowtie2/2.4.4-GCC-10.3.0
@@ -67,31 +68,53 @@ module load deepTools/3.5.2-foss-2022a
 #--effectiveGenomeSize 2913022398 \ # Mice:2150570000; GRCh38:2913022398
 ### For male mice chrX should be ignored
 
-bamCoverage -b ${1}Aligned.sortedByCoord_removeDup.out.bam \
+bamCoverage -b "${1}Aligned.sortedByCoord_removeDup.out.bam" \
 --normalizeUsing RPGC \
---effectiveGenomeSize ${5} \
+--effectiveGenomeSize "${5}" \
 --binSize 10 \
 --extendReads \
 --ignoreForNormalization chrX chrM \
 --outFileFormat bedgraph \
---outFileName ${1}Aligned.sortedByCoord_removeDup.out.bdg
+--outFileName "${1}Aligned.sortedByCoord_removeDup.out.bdg"
 
-awk '( $1 ~ /^chr/ && $1 != "chrM" && $1 != "chrUn" )' ${1}Aligned.sortedByCoord_removeDup.out.bdg > ${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg
+awk 'BEGIN{OFS="\t"}
+     NR==FNR {valid[$1]=1; next}
+     ($1 in valid) && $1 != "chrM" && $1 != "chrUn" &&
+       $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ &&
+       $4 ~ /^[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?$/ {
+         print $1, $2, $3, $4
+       }' "${6}" "${1}Aligned.sortedByCoord_removeDup.out.bdg" \
+  > "${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg"
 
-rm ${1}Aligned.sortedByCoord_removeDup.out.bdg
+rm -f "${1}Aligned.sortedByCoord_removeDup.out.bdg"
 
 # The third line is chromsize in macs2 step
-/grid/bsr/data/data/utama/tools/bin/x86_64/bedGraphToBigWig \
-${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg \
-${6} \
-${1}Aligned.sortedByCoord_removeDup.out.bw
+if [[ ! -s "${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg" ]]; then
+  echo "ERROR: no finite, reference-compatible bedGraph rows remained for $(basename "${1}")" >&2
+  exit 1
+fi
 
-rm ${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg
+rm -f "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp"
+if ! /grid/bsr/data/data/utama/tools/bin/x86_64/bedGraphToBigWig \
+  "${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg" \
+  "${6}" \
+  "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp"; then
+  rm -f "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp"
+  echo "ERROR: bedGraphToBigWig failed for $(basename "${1}")" >&2
+  exit 1
+fi
+
+if [[ ! -s "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp" ]]; then
+  echo "ERROR: bigWig conversion produced an empty file for $(basename "${1}")" >&2
+  exit 1
+fi
+mv "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp" "${1}Aligned.sortedByCoord_removeDup.out.bw"
+rm -f "${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg"
 
 mapped_reads="$(samtools view -c -F 4 ${1}Aligned.sortedByCoord.out.bam)"
 deduplicated_reads="$(samtools view -c -F 4 ${1}Aligned.sortedByCoord_removeDup.out.bam)"
 {
-  echo -e "sample\t$(basename ${1})"
+  echo -e "sample\t$(basename "${1}")"
   echo -e "reference_index\t${2}"
   echo -e "mapped_reads\t${mapped_reads}"
   echo -e "deduplicated_reads\t${deduplicated_reads}"
