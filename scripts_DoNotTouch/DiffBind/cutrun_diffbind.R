@@ -19,7 +19,7 @@ reference_condition <- args[[3]]
 min_replicates <- suppressWarnings(as.integer(args[[4]]))
 genome <- tolower(args[[5]])
 blacklist_path <- if (length(args) >= 6L) args[[6]] else "none"
-if (!is.finite(min_replicates) || min_replicates < 1L) min_replicates <- 2L
+if (!is.finite(min_replicates) || min_replicates < 1L) min_replicates <- 1L
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 slug <- function(x) {
