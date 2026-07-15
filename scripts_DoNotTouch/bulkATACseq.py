@@ -650,8 +650,8 @@ def bowtie2_Prep(genome,pairing,read_dir,inpath_design):
     
     if genome == 'mouse':
         effgenomesize = "2654621783"
-        chromsize = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/chrom.sizes"
-        genome_index_path = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/GRCm39_M29_gencode_bowtie2index/GRCm39_M29_gencode"
+        chromsize = "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/GRCm39.chrom.sizes"
+        genome_index_path = "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/bowtie2_index/GRCm39_gencodeM39"
     elif genome == 'human':
         effgenomesize = "2913022398"
         chromsize = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/chrom.sizes"
@@ -776,8 +776,8 @@ def macs2_Prep(genome,out_dir,pairing):
     if genome == 'mouse':
         homerspecies = "mm39"
         genomesize = "1.87e+9"
-        chromsize = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/chrom.sizes"
-        anno_onlyChrNoMito = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation_onlyChrNoMito.bed"
+        chromsize = "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/GRCm39.chrom.sizes"
+        anno_onlyChrNoMito = "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.annotation_onlyChrNoMito.bed"
     elif genome == 'human':
         homerspecies = "hg38"
         genomesize = "2.7e+9"
@@ -1008,7 +1008,7 @@ def visualization_Prep(genome,out_peak):
     scriptpath_tracks = '../scripts_DoNotTouch/genomeTracks/qsub_genomeTracks.sh'
     
     if genome == 'mouse':
-        genome_index_path = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation.gtf"
+        genome_index_path = "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.primary_assembly.annotation.gtf"
     elif genome == 'human':
         genome_index_path = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf"
     

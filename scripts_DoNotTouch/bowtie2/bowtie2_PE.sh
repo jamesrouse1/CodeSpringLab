@@ -7,7 +7,7 @@ module load picard/2.21.6-Java-11
 
 bowtie2  --very-sensitive -k 10 -X 1000 --dovetail --threads 8 \
 	-x $2 \
-	-1 $3 -2 $4 > ${1}_temp1.sam
+	-1 $3 -2 $4 > ${1}_temp1.sam 2> ${1}Log.final.out
 
 samtools view -h -q 30 -f 0x2 -o ${1}_temp2.sam ${1}_temp1.sam
 rm ${1}_temp1.sam
@@ -59,8 +59,6 @@ samtools index -b ${1}Aligned.sortedByCoord_removeDup.out.bam ${1}Aligned.sorted
 bedtools bamtobed -i ${1}Aligned.sortedByCoord.out.bam > ${1}Aligned.sortedByCoord.out.bed
 bedtools bamtobed -i ${1}Aligned.sortedByCoord_removeDup.out.bam > ${1}Aligned.sortedByCoord_removeDup.out.bed
 
-cat ../../csl_results/${7}/log/error_bowtie2.txt ${1}Log.final.out > ../../csl_results/${7}/log/error_bowtie2.txt
-
 #####################################
 
 module load EBModules
@@ -89,3 +87,14 @@ ${6} \
 ${1}Aligned.sortedByCoord_removeDup.out.bw
 
 rm ${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg
+
+mapped_reads="$(samtools view -c -F 4 ${1}Aligned.sortedByCoord.out.bam)"
+deduplicated_reads="$(samtools view -c -F 4 ${1}Aligned.sortedByCoord_removeDup.out.bam)"
+{
+  echo -e "sample\t$(basename ${1})"
+  echo -e "reference_index\t${2}"
+  echo -e "mapped_reads\t${mapped_reads}"
+  echo -e "deduplicated_reads\t${deduplicated_reads}"
+  echo -e "effective_genome_size\t${5}"
+  echo -e "bigwig\t${1}Aligned.sortedByCoord_removeDup.out.bw"
+} > ${1}_alignment_summary.txt
