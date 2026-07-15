@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=bowtie2
-#SBATCH --mem-per-cpu=50G
+#SBATCH --mem=96G
 #SBATCH --cpus-per-task=8
 #SBATCH --export=NONE
 #SBATCH --time=2-00:00:00

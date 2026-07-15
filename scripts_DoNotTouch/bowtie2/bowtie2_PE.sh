@@ -30,6 +30,7 @@ samtools sort -o ${1}Aligned.sortedByCoord.out.bam ${1}Aligned.sortedByName.out.
 rm ${1}Aligned.sortedByName.out.bam
 
 samtools index -b ${1}Aligned.sortedByCoord.out.bam ${1}Aligned.sortedByCoord.out.bam.bai
+samtools quickcheck -v ${1}Aligned.sortedByCoord.out.bam
 
 #java -jar $EBROOTPICARD/picard.jar MarkDuplicates \
 #REMOVE_DUPLICATES=true \
@@ -37,13 +38,19 @@ samtools index -b ${1}Aligned.sortedByCoord.out.bam ${1}Aligned.sortedByCoord.ou
 #O=${1}Aligned.sortedByName_removeDup.out.bam \
 #M=${1}_markedDup_metrics.txt
 
-java -jar $EBROOTPICARD/picard.jar MarkDuplicates \
+java -Xmx80g -Djava.io.tmpdir="$(dirname "${1}")" -jar "$EBROOTPICARD/picard.jar" MarkDuplicates \
 REMOVE_DUPLICATES=true \
 I=${1}Aligned.sortedByCoord.out.bam \
 O=${1}Aligned.sortedByCoord_removeDup.out.bam \
 M=${1}_markedDup_metrics.txt
 
-java -jar $EBROOTPICARD/picard.jar CollectInsertSizeMetrics \
+if [[ ! -s "${1}Aligned.sortedByCoord_removeDup.out.bam" ]]; then
+  echo "ERROR: Picard produced an empty deduplicated BAM for $(basename "${1}")" >&2
+  exit 1
+fi
+samtools quickcheck -v ${1}Aligned.sortedByCoord_removeDup.out.bam
+
+java -Xmx80g -Djava.io.tmpdir="$(dirname "${1}")" -jar "$EBROOTPICARD/picard.jar" CollectInsertSizeMetrics \
 I=${1}Aligned.sortedByCoord_removeDup.out.bam \
 O=${1}_insert_size_metrics.txt \
 H=${1}_insert_size_histogram.pdf \
@@ -68,39 +75,18 @@ module load deepTools/3.5.2-foss-2022a
 #--effectiveGenomeSize 2913022398 \ # Mice:2150570000; GRCh38:2913022398
 ### For male mice chrX should be ignored
 
-bamCoverage -b "${1}Aligned.sortedByCoord_removeDup.out.bam" \
---normalizeUsing RPGC \
---effectiveGenomeSize "${5}" \
---binSize 10 \
---extendReads \
---ignoreForNormalization chrX chrM \
---outFileFormat bedgraph \
---outFileName "${1}Aligned.sortedByCoord_removeDup.out.bdg"
-
-awk 'BEGIN{OFS="\t"}
-     NR==FNR {valid[$1]=1; next}
-     ($1 in valid) && $1 != "chrM" && $1 != "chrUn" &&
-       $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ &&
-       $4 ~ /^[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?$/ {
-         print $1, $2, $3, $4
-       }' "${6}" "${1}Aligned.sortedByCoord_removeDup.out.bdg" \
-  > "${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg"
-
-rm -f "${1}Aligned.sortedByCoord_removeDup.out.bdg"
-
-# The third line is chromsize in macs2 step
-if [[ ! -s "${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg" ]]; then
-  echo "ERROR: no finite, reference-compatible bedGraph rows remained for $(basename "${1}")" >&2
-  exit 1
-fi
-
 rm -f "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp"
-if ! /grid/bsr/data/data/utama/tools/bin/x86_64/bedGraphToBigWig \
-  "${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg" \
-  "${6}" \
-  "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp"; then
+if ! bamCoverage \
+  -b "${1}Aligned.sortedByCoord_removeDup.out.bam" \
+  -o "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp" \
+  --outFileFormat bigwig \
+  --normalizeUsing CPM \
+  --numberOfProcessors 8 \
+  --binSize 10 \
+  --extendReads \
+  --ignoreForNormalization chrM chrX; then
   rm -f "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp"
-  echo "ERROR: bedGraphToBigWig failed for $(basename "${1}")" >&2
+  echo "ERROR: direct CPM bigWig generation failed for $(basename "${1}")" >&2
   exit 1
 fi
 
@@ -109,7 +95,6 @@ if [[ ! -s "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp" ]]; then
   exit 1
 fi
 mv "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp" "${1}Aligned.sortedByCoord_removeDup.out.bw"
-rm -f "${1}Aligned.sortedByCoord_removeDup_filtered.out.bdg"
 
 mapped_reads="$(samtools view -c -F 4 ${1}Aligned.sortedByCoord.out.bam)"
 deduplicated_reads="$(samtools view -c -F 4 ${1}Aligned.sortedByCoord_removeDup.out.bam)"
@@ -119,5 +104,6 @@ deduplicated_reads="$(samtools view -c -F 4 ${1}Aligned.sortedByCoord_removeDup.
   echo -e "mapped_reads\t${mapped_reads}"
   echo -e "deduplicated_reads\t${deduplicated_reads}"
   echo -e "effective_genome_size\t${5}"
+  echo -e "bigwig_normalization\tCPM"
   echo -e "bigwig\t${1}Aligned.sortedByCoord_removeDup.out.bw"
 } > ${1}_alignment_summary.txt

@@ -30,15 +30,12 @@ tmp_dup_metrics="${tmp_root}.duplicate_metrics.txt"
 tmp_insert_metrics="${tmp_root}.insert_metrics.txt"
 tmp_insert_pdf="${tmp_root}.insert_histogram.pdf"
 tmp_insert_jpg_prefix="${tmp_root}.insert_histogram"
-tmp_bedgraph="${tmp_root}.bedgraph"
-tmp_filtered_bedgraph="${tmp_root}.filtered.bedgraph"
 tmp_bigwig="${tmp_root}.bw"
 
 cleanup() {
   rm -f "$tmp_bam" "$tmp_bai" "$tmp_input_bed" "$tmp_dedup_bed" \
     "$tmp_dup_metrics" "$tmp_insert_metrics" "$tmp_insert_pdf" \
-    "${tmp_insert_jpg_prefix}-1.jpg" "$tmp_bedgraph" \
-    "$tmp_filtered_bedgraph" "$tmp_bigwig"
+    "${tmp_insert_jpg_prefix}-1.jpg" "$tmp_bigwig"
 }
 trap cleanup EXIT
 
@@ -87,26 +84,13 @@ bedtools bamtobed -i "$tmp_bam" > "$tmp_dedup_bed"
 module load deepTools/3.5.2-foss-2022a
 
 bamCoverage -b "$tmp_bam" \
-  --normalizeUsing RPGC \
-  --effectiveGenomeSize "$effective_genome_size" \
+  -o "$tmp_bigwig" \
+  --outFileFormat bigwig \
+  --normalizeUsing CPM \
+  --numberOfProcessors 8 \
   --binSize 10 \
   --extendReads \
-  --ignoreForNormalization chrX chrM \
-  --outFileFormat bedgraph \
-  --outFileName "$tmp_bedgraph"
-
-awk 'BEGIN{OFS="\t"}
-     NR==FNR {valid[$1]=1; next}
-     ($1 in valid) && $1 != "chrM" && $1 != "chrUn" &&
-       $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ &&
-       $4 ~ /^[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?$/ {
-         print $1, $2, $3, $4
-       }' "$chrom_sizes" "$tmp_bedgraph" > "$tmp_filtered_bedgraph"
-
-[[ -s "$tmp_filtered_bedgraph" ]] || { echo "ERROR: filtered bedGraph is empty for $sample" >&2; exit 1; }
-
-/grid/bsr/data/data/utama/tools/bin/x86_64/bedGraphToBigWig \
-  "$tmp_filtered_bedgraph" "$chrom_sizes" "$tmp_bigwig"
+  --ignoreForNormalization chrM chrX
 [[ -s "$tmp_bigwig" ]] || { echo "ERROR: bigWig is empty for $sample" >&2; exit 1; }
 
 mapped_reads="$(samtools view -c -F 4 "$input_bam")"
@@ -128,6 +112,7 @@ mv "$tmp_bigwig" "$bigwig"
   printf 'mapped_reads\t%s\n' "$mapped_reads"
   printf 'deduplicated_reads\t%s\n' "$deduplicated_reads"
   printf 'effective_genome_size\t%s\n' "$effective_genome_size"
+  printf 'bigwig_normalization\tCPM\n'
   printf 'bigwig\t%s\n' "$bigwig"
 } > "$alignment_summary"
 
