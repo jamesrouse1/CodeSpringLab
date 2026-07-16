@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=bowtie2
-#SBATCH --mem-per-cpu=50G
+#SBATCH --job-name=chip_bowtie2
+#SBATCH --mem=96G
 #SBATCH --cpus-per-task=8
 #SBATCH --export=NONE
 #SBATCH --time=2-00:00:00
 
-source ../scripts_DoNotTouch/bowtie2/bowtie2_chip_PE.sh $1 $2 $3 $4 $5 $6 $7
-
-# Ori script with grid qsub
-#qsub -l mem_free=50G -pe threads 8 -cwd -o ../../csl_results/${7}/log/output_bowtie2.txt -e ${1}Log.final.out -V ../scripts_DoNotTouch/bowtie2/bowtie2_chip_PE.sh $1 $2 $3 $4 $5 $6 $7
+set -euo pipefail
+runner="${8:-}"
+[[ -s "$runner" ]] || { echo "ERROR: ChIP-seq paired-end Bowtie2 runner not found: ${runner:-<missing>}" >&2; exit 2; }
+exec bash "$runner" "$1" "$2" "$3" "$4" "$5" "$6" "$7"

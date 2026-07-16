@@ -1,6 +1,8 @@
 set -Eeuo pipefail
 
 prefix="${1:?ERROR: output prefix is required}"
+assay_label="${PIPELINE_ASSAY_LABEL:-ATAC}"
+coverage_ignore_chroms="${BAMCOVERAGE_IGNORE_CHROMS:-chrM chrX}"
 bowtie_log="${prefix}Log.final.out"
 current_stage="initialization"
 sample_dir="$(dirname "${prefix}")"
@@ -14,12 +16,12 @@ cleanup() {
 
 report_stage() {
 	current_stage="$1"
-	echo "[$(date '+%Y-%m-%d %H:%M:%S')] ATAC Bowtie2: ${current_stage} ($(basename "${prefix}"))"
+	echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${assay_label} Bowtie2: ${current_stage} ($(basename "${prefix}"))"
 }
 
 report_failure() {
 	local rc=$?
-	echo "ERROR: ATAC Bowtie2 failed during ${current_stage} for $(basename "${prefix}") (exit ${rc})." >&2
+	echo "ERROR: ${assay_label} Bowtie2 failed during ${current_stage} for $(basename "${prefix}") (exit ${rc})." >&2
 	if [[ -s "$bowtie_log" ]]; then
 		echo "Last 80 lines of ${bowtie_log}:" >&2
 		tail -n 80 "$bowtie_log" >&2 || true
@@ -118,15 +120,20 @@ export TMPDIR="${bamcoverage_tmp_dir}"
 export TEMP="${bamcoverage_tmp_dir}"
 export TMP="${bamcoverage_tmp_dir}"
 rm -f "${bigwig_tmp}"
-if ! bamCoverage \
-  -b "${1}Aligned.sortedByCoord_removeDup.out.bam" \
-  -o "${bigwig_tmp}" \
-  --outFileFormat bigwig \
-  --normalizeUsing CPM \
-  --numberOfProcessors 2 \
-  --binSize 10 \
-  --extendReads \
-  --ignoreForNormalization chrM chrX; then
+coverage_args=(
+  -b "${1}Aligned.sortedByCoord_removeDup.out.bam"
+  -o "${bigwig_tmp}"
+  --outFileFormat bigwig
+  --normalizeUsing CPM
+  --numberOfProcessors 2
+  --binSize 10
+  --extendReads
+)
+if [[ -n "${coverage_ignore_chroms// }" ]]; then
+  read -r -a ignore_chroms <<< "$coverage_ignore_chroms"
+  coverage_args+=(--ignoreForNormalization "${ignore_chroms[@]}")
+fi
+if ! bamCoverage "${coverage_args[@]}"; then
   rm -f "${bigwig_tmp}"
   echo "ERROR: direct CPM bigWig generation failed for $(basename "${1}")" >&2
   exit 1
