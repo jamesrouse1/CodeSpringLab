@@ -1,12 +1,27 @@
 
 set -euo pipefail
 
+if ! type module >/dev/null 2>&1; then
+  for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /cm/local/apps/environment-modules/current/init/bash; do
+    [[ -s "$module_init" ]] && source "$module_init" && break
+  done
+fi
+type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavailable." >&2; exit 127; }
+
+outpath="$2"
+mkdir -p "$outpath"
+tmp_dir="${outpath}/.diffbind_tmp_${SLURM_JOB_ID:-$$}"
+rm -rf "$tmp_dir"
+mkdir -p "$tmp_dir"
+export TMPDIR="$tmp_dir" TMP="$tmp_dir" TEMP="$tmp_dir"
+cleanup() { rm -rf "$tmp_dir"; }
+trap cleanup EXIT
+
 module load EBModules
 module load R/4.3.2-gfbf-2023a
 
 Rscript "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
 
-outpath="$2"
 refcond="$5"
 compared="$6"
 genome="$7"

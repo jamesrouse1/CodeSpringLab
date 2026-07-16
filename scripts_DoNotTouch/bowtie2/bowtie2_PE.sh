@@ -33,6 +33,12 @@ trap report_failure ERR
 trap cleanup EXIT
 
 report_stage "loading modules"
+if ! type module >/dev/null 2>&1; then
+	for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /cm/local/apps/environment-modules/current/init/bash; do
+		[[ -s "$module_init" ]] && source "$module_init" && break
+	done
+fi
+type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavailable." >&2; exit 127; }
 module load EBModules
 module load Bowtie2/2.4.4-GCC-10.3.0
 module load SAMtools/1.14-GCC-10.3.0

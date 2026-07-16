@@ -1,4 +1,21 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
+sample="${1:?ERROR: ATAC sample is required}"
+outdir="${5:?ERROR: ATAC MACS2 output directory is required}"
+if ! type module >/dev/null 2>&1; then
+  for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /cm/local/apps/environment-modules/current/init/bash; do
+    [[ -s "$module_init" ]] && source "$module_init" && break
+  done
+fi
+type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavailable." >&2; exit 127; }
+mkdir -p "$outdir"
+tmp_dir="${outdir}/.macs2_tmp_${SLURM_JOB_ID:-$$}"
+rm -rf "$tmp_dir"
+mkdir -p "$tmp_dir"
+export TMPDIR="$tmp_dir" TMP="$tmp_dir" TEMP="$tmp_dir"
+cleanup() { rm -rf "$tmp_dir"; }
+trap cleanup EXIT
 
 module load EBModules
 module load MACS2/2.2.9.1-foss-2022b
@@ -12,13 +29,13 @@ macs2 callpeak --nomodel \
 	-n "${1}" --keep-dup all \
 	--outdir "${5}" || {
     echo "ERROR: MACS2 peak calling failed for ${1}." >&2
-    return 1
+    exit 1
 }
 
 peak_file="${5}/${1}_peaks.narrowPeak"
 if [[ ! -s "$peak_file" ]]; then
     echo "ERROR: MACS2 did not create the expected peak file: $peak_file" >&2
-    return 1
+    exit 1
 fi
 
 #module load Anaconda3/2023.03-1
@@ -80,4 +97,4 @@ else
     echo "WARNING: Skipping optional HOMER annotation for ${1}; annotatePeaks.pl is unavailable." >&2
 fi
 
-return 0
+exit 0
