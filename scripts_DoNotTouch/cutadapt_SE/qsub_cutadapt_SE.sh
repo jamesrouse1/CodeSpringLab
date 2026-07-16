@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cutadapt
-#SBATCH --mem-per-cpu=2G
+#SBATCH --mem=8G
 #SBATCH --cpus-per-task=4
 #SBATCH --export=NONE
-#SBATCH --time=2-00:00:00
+#SBATCH --time=12:00:00
 
-source ../scripts_DoNotTouch/cutadapt_SE/cutadapt_SE.sh $1 $2 $3 $4 $5 $6 $7
-
-# Ori script with grid qsub
-#qsub -l mem_free=2G -pe threads 4 -cwd -o ../../csl_results/${8}/log/output_cutadapt.txt -e ../../csl_results/${8}/log/error_cutadapt.txt -V ../scripts_DoNotTouch/cutadapt_SE/cutadapt_SE.sh $1 $2 $3 $4 $5 $6 $7
+set -euo pipefail
+runner="${9:-}"
+[[ -s "$runner" ]] || { echo "ERROR: single-end Cutadapt runner not found: ${runner:-<missing>}" >&2; exit 2; }
+exec bash "$runner" "$1" "$2" "$3" "$4" "$5" "$6" "$7"

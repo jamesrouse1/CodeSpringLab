@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! type module >/dev/null 2>&1; then
+  for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /cm/local/apps/environment-modules/current/init/bash; do
+    [[ -s "$module_init" ]] && source "$module_init" && break
+  done
+fi
+type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavailable." >&2; exit 127; }
 module load EBModules
 module load cutadapt/4.4-GCCcore-12.2.0
+command -v cutadapt >/dev/null 2>&1 || { echo "ERROR: cutadapt was not found after loading its module." >&2; exit 127; }
 
 #module load Anaconda3/2022.05
 #conda init bash
@@ -33,7 +40,7 @@ stream_fastqs() {
 
 mkdir -p "$(dirname "$output1")" "$(dirname "$output2")"
 if [[ "$read1" == *,* || "$read2" == *,* ]]; then
-  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/codespring_cutadapt.XXXXXX")"
+  tmpdir="$(mktemp -d "$(dirname "$output1")/.cutadapt_tmp.XXXXXX")"
   fifo1="$tmpdir/R1.fastq"
   fifo2="$tmpdir/R2.fastq"
   mkfifo "$fifo1" "$fifo2"
