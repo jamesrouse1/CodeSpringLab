@@ -3,6 +3,14 @@ set -Eeuo pipefail
 prefix="${1:?ERROR: output prefix is required}"
 bowtie_log="${prefix}Log.final.out"
 current_stage="initialization"
+sample_dir="$(dirname "${prefix}")"
+bamcoverage_tmp_dir="${sample_dir}/tmp_bamcoverage_${SLURM_JOB_ID:-$$}"
+bigwig_tmp="${prefix}Aligned.sortedByCoord_removeDup.out.bw.${SLURM_JOB_ID:-$$}.tmp"
+
+cleanup() {
+	rm -f -- "${bigwig_tmp}"
+	rm -rf -- "${bamcoverage_tmp_dir}"
+}
 
 report_stage() {
 	current_stage="$1"
@@ -20,6 +28,7 @@ report_failure() {
 }
 
 trap report_failure ERR
+trap cleanup EXIT
 
 report_stage "loading modules"
 module load EBModules
@@ -104,26 +113,30 @@ module load deepTools/3.5.2-foss-2022a
 ### For male mice chrX should be ignored
 
 report_stage "creating CPM bigWig"
-rm -f "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp"
+mkdir -p "${bamcoverage_tmp_dir}"
+export TMPDIR="${bamcoverage_tmp_dir}"
+export TEMP="${bamcoverage_tmp_dir}"
+export TMP="${bamcoverage_tmp_dir}"
+rm -f "${bigwig_tmp}"
 if ! bamCoverage \
   -b "${1}Aligned.sortedByCoord_removeDup.out.bam" \
-  -o "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp" \
+  -o "${bigwig_tmp}" \
   --outFileFormat bigwig \
   --normalizeUsing CPM \
-  --numberOfProcessors 8 \
+  --numberOfProcessors 2 \
   --binSize 10 \
   --extendReads \
   --ignoreForNormalization chrM chrX; then
-  rm -f "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp"
+  rm -f "${bigwig_tmp}"
   echo "ERROR: direct CPM bigWig generation failed for $(basename "${1}")" >&2
   exit 1
 fi
 
-if [[ ! -s "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp" ]]; then
+if [[ ! -s "${bigwig_tmp}" ]]; then
   echo "ERROR: bigWig conversion produced an empty file for $(basename "${1}")" >&2
   exit 1
 fi
-mv "${1}Aligned.sortedByCoord_removeDup.out.bw.tmp" "${1}Aligned.sortedByCoord_removeDup.out.bw"
+mv "${bigwig_tmp}" "${1}Aligned.sortedByCoord_removeDup.out.bw"
 
 report_stage "writing alignment summary"
 mapped_reads="$(samtools view -c -F 4 ${1}Aligned.sortedByCoord.out.bam)"

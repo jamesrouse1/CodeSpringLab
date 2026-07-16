@@ -31,11 +31,13 @@ tmp_insert_metrics="${tmp_root}.insert_metrics.txt"
 tmp_insert_pdf="${tmp_root}.insert_histogram.pdf"
 tmp_insert_jpg_prefix="${tmp_root}.insert_histogram"
 tmp_bigwig="${tmp_root}.bw"
+tmp_dir="${sample_dir}/tmp_bamcoverage_${SLURM_JOB_ID:-$$}"
 
 cleanup() {
   rm -f "$tmp_bam" "$tmp_bai" "$tmp_input_bed" "$tmp_dedup_bed" \
     "$tmp_dup_metrics" "$tmp_insert_metrics" "$tmp_insert_pdf" \
     "${tmp_insert_jpg_prefix}-1.jpg" "$tmp_bigwig"
+  rm -rf -- "$tmp_dir"
 }
 trap cleanup EXIT
 
@@ -83,11 +85,16 @@ bedtools bamtobed -i "$tmp_bam" > "$tmp_dedup_bed"
 
 module load deepTools/3.5.2-foss-2022a
 
+mkdir -p "$tmp_dir"
+export TMPDIR="$tmp_dir"
+export TEMP="$tmp_dir"
+export TMP="$tmp_dir"
+
 bamCoverage -b "$tmp_bam" \
   -o "$tmp_bigwig" \
   --outFileFormat bigwig \
   --normalizeUsing CPM \
-  --numberOfProcessors 8 \
+  --numberOfProcessors 2 \
   --binSize 10 \
   --extendReads \
   --ignoreForNormalization chrM chrX

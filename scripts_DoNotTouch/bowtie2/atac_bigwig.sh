@@ -15,10 +15,11 @@ repair_summary="${prefix}_postprocess_summary.txt"
 tmp_bigwig="${prefix}.bigwig.${SLURM_JOB_ID:-$$}.bw"
 tmp_bai="${prefix}.bigwig.${SLURM_JOB_ID:-$$}.bam.bai"
 tmp_summary="${prefix}.bigwig.${SLURM_JOB_ID:-$$}.summary.txt"
-tmp_dir="${sample_dir}/tmp_bamcoverage"
+tmp_dir="${sample_dir}/tmp_bamcoverage_${SLURM_JOB_ID:-$$}"
 
 cleanup() {
   rm -f "$tmp_bigwig" "$tmp_bai" "$tmp_summary"
+  rm -rf -- "$tmp_dir"
 }
 trap cleanup EXIT
 
@@ -31,7 +32,7 @@ export TMP="$tmp_dir"
 
 module load EBModules
 module load deepTools/3.5.2-foss-2022a
-module load SAMtools/1.21-GCC-13.3.0
+module load SAMtools/1.14-GCC-10.3.0
 
 samtools quickcheck -v "$dedup_bam"
 if [[ ! -s "$dedup_bai" ]] || [[ "$dedup_bai" -ot "$dedup_bam" ]]; then
