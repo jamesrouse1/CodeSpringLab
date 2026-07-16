@@ -5,5 +5,10 @@
 #SBATCH --export=NONE
 #SBATCH --time=12:00:00
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-exec bash "${script_dir}/macs2_cutrun_PE.sh" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+runner="${9:-}"
+if [[ ! -s "$runner" ]]; then
+  echo "ERROR: CUT&RUN MACS runner was not found at: ${runner:-<missing>}" >&2
+  exit 2
+fi
+
+exec bash "$runner" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
