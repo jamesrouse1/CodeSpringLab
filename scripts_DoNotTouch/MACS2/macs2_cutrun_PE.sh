@@ -28,6 +28,20 @@ fi
 
 mkdir -p "$outdir"
 
+# Python's tempfile module otherwise uses the compute node's shared /tmp,
+# which can fill when many MACS jobs run concurrently. Keep temporary files on
+# the project filesystem and remove them on both successful and failed exits.
+tmp_dir="${outdir}/.macs3_tmp"
+rm -rf "$tmp_dir"
+mkdir -p "$tmp_dir"
+export TMPDIR="$tmp_dir"
+export TMP="$tmp_dir"
+export TEMP="$tmp_dir"
+cleanup_tmp() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup_tmp EXIT
+
 args=(callpeak -t "$target_bam" -f BAMPE -g "$genome_size" -q "$qval" --keep-dup all -n "$sample" --outdir "$outdir" --bdg)
 if [[ "$control_bam" != "none" && -s "$control_bam" ]]; then
   args+=(-c "$control_bam")
