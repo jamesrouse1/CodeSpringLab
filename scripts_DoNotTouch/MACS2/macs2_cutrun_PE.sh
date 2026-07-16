@@ -11,7 +11,7 @@ outdir="$7"
 project_name="$8"
 
 module load EBModules
-module load MACS3/3.0.1-foss-2022b
+module load MACS2/2.2.9.1-foss-2022b
 
 if [[ ! -s "$target_bam" ]]; then
   echo "ERROR: CUT&RUN target BAM is missing or empty: ${target_bam}" >&2
@@ -31,7 +31,7 @@ mkdir -p "$outdir"
 # Python's tempfile module otherwise uses the compute node's shared /tmp,
 # which can fill when many MACS jobs run concurrently. Keep temporary files on
 # the project filesystem and remove them on both successful and failed exits.
-tmp_dir="${outdir}/.macs3_tmp"
+tmp_dir="${outdir}/.macs2_tmp"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 export TMPDIR="$tmp_dir"
@@ -50,7 +50,7 @@ if [[ "$peak_type" == "broad" ]]; then
   args+=(--broad)
 fi
 
-run_log="${outdir}/${sample}_macs3.log"
+run_log="${outdir}/${sample}_macs2.log"
 summary="${outdir}/${sample}_macs2_summary.txt"
 complete_marker="${outdir}/${sample}_macs2_complete.txt"
 rm -f "$complete_marker"
@@ -60,40 +60,40 @@ else
   peak_file="${outdir}/${sample}_peaks.narrowPeak"
 fi
 
-# MACS2 2.2.9.1 can emit ignored NumPy exceptions, create partial peaks, and
-# still exit successfully. MACS3 is compatible with the cluster's Python/NumPy
-# stack, and the captured log lets us reject any partial chromosome-level run.
+# MACS2 can emit an ignored internal exception, create partial peak files, and
+# still exit successfully. Capture stderr and reject such chromosome-level
+# failures instead of reporting a partial result as complete.
 macs_status=0
-macs3 "${args[@]}" 2> "$run_log" || macs_status=$?
+macs2 "${args[@]}" 2> "$run_log" || macs_status=$?
 cat "$run_log" >&2
 if ((macs_status != 0)); then
-  echo "ERROR: MACS3 exited with status ${macs_status} for ${sample}. See ${run_log}." >&2
+  echo "ERROR: MACS2 exited with status ${macs_status} for ${sample}. See ${run_log}." >&2
   exit "$macs_status"
 fi
 
-fatal_pattern='Traceback \(most recent call last\):|Exception ignored in:|ValueError: cannot resize|TypeError:.*NoneType.*not subscriptable|Killed|Segmentation fault'
+fatal_pattern='Traceback \(most recent call last\):|Exception ignored in:|KeyError:|ValueError:|TypeError:|OSError:|No space left on device|Killed|Segmentation fault'
 if grep -Eq "$fatal_pattern" "$run_log"; then
-  echo "ERROR: MACS3 reported an internal peak-calling exception for ${sample}. See ${run_log}." >&2
+  echo "ERROR: MACS2 reported an internal peak-calling exception for ${sample}. See ${run_log}." >&2
   exit 1
 fi
 
 if [[ ! -f "$peak_file" ]]; then
-  echo "ERROR: MACS3 completed without creating the expected peak file: ${peak_file}" >&2
+  echo "ERROR: MACS2 completed without creating the expected peak file: ${peak_file}" >&2
   exit 1
 fi
 
 if [[ ! -s "${outdir}/${sample}_peaks.xls" ]]; then
-  echo "ERROR: MACS3 completed without creating a non-empty peaks table for ${sample}." >&2
+  echo "ERROR: MACS2 completed without creating a non-empty peaks table for ${sample}." >&2
   exit 1
 fi
 
 peak_count="$(wc -l < "$peak_file" | tr -d '[:space:]')"
-caller_version="$(macs3 --version 2>&1 | head -n 1)"
+caller_version="$(macs2 --version 2>&1 | head -n 1)"
 
 {
   echo -e "sample\t${sample}"
   echo -e "status\tcomplete"
-  echo -e "caller\tmacs3"
+  echo -e "caller\tmacs2"
   echo -e "caller_version\t${caller_version}"
   echo -e "target_bam\t${target_bam}"
   echo -e "control_bam\t${control_bam}"
