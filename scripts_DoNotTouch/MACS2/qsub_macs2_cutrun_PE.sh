@@ -5,4 +5,5 @@
 #SBATCH --export=NONE
 #SBATCH --time=12:00:00
 
-source ../scripts_DoNotTouch/MACS2/macs2_cutrun_PE.sh "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec bash "${script_dir}/macs2_cutrun_PE.sh" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"

@@ -11,7 +11,20 @@ outdir="$7"
 project_name="$8"
 
 module load EBModules
-module load MACS2/2.2.9.1-foss-2022b
+module load MACS3/3.0.1-foss-2022b
+
+if [[ ! -s "$target_bam" ]]; then
+  echo "ERROR: CUT&RUN target BAM is missing or empty: ${target_bam}" >&2
+  exit 1
+fi
+if [[ "$control_bam" != "none" && ! -s "$control_bam" ]]; then
+  echo "ERROR: CUT&RUN control BAM is missing or empty: ${control_bam}" >&2
+  exit 1
+fi
+if [[ "$peak_type" != "narrow" && "$peak_type" != "broad" ]]; then
+  echo "ERROR: CUT&RUN MACS peak type must be narrow or broad, not: ${peak_type}" >&2
+  exit 1
+fi
 
 mkdir -p "$outdir"
 
@@ -23,13 +36,68 @@ if [[ "$peak_type" == "broad" ]]; then
   args+=(--broad)
 fi
 
-macs2 "${args[@]}"
+run_log="${outdir}/${sample}_macs3.log"
+summary="${outdir}/${sample}_macs2_summary.txt"
+complete_marker="${outdir}/${sample}_macs2_complete.txt"
+rm -f "$complete_marker"
+if [[ "$peak_type" == "broad" ]]; then
+  peak_file="${outdir}/${sample}_peaks.broadPeak"
+else
+  peak_file="${outdir}/${sample}_peaks.narrowPeak"
+fi
+
+# MACS2 2.2.9.1 can emit ignored NumPy exceptions, create partial peaks, and
+# still exit successfully. MACS3 is compatible with the cluster's Python/NumPy
+# stack, and the captured log lets us reject any partial chromosome-level run.
+macs_status=0
+macs3 "${args[@]}" 2> "$run_log" || macs_status=$?
+cat "$run_log" >&2
+if ((macs_status != 0)); then
+  echo "ERROR: MACS3 exited with status ${macs_status} for ${sample}. See ${run_log}." >&2
+  exit "$macs_status"
+fi
+
+fatal_pattern='Traceback \(most recent call last\):|Exception ignored in:|ValueError: cannot resize|TypeError:.*NoneType.*not subscriptable|Killed|Segmentation fault'
+if grep -Eq "$fatal_pattern" "$run_log"; then
+  echo "ERROR: MACS3 reported an internal peak-calling exception for ${sample}. See ${run_log}." >&2
+  exit 1
+fi
+
+if [[ ! -f "$peak_file" ]]; then
+  echo "ERROR: MACS3 completed without creating the expected peak file: ${peak_file}" >&2
+  exit 1
+fi
+
+if [[ ! -s "${outdir}/${sample}_peaks.xls" ]]; then
+  echo "ERROR: MACS3 completed without creating a non-empty peaks table for ${sample}." >&2
+  exit 1
+fi
+
+peak_count="$(wc -l < "$peak_file" | tr -d '[:space:]')"
+caller_version="$(macs3 --version 2>&1 | head -n 1)"
 
 {
   echo -e "sample\t${sample}"
+  echo -e "status\tcomplete"
+  echo -e "caller\tmacs3"
+  echo -e "caller_version\t${caller_version}"
   echo -e "target_bam\t${target_bam}"
   echo -e "control_bam\t${control_bam}"
   echo -e "genome_size\t${genome_size}"
   echo -e "qval\t${qval}"
   echo -e "peak_type\t${peak_type}"
-} > "${outdir}/${sample}_macs2_summary.txt"
+  echo -e "peak_file\t${peak_file}"
+  echo -e "peak_count\t${peak_count}"
+  echo -e "run_log\t${run_log}"
+} > "$summary"
+
+marker_tmp="${complete_marker}.tmp.$$"
+{
+  echo -e "sample\t${sample}"
+  echo -e "status\tcomplete"
+  echo -e "caller_version\t${caller_version}"
+  echo -e "peak_file\t${peak_file}"
+  echo -e "peak_count\t${peak_count}"
+  echo -e "summary\t${summary}"
+} > "$marker_tmp"
+mv "$marker_tmp" "$complete_marker"
