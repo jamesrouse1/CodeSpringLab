@@ -10,6 +10,10 @@ type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavaila
 
 outpath="$2"
 mkdir -p "$outpath"
+run_started="${outpath}/_RUN_STARTED"
+complete_marker="${outpath}/_COMPLETE"
+rm -f "$complete_marker"
+printf 'status\trunning\nstarted_at\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" > "$run_started"
 tmp_dir="${outpath}/.diffbind_tmp_${SLURM_JOB_ID:-$$}"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
@@ -39,6 +43,8 @@ if [[ ! -s "$bed_file" ]]; then
     printf 'Comparison\t%s vs %s\n' "$compared" "$refcond"
   } > "${outpath}/${prefix}_annotated_with_stats.txt"
   echo "No significant differential peaks; wrote ${outpath}/${prefix}_annotated_with_stats.txt"
+  rm -f "$run_started"
+  printf 'status\tcomplete\ncompleted_at\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" > "$complete_marker"
   exit 0
 fi
 
@@ -62,3 +68,5 @@ if [[ ! -s "${outpath}/${prefix}_annotated_with_stats.txt" ]]; then
 fi
 
 echo "Wrote ${outpath}/${prefix}_annotated_with_stats.txt"
+rm -f "$run_started"
+printf 'status\tcomplete\ncompleted_at\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" > "$complete_marker"

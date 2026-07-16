@@ -19,16 +19,25 @@ type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavaila
 [[ -s "$sample_sheet" ]] || { echo "ERROR: ChIP DiffBind sample sheet is missing: $sample_sheet" >&2; exit 2; }
 
 mkdir -p "$outdir"
+run_started="${outdir}/_RUN_STARTED"
+complete_marker="${outdir}/_COMPLETE"
+rm -f "$complete_marker"
+printf 'status\trunning\nstarted_at\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" > "$run_started"
 tmp_dir="${outdir}/.diffbind_tmp_${SLURM_JOB_ID:-$$}"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 export TMPDIR="$tmp_dir" TMP="$tmp_dir" TEMP="$tmp_dir"
-cleanup() { rm -rf "$tmp_dir"; }
+cleanup() {
+  rm -rf "$tmp_dir"
+  if [[ -e "$run_started" ]]; then
+    rm -f "${outdir}/_DIFFBIND_COMPLETE"
+  fi
+}
 trap cleanup EXIT
 
 module load EBModules
 module load R/4.3.2-gfbf-2023a
-rm -f "${outdir}/_COMPLETE" "${outdir}/_DIFFBIND_COMPLETE"
+rm -f "${outdir}/_DIFFBIND_COMPLETE"
 Rscript "$r_script" "$outdir" "$sample_sheet" "$reference" "$comparison" "$genome" "$blacklist"
 [[ -s "${outdir}/_DIFFBIND_COMPLETE" ]] || { echo "ERROR: ChIP DiffBind did not finish its statistical analysis." >&2; exit 1; }
 
@@ -37,7 +46,9 @@ bed_file="${outdir}/${prefix}.with_stats.bed"
 annotation="${outdir}/${prefix}_annotated_with_stats.txt"
 if [[ ! -s "$bed_file" ]]; then
   printf 'Status\tNo differential peaks passed the DiffBind reporting threshold\nComparison\t%s vs %s\n' "$comparison" "$reference" > "$annotation"
-  mv "${outdir}/_DIFFBIND_COMPLETE" "${outdir}/_COMPLETE"
+  rm -f "${outdir}/_DIFFBIND_COMPLETE"
+  rm -f "$run_started"
+  printf 'status\tcomplete\ncompleted_at\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" > "$complete_marker"
   exit 0
 fi
 
@@ -52,4 +63,6 @@ module load R/4.1.2-foss-2021a
 export PATH="$PATH:/grid/bsr/data/data/utama/tools/homer/bin"
 annotatePeaks.pl "$bed_file" "$homer_genome" > "$annotation"
 [[ -s "$annotation" ]] || { echo "ERROR: ChIP differential-peak annotation is empty." >&2; exit 1; }
-mv "${outdir}/_DIFFBIND_COMPLETE" "${outdir}/_COMPLETE"
+rm -f "${outdir}/_DIFFBIND_COMPLETE"
+rm -f "$run_started"
+printf 'status\tcomplete\ncompleted_at\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" > "$complete_marker"

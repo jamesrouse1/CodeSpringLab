@@ -19,22 +19,40 @@ trap cleanup EXIT
 
 module load EBModules
 module load MACS2/2.2.9.1-foss-2022b
+command -v macs2 >/dev/null 2>&1 || { echo "ERROR: macs2 was not found after loading its module." >&2; exit 127; }
 ## Alternative local installation:
 ## /grid/bsr/home/utama/.local/bin/macs2
 
+run_log="${outdir}/${sample}_macs2.log"
+summary="${outdir}/${sample}_macs2_summary.txt"
+complete_marker="${outdir}/${sample}_macs2_complete.txt"
+rm -f "$complete_marker" "$run_log"
+macs_status=0
 macs2 callpeak --nomodel \
 	-t "${2}" -q "${7}" \
 	-f BED -g "${3}" \
 	--shift -100 --extsize 200 --bdg --call-summits \
 	-n "${1}" --keep-dup all \
-	--outdir "${5}" || {
+	--outdir "${5}" 2> "$run_log" || macs_status=$?
+cat "$run_log" >&2
+if ((macs_status != 0)); then
     echo "ERROR: MACS2 peak calling failed for ${1}." >&2
+    exit "$macs_status"
+fi
+
+fatal_pattern='Traceback \(most recent call last\):|Exception ignored in:|KeyError:|ValueError:|TypeError:|OSError:|No space left on device|Killed|Segmentation fault'
+if grep -Eq "$fatal_pattern" "$run_log"; then
+    echo "ERROR: MACS2 reported an internal peak-calling exception for ${1}. See ${run_log}." >&2
     exit 1
-}
+fi
 
 peak_file="${5}/${1}_peaks.narrowPeak"
 if [[ ! -s "$peak_file" ]]; then
     echo "ERROR: MACS2 did not create the expected peak file: $peak_file" >&2
+    exit 1
+fi
+if [[ ! -s "${outdir}/${sample}_peaks.xls" ]]; then
+    echo "ERROR: MACS2 did not create a non-empty peaks table for ${sample}." >&2
     exit 1
 fi
 
@@ -96,5 +114,29 @@ if command -v annotatePeaks.pl >/dev/null 2>&1; then
 else
     echo "WARNING: Skipping optional HOMER annotation for ${1}; annotatePeaks.pl is unavailable." >&2
 fi
+
+peak_count="$(wc -l < "$peak_file" | tr -d '[:space:]')"
+caller_version="$(macs2 --version 2>&1 | head -n 1)"
+{
+  printf 'sample\t%s\n' "$sample"
+  printf 'status\tcomplete\n'
+  printf 'caller\tmacs2\n'
+  printf 'caller_version\t%s\n' "$caller_version"
+  printf 'input_bed\t%s\n' "$2"
+  printf 'genome_size\t%s\n' "$3"
+  printf 'qvalue\t%s\n' "$7"
+  printf 'peak_file\t%s\n' "$peak_file"
+  printf 'peak_count\t%s\n' "$peak_count"
+  printf 'run_log\t%s\n' "$run_log"
+} > "$summary"
+marker_tmp="${complete_marker}.tmp.$$"
+{
+  printf 'sample\t%s\n' "$sample"
+  printf 'status\tcomplete\n'
+  printf 'peak_file\t%s\n' "$peak_file"
+  printf 'peak_count\t%s\n' "$peak_count"
+  printf 'summary\t%s\n' "$summary"
+} > "$marker_tmp"
+mv "$marker_tmp" "$complete_marker"
 
 exit 0
