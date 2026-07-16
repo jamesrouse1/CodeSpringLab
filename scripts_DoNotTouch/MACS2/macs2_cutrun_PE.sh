@@ -10,8 +10,27 @@ peak_type="${6:-narrow}"
 outdir="$7"
 project_name="$8"
 
+if ! type module >/dev/null 2>&1; then
+  for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /cm/local/apps/environment-modules/current/init/bash; do
+    if [[ -s "$module_init" ]]; then
+      # shellcheck disable=SC1090
+      source "$module_init"
+      break
+    fi
+  done
+fi
+if ! type module >/dev/null 2>&1; then
+  echo "ERROR: the cluster module command is unavailable in this SLURM job." >&2
+  exit 127
+fi
+
 module load EBModules
 module load MACS2/2.2.9.1-foss-2022b
+
+if ! command -v macs2 >/dev/null 2>&1; then
+  echo "ERROR: macs2 was not found after loading MACS2/2.2.9.1-foss-2022b." >&2
+  exit 127
+fi
 
 if [[ ! -s "$target_bam" ]]; then
   echo "ERROR: CUT&RUN target BAM is missing or empty: ${target_bam}" >&2
