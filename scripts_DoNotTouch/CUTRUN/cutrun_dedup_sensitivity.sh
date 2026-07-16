@@ -75,12 +75,17 @@ elif [[ "$normalization_mode" == "cpm" ]]; then
   normalized_bedgraph="${out_prefix}_fragments.CPM.bedgraph"
 fi
 
+seacr_target_bedgraph="$normalized_bedgraph"
+if [[ "$seacr_norm" == "norm" ]]; then
+  seacr_target_bedgraph="${out_prefix}_fragments.raw.bedgraph"
+fi
+
 module load deepTools/3.5.2-foss-2022a
 bigwig="${out_prefix}_fragments.${normalization_mode}.bw"
 bamCoverage -b "$dedup_bam" --normalizeUsing None --scaleFactor "$scale_factor" \
   --binSize 10 --ignoreForNormalization chrM MT --outFileFormat bigwig --outFileName "$bigwig"
 
-source "$seacr_runner" "$normalized_bedgraph" "$control_bedgraph" "$seacr_norm" "$stringency" "$out_prefix" "$project_name" "${out_prefix}_fragments.bed"
+source "$seacr_runner" "$seacr_target_bedgraph" "$control_bedgraph" "$seacr_norm" "$stringency" "$out_prefix" "$project_name" "${out_prefix}_fragments.bed"
 
 {
   echo -e "analysis\tdeduplicated_target_sensitivity"
@@ -89,5 +94,6 @@ source "$seacr_runner" "$normalized_bedgraph" "$control_bedgraph" "$seacr_norm" 
   echo -e "normalization_mode\t${normalization_mode}"
   echo -e "scale_factor\t${scale_factor}"
   echo -e "normalized_bedgraph\t${normalized_bedgraph}"
+  echo -e "seacr_target_bedgraph\t${seacr_target_bedgraph}"
   echo -e "bigwig\t${bigwig}"
 } >> "${out_prefix}_seacr_summary.txt"

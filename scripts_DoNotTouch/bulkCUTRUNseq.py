@@ -522,6 +522,25 @@ def _cutrun_normalized_bedgraph(out_dir_bowtie2, sample):
     return os.path.join(sample_dir, sample + "_fragments.raw.bedgraph")
 
 
+def _seacr_combo_key(norm, stringency):
+    norm = str(norm or "non").strip().lower()
+    stringency = str(stringency or "stringent").strip().lower()
+    if norm not in ["norm", "non"]:
+        raise ValueError("SEACR normalization must be norm or non")
+    if stringency not in ["stringent", "relaxed"]:
+        raise ValueError("SEACR stringency must be stringent or relaxed")
+    return norm + "_" + stringency
+
+
+def _cutrun_seacr_bedgraph(out_dir_bowtie2, sample, seacr_norm):
+    if str(seacr_norm).strip().lower() == "norm":
+        raw = os.path.join(out_dir_bowtie2, sample, sample + "_fragments.raw.bedgraph")
+        if not os.path.exists(raw) or os.path.getsize(raw) <= 0:
+            raise FileNotFoundError("SEACR norm requires a non-empty raw bedGraph: " + raw)
+        return raw
+    return _cutrun_normalized_bedgraph(out_dir_bowtie2, sample)
+
+
 def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, seacr_norm=None, seacr_stringency=None):
     data_dir, _ = _project_dirs()
     inpath_design = _as_config_dir(inpath_design or _config_value("inpath_design"))
@@ -534,11 +553,13 @@ def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, se
             seacr_norm = "non"
         else:
             seacr_norm = saved_norm or "norm"
-    seacr_stringency = seacr_stringency or _config_value("seacr_stringency", "stringent")
+    seacr_norm = str(seacr_norm).strip().lower()
+    seacr_stringency = str(seacr_stringency or _config_value("seacr_stringency", "stringent")).strip().lower()
+    _seacr_combo_key(seacr_norm, seacr_stringency)
     design = _included_design(_read_design(inpath_design))
 
-    seacr_dir = os.path.join(data_dir, "seacr")
-    os.makedirs(seacr_dir, exist_ok=True)
+    seacr_root = os.path.join(data_dir, "seacr")
+    os.makedirs(seacr_root, exist_ok=True)
     scriptpath_seacr = "../scripts_DoNotTouch/SEACR/qsub_seacr_cutrun.sh"
     rows = []
     for _, row in design.iterrows():
@@ -547,12 +568,13 @@ def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, se
             continue
         sample = str(row["sample"])
         control = str(row.get(control_column, "")).strip() if control_column in row.index else ""
-        target_bdg = _cutrun_normalized_bedgraph(out_dir_bowtie2, sample)
-        control_bdg = _cutrun_normalized_bedgraph(out_dir_bowtie2, control) if control else "none"
+        target_bdg = _cutrun_seacr_bedgraph(out_dir_bowtie2, sample, seacr_norm)
+        control_bdg = _cutrun_seacr_bedgraph(out_dir_bowtie2, control, seacr_norm) if control else "none"
         target_fragments = os.path.join(out_dir_bowtie2, sample, sample + "_fragments.bed")
         row_stringency = str(row.get("seacr_stringency", "auto")).strip().lower()
         if row_stringency not in ["stringent", "relaxed"]:
             row_stringency = seacr_stringency
+        seacr_dir = os.path.join(seacr_root, _seacr_combo_key(seacr_norm, row_stringency))
         rows.append({
             "sample": sample,
             "target_bdg": target_bdg,
@@ -564,8 +586,9 @@ def seacr_Prep(inpath_design=None, out_dir_bowtie2=None, control_column=None, se
         })
         os.makedirs(os.path.join(seacr_dir, sample), exist_ok=True)
     seacr_table = pd.DataFrame(rows)
-    _save_config_updates(out_peak_seacr=seacr_dir, seacr_norm=seacr_norm, seacr_stringency=seacr_stringency, igg_control_column=control_column)
-    print("SEACR peaks will be stored in " + seacr_dir + "/")
+    default_seacr_dir = os.path.join(seacr_root, _seacr_combo_key(seacr_norm, seacr_stringency))
+    _save_config_updates(out_peak_seacr=default_seacr_dir, seacr_norm=seacr_norm, seacr_stringency=seacr_stringency, igg_control_column=control_column)
+    print("SEACR peaks will be stored by normalization/stringency under " + seacr_root + "/")
     return scriptpath_seacr, seacr_table
 
 
@@ -585,7 +608,10 @@ def peakqc_Prep(out_peak_seacr=None, out_dir_bowtie2=None):
     data_dir, _ = _project_dirs()
     out_peak_seacr = _as_config_dir(out_peak_seacr or _config_value("out_peak_seacr", os.path.join(data_dir, "seacr")))
     out_dir_bowtie2 = _as_config_dir(out_dir_bowtie2 or _config_value("out_dir_bowtie2", os.path.join(data_dir, "bowtie2")))
-    out_dir_peakqc = os.path.join(data_dir, "cutrun_peak_qc")
+    combo = os.path.basename(os.path.normpath(out_peak_seacr))
+    if combo not in ["norm_stringent", "norm_relaxed", "non_stringent", "non_relaxed"]:
+        combo = "legacy"
+    out_dir_peakqc = os.path.join(data_dir, "cutrun_peak_qc", combo)
     os.makedirs(out_dir_peakqc, exist_ok=True)
     scriptpath_peakqc = "../scripts_DoNotTouch/CUTRUN/qsub_cutrun_peak_qc.sh"
     _save_config_updates(out_peak_seacr=out_peak_seacr, out_dir_bowtie2=out_dir_bowtie2, out_dir_peakqc=out_dir_peakqc)
