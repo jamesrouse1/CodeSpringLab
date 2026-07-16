@@ -31,8 +31,8 @@ export TEMP="$tmp_dir"
 export TMP="$tmp_dir"
 
 module load EBModules
-module load deepTools/3.5.2-foss-2022a
 module load SAMtools/1.14-GCC-10.3.0
+module load deepTools/3.5.2-foss-2022a
 
 samtools quickcheck -v "$dedup_bam"
 if [[ ! -s "$dedup_bai" ]] || [[ "$dedup_bai" -ot "$dedup_bam" ]]; then
