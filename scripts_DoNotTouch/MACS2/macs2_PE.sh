@@ -47,8 +47,8 @@ if grep -Eq "$fatal_pattern" "$run_log"; then
 fi
 
 peak_file="${5}/${1}_peaks.narrowPeak"
-if [[ ! -s "$peak_file" ]]; then
-    echo "ERROR: MACS2 did not create the expected peak file: $peak_file" >&2
+if [[ ! -f "$peak_file" ]]; then
+    echo "ERROR: MACS2 did not create the expected peak file (an empty file is valid when zero peaks pass): $peak_file" >&2
     exit 1
 fi
 if [[ ! -s "${outdir}/${sample}_peaks.xls" ]]; then

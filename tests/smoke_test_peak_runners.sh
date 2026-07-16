@@ -25,7 +25,11 @@ done
 mkdir -p "$outdir"
 if [[ "${FAKE_MACS2_MODE:-success}" == "fail" ]]; then echo "forced failure" >&2; exit 9; fi
 ext="narrowPeak"; $broad && ext="broadPeak"
-printf 'chr1\t10\t30\tpeak1\t100\n' > "$outdir/${name}_peaks.${ext}"
+if [[ "${FAKE_MACS2_MODE:-success}" == "zero" ]]; then
+  : > "$outdir/${name}_peaks.${ext}"
+else
+  printf 'chr1\t10\t30\tpeak1\t100\n' > "$outdir/${name}_peaks.${ext}"
+fi
 printf 'chr\tstart\tend\nchr1\t10\t30\n' > "$outdir/${name}_peaks.xls"
 if [[ "${FAKE_MACS2_MODE:-success}" == "traceback" ]]; then
   printf 'Traceback (most recent call last):\nOSError: No space left on device\n' >&2
@@ -112,6 +116,13 @@ if bash "$repo_root/scripts_DoNotTouch/MACS2/macs2_PE.sh" \
 fi
 grep -q "internal peak-calling exception" "$work/atac_traceback.out"
 assert_absent "$atac_out/S1_macs2_complete.txt"
+unset FAKE_MACS2_MODE
+
+export FAKE_MACS2_MODE=zero
+bash "$repo_root/scripts_DoNotTouch/MACS2/macs2_PE.sh" \
+  S1 "$atac_root/S1.bed" mm unused "$atac_out" "$atac_root/tss.bed" 0.05 mm39 "$atac_root/bowtie2"
+assert_file "$atac_out/S1_macs2_complete.txt"
+grep -q $'^peak_count\t0$' "$atac_out/S1_macs2_complete.txt"
 unset FAKE_MACS2_MODE
 
 chip_root="$work/chip"
