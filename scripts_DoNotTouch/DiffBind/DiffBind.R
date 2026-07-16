@@ -94,7 +94,10 @@ normlibs<-cbind(FullLibSize=norm$lib.sizes,NormFacs=norm$norm.factors,NormLibSiz
 rownames(normlibs)<-info$ID
 normlibs
 
-dbobject<-dba.contrast(dbobject,reorderMeta=list(Condition=refcond))
+# DiffBind defaults to requiring at least three members in each contrast group.
+# Permit the standard two-biological-replicate design while still preventing
+# single-replicate contrasts.
+dbobject<-dba.contrast(dbobject,minMembers=2L,reorderMeta=list(Condition=refcond))
 dbobject
 
 dbobject<-dba.analyze(dbobject)
