@@ -15,6 +15,7 @@ normalization_mode="${11:-CPM}"
 spikein_index="${12:-none}"
 spikein_name="${13:-spikein}"
 spikein_min_reads="${14:-1000}"
+run_mode="${15:-full}"
 
 # Keep the same tested module stack used by the established Radutama
 # CodeSpringLab Bowtie2 pipelines. Mixing EB5/Java 21 with the legacy stack
@@ -34,6 +35,15 @@ fi
 out_dir="$(dirname "$out_prefix")"
 sample="$(basename "$out_prefix")"
 mkdir -p "$out_dir"
+tmp_dir="${out_dir}/tmp_cutrun_${SLURM_JOB_ID:-$$}"
+mkdir -p "$tmp_dir"
+export TMPDIR="$tmp_dir"
+export TEMP="$tmp_dir"
+export TMP="$tmp_dir"
+cleanup() {
+  rm -rf -- "$tmp_dir"
+}
+trap cleanup EXIT
 normalization_mode="$(echo "$normalization_mode" | tr '[:upper:]' '[:lower:]')"
 if [[ "$normalization_mode" != "cpm" && "$normalization_mode" != "spikein" && "$normalization_mode" != "none" ]]; then
   echo "ERROR: normalization_mode must be one of CPM, spikein, or none. Got: $normalization_mode" >&2
@@ -43,47 +53,68 @@ if [[ "$normalization_mode" == "spikein" && ( "$spikein_index" == "none" || ! -s
   echo "ERROR: spike-in normalization was requested but no readable Bowtie2 spike-in index was provided: $spikein_index" >&2
   exit 2
 fi
+if [[ "$run_mode" != "full" && "$run_mode" != "repair" ]]; then
+  echo "ERROR: run_mode must be full or repair. Got: $run_mode" >&2
+  exit 2
+fi
 
-bowtie2 --very-sensitive --dovetail --threads 8 \
-  --no-unal --no-mixed --no-discordant --end-to-end -X "$max_fragment" --phred33 \
-  -x "$genome_index" \
-  -1 "$read1" -2 "$read2" 2> "${out_prefix}Log.final.out" \
-  | samtools view -h -q "$mapq" -bS - \
-  | samtools sort -o "${out_prefix}Aligned.sortedByCoord.out.bam" -
+if [[ "$run_mode" == "full" ]]; then
+  bowtie2 --very-sensitive --dovetail --threads 8 \
+    --no-unal --no-mixed --no-discordant --end-to-end -X "$max_fragment" --phred33 \
+    -x "$genome_index" \
+    -1 "$read1" -2 "$read2" 2> "${out_prefix}Log.final.out" \
+    | samtools view -h -q "$mapq" -bS - \
+    | samtools sort -T "${tmp_dir}/target_coordinate" -o "${out_prefix}Aligned.sortedByCoord.out.bam" -
 
-samtools index -b "${out_prefix}Aligned.sortedByCoord.out.bam"
-samtools idxstats "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefix}_chr_counts.txt"
+  samtools index -b "${out_prefix}Aligned.sortedByCoord.out.bam"
+  samtools idxstats "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefix}_chr_counts.txt"
 
-java -jar "$PICARD_JAR" MarkDuplicates \
-  REMOVE_DUPLICATES=true \
-  I="${out_prefix}Aligned.sortedByCoord.out.bam" \
-  O="${out_prefix}Aligned.sortedByCoord_removeDup.out.bam" \
-  M="${out_prefix}_markedDup_metrics.txt" \
-  VALIDATION_STRINGENCY=SILENT
-samtools index -b "${out_prefix}Aligned.sortedByCoord_removeDup.out.bam"
+  java -Djava.io.tmpdir="$tmp_dir" -jar "$PICARD_JAR" MarkDuplicates \
+    REMOVE_DUPLICATES=true \
+    I="${out_prefix}Aligned.sortedByCoord.out.bam" \
+    O="${out_prefix}Aligned.sortedByCoord_removeDup.out.bam" \
+    M="${out_prefix}_markedDup_metrics.txt" \
+    VALIDATION_STRINGENCY=SILENT
+  samtools index -b "${out_prefix}Aligned.sortedByCoord_removeDup.out.bam"
 
-java -jar "$PICARD_JAR" CollectInsertSizeMetrics \
-  I="${out_prefix}Aligned.sortedByCoord.out.bam" \
-  O="${out_prefix}_insert_size_metrics.txt" \
-  H="${out_prefix}_insert_size_histogram.pdf" \
-  M=0.5 || true
+  java -Djava.io.tmpdir="$tmp_dir" -jar "$PICARD_JAR" CollectInsertSizeMetrics \
+    I="${out_prefix}Aligned.sortedByCoord.out.bam" \
+    O="${out_prefix}_insert_size_metrics.txt" \
+    H="${out_prefix}_insert_size_histogram.pdf" \
+    M=0.5 || true
+else
+  for bam in "${out_prefix}Aligned.sortedByCoord.out.bam" "${out_prefix}Aligned.sortedByCoord_removeDup.out.bam"; do
+    [[ -s "$bam" ]] || { echo "ERROR: repair requires an existing non-empty BAM: $bam" >&2; exit 2; }
+    samtools quickcheck -v "$bam"
+    if [[ ! -s "${bam}.bai" ]] || [[ "${bam}.bai" -ot "$bam" ]]; then
+      samtools index -b "$bam"
+    fi
+  done
+  samtools idxstats "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefix}_chr_counts.txt"
+fi
 
 bam_for_signal="${out_prefix}Aligned.sortedByCoord.out.bam"
 if [[ "$dedup_mode" == "dedup" ]]; then
   bam_for_signal="${out_prefix}Aligned.sortedByCoord_removeDup.out.bam"
 fi
 
-bedtools bamtobed -i "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefix}Aligned.sortedByCoord.out.bed"
-bedtools bamtobed -i "${out_prefix}Aligned.sortedByCoord_removeDup.out.bam" > "${out_prefix}Aligned.sortedByCoord_removeDup.out.bed"
+if [[ "$run_mode" == "full" ]] || [[ ! -s "${out_prefix}Aligned.sortedByCoord.out.bed" ]]; then
+  bedtools bamtobed -i "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefix}Aligned.sortedByCoord.out.bed"
+fi
+if [[ "$run_mode" == "full" ]] || [[ ! -s "${out_prefix}Aligned.sortedByCoord_removeDup.out.bed" ]]; then
+  bedtools bamtobed -i "${out_prefix}Aligned.sortedByCoord_removeDup.out.bam" > "${out_prefix}Aligned.sortedByCoord_removeDup.out.bed"
+fi
 
 # BEDPE requires the two mates to be adjacent. The signal BAM is coordinate
 # sorted for downstream tools, so make a temporary query-name-sorted copy.
-name_sorted_signal_bam="${out_prefix}_signal.name_sorted.bam"
-samtools sort -n -@ 8 -o "$name_sorted_signal_bam" "$bam_for_signal"
+name_sorted_signal_bam="${tmp_dir}/${sample}_signal.name_sorted.bam"
+tmp_fragments="${tmp_dir}/${sample}_fragments.bed"
+samtools sort -n -@ 8 -T "${tmp_dir}/signal_name" -o "$name_sorted_signal_bam" "$bam_for_signal"
 bedtools bamtobed -bedpe -i "$name_sorted_signal_bam" \
   | awk -v maxfrag="$max_fragment" -v rmmito="$remove_mito" 'BEGIN{OFS="\t"} $1==$4 && $6>$2 {frag=$6-$2; if (frag <= maxfrag && frag > 0) {if (rmmito=="y" && ($1=="chrM" || $1=="MT")) next; print $1,$2,$6}}' \
-  | sort -k1,1 -k2,2n > "${out_prefix}_fragments.bed"
-rm -f "$name_sorted_signal_bam"
+  | sort -T "$tmp_dir" -S 4G -k1,1 -k2,2n > "$tmp_fragments"
+[[ -s "$tmp_fragments" ]] || { echo "ERROR: fragment generation produced an empty BED for $sample" >&2; exit 2; }
+mv "$tmp_fragments" "${out_prefix}_fragments.bed"
 
 bedtools genomecov -bg -i "${out_prefix}_fragments.bed" -g "$chromsize" > "${out_prefix}_fragments.raw.bedgraph"
 
@@ -96,7 +127,7 @@ if [[ "$normalization_mode" == "spikein" ]]; then
     -x "$spikein_index" \
     -1 "$read1" -2 "$read2" 2> "${out_prefix}_${spikein_name}Log.final.out" \
     | samtools view -h -bS - \
-    | samtools sort -o "${out_prefix}_${spikein_name}.bam" -
+    | samtools sort -T "${tmp_dir}/spikein_coordinate" -o "${out_prefix}_${spikein_name}.bam" -
   samtools index -b "${out_prefix}_${spikein_name}.bam"
   spikein_mapped_reads="$(samtools view -c -F 4 "${out_prefix}_${spikein_name}.bam")"
   if [[ "$spikein_mapped_reads" -lt "$spikein_min_reads" ]]; then
@@ -162,3 +193,8 @@ awk 'BEGIN{OFS="\t"; print "metric","value"} {n++; s+=$1; if (n==1 || $1<min) mi
   echo -e "deduplicated_reads\t${dedup_reads}"
   echo -e "fragments_used_for_signal\t${fragment_count}"
 } > "${out_prefix}_alignment_summary.txt"
+
+if [[ "$run_mode" == "repair" ]]; then
+  printf 'sample\t%s\nstatus\tpost_alignment_repaired\n' "$sample" > "${out_prefix}_postprocess_summary.txt"
+  rm -f "${out_prefix}_signal.name_sorted.bam"
+fi

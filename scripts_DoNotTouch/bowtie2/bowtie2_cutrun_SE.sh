@@ -31,6 +31,15 @@ fi
 out_dir="$(dirname "$out_prefix")"
 sample="$(basename "$out_prefix")"
 mkdir -p "$out_dir"
+tmp_dir="${out_dir}/tmp_cutrun_${SLURM_JOB_ID:-$$}"
+mkdir -p "$tmp_dir"
+export TMPDIR="$tmp_dir"
+export TEMP="$tmp_dir"
+export TMP="$tmp_dir"
+cleanup() {
+  rm -rf -- "$tmp_dir"
+}
+trap cleanup EXIT
 normalization_mode="$(echo "$normalization_mode" | tr '[:upper:]' '[:lower:]')"
 if [[ "$normalization_mode" != "cpm" && "$normalization_mode" != "spikein" && "$normalization_mode" != "none" ]]; then
   echo "ERROR: normalization_mode must be one of CPM, spikein, or none. Got: $normalization_mode" >&2
@@ -46,12 +55,12 @@ bowtie2 --very-sensitive --threads 8 \
   -x "$genome_index" \
   -U "$read1" 2> "${out_prefix}Log.final.out" \
   | samtools view -h -q "$mapq" -bS - \
-  | samtools sort -o "${out_prefix}Aligned.sortedByCoord.out.bam" -
+  | samtools sort -T "${tmp_dir}/target_coordinate" -o "${out_prefix}Aligned.sortedByCoord.out.bam" -
 
 samtools index -b "${out_prefix}Aligned.sortedByCoord.out.bam"
 samtools idxstats "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefix}_chr_counts.txt"
 
-java -jar "$PICARD_JAR" MarkDuplicates \
+java -Djava.io.tmpdir="$tmp_dir" -jar "$PICARD_JAR" MarkDuplicates \
   REMOVE_DUPLICATES=true \
   I="${out_prefix}Aligned.sortedByCoord.out.bam" \
   O="${out_prefix}Aligned.sortedByCoord_removeDup.out.bam" \
@@ -68,7 +77,7 @@ bedtools bamtobed -i "${out_prefix}Aligned.sortedByCoord.out.bam" > "${out_prefi
 bedtools bamtobed -i "${out_prefix}Aligned.sortedByCoord_removeDup.out.bam" > "${out_prefix}Aligned.sortedByCoord_removeDup.out.bed"
 bedtools bamtobed -i "$bam_for_signal" \
   | awk -v rmmito="$remove_mito" 'BEGIN{OFS="\t"} {if (rmmito=="y" && ($1=="chrM" || $1=="MT")) next; print $1,$2,$3}' \
-  | sort -k1,1 -k2,2n > "${out_prefix}_fragments.bed"
+  | sort -T "$tmp_dir" -S 4G -k1,1 -k2,2n > "${out_prefix}_fragments.bed"
 
 bedtools genomecov -bg -i "${out_prefix}_fragments.bed" -g "$chromsize" > "${out_prefix}_fragments.raw.bedgraph"
 
@@ -81,7 +90,7 @@ if [[ "$normalization_mode" == "spikein" ]]; then
     -x "$spikein_index" \
     -U "$read1" 2> "${out_prefix}_${spikein_name}Log.final.out" \
     | samtools view -h -bS - \
-    | samtools sort -o "${out_prefix}_${spikein_name}.bam" -
+    | samtools sort -T "${tmp_dir}/spikein_coordinate" -o "${out_prefix}_${spikein_name}.bam" -
   samtools index -b "${out_prefix}_${spikein_name}.bam"
   spikein_mapped_reads="$(samtools view -c -F 4 "${out_prefix}_${spikein_name}.bam")"
   if [[ "$spikein_mapped_reads" -lt "$spikein_min_reads" ]]; then
