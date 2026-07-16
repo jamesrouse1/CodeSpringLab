@@ -80,4 +80,4 @@ writeLines(c(
   paste("sample_sheet", sample_sheet_path, sep = "\t"),
   paste("result", result_path, sep = "\t"),
   paste("significant_peaks", nrow(report), sep = "\t")
-), file.path(outdir, "_COMPLETE"))
+), file.path(outdir, "_DIFFBIND_COMPLETE"))

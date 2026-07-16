@@ -28,14 +28,16 @@ trap cleanup EXIT
 
 module load EBModules
 module load R/4.3.2-gfbf-2023a
+rm -f "${outdir}/_COMPLETE" "${outdir}/_DIFFBIND_COMPLETE"
 Rscript "$r_script" "$outdir" "$sample_sheet" "$reference" "$comparison" "$genome" "$blacklist"
-[[ -s "${outdir}/_COMPLETE" ]] || { echo "ERROR: ChIP DiffBind did not write its completion marker." >&2; exit 1; }
+[[ -s "${outdir}/_DIFFBIND_COMPLETE" ]] || { echo "ERROR: ChIP DiffBind did not finish its statistical analysis." >&2; exit 1; }
 
 prefix="DifferentialPeaks_${comparison}_vs_${reference}_ref"
 bed_file="${outdir}/${prefix}.with_stats.bed"
 annotation="${outdir}/${prefix}_annotated_with_stats.txt"
 if [[ ! -s "$bed_file" ]]; then
   printf 'Status\tNo differential peaks passed the DiffBind reporting threshold\nComparison\t%s vs %s\n' "$comparison" "$reference" > "$annotation"
+  mv "${outdir}/_DIFFBIND_COMPLETE" "${outdir}/_COMPLETE"
   exit 0
 fi
 
@@ -50,3 +52,4 @@ module load R/4.1.2-foss-2021a
 export PATH="$PATH:/grid/bsr/data/data/utama/tools/homer/bin"
 annotatePeaks.pl "$bed_file" "$homer_genome" > "$annotation"
 [[ -s "$annotation" ]] || { echo "ERROR: ChIP differential-peak annotation is empty." >&2; exit 1; }
+mv "${outdir}/_DIFFBIND_COMPLETE" "${outdir}/_COMPLETE"
