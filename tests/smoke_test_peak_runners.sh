@@ -14,6 +14,9 @@ if grep -q 'example_dataset' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"
   echo "ASSERTION FAILED: ATAC DiffBind must not fabricate samples based on an example path" >&2
   exit 1
 fi
+while IFS= read -r shell_script; do
+  bash -n "$shell_script"
+done < <(find "$repo_root/scripts_DoNotTouch" -type f -name '*.sh' -print)
 
 fake_bin="$work/bin"
 mkdir -p "$fake_bin"
@@ -70,6 +73,11 @@ cat > "$fake_bin/annotatePeaks.pl" <<'FAKE_HOMER'
 if [[ "${FAKE_HOMER_MODE:-success}" == "fail" ]]; then echo "forced annotation failure" >&2; exit 7; fi
 printf 'PeakID\tAnnotation\npeak1\tPromoter\n'
 FAKE_HOMER
+cat > "$fake_bin/getDifferentialPeaksReplicates.pl" <<'FAKE_HOMER_DIFF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'PeakID\tChr\tStart\tEnd\npeak1\tchr1\t10\t30\n'
+FAKE_HOMER_DIFF
 cat > "$fake_bin/Rscript" <<'FAKE_RSCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -208,6 +216,23 @@ fi
 assert_file "$chip_diff_root/annotation_fail/_RUN_STARTED"
 assert_absent "$chip_diff_root/annotation_fail/_COMPLETE"
 assert_absent "$chip_diff_root/annotation_fail/_DIFFBIND_COMPLETE"
+unset FAKE_HOMER_MODE
+
+homer_out="$work/homer_diff"
+bash "$repo_root/scripts_DoNotTouch/Homer/homer_diffpeak.sh" \
+  "$homer_out" ref_tags target_tags mm39 control treated
+assert_file "$homer_out/DiffPeak_treated_vs_control(ref).txt"
+assert_file "$homer_out/DiffPeak_treated_vs_control(ref)_annotated.txt"
+
+rm -f "$homer_out/DiffPeak_treated_vs_control(ref).txt" "$homer_out/DiffPeak_treated_vs_control(ref)_annotated.txt"
+export FAKE_HOMER_MODE=fail
+if bash "$repo_root/scripts_DoNotTouch/Homer/homer_diffpeak.sh" \
+  "$homer_out" ref_tags target_tags mm39 control treated > "$work/homer_annotation_fail.out" 2>&1; then
+  echo "ASSERTION FAILED: HOMER differential runner accepted a failed annotation" >&2
+  exit 1
+fi
+assert_absent "$homer_out/DiffPeak_treated_vs_control(ref).txt"
+assert_absent "$homer_out/DiffPeak_treated_vs_control(ref)_annotated.txt"
 unset FAKE_HOMER_MODE
 
 echo "Peak-runner fake-data smoke tests passed."
