@@ -245,4 +245,32 @@ assert_absent "$homer_out/DiffPeak_treated_vs_control(ref).txt"
 assert_absent "$homer_out/DiffPeak_treated_vs_control(ref)_annotated.txt"
 unset FAKE_HOMER_MODE
 
+annotation_root="$work/peak_annotation_project"
+mkdir -p \
+  "$annotation_root/macs2/S1" \
+  "$annotation_root/diffbind/B_vs_A" \
+  "$annotation_root/diffbind/legacy" \
+  "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh"
+printf 'chr1\t10\t30\tmacs_peak\t100\t.\t12\t8\t6\t5\n' > \
+  "$annotation_root/macs2/S1/S1_peaks.narrowPeak"
+printf 'chr1\t20\t50\tdiff_peak|Fold=2|FDR=0.01\t2\n' > \
+  "$annotation_root/diffbind/B_vs_A/DifferentialPeaks_B_vs_A_ref.with_stats.bed"
+printf 'seqnames\tstart\tend\twidth\tstrand\tConc\tConc_A\tConc_B\tFold\tp.value\tFDR\nchr1\t101\t140\t40\t+\t5\t4\t6\t2\t0.001\t0.01\n' > \
+  "$annotation_root/diffbind/legacy/DifferentialPeaks_B_vs_A_ref.txt"
+printf 'seqnames\tstart\tend\tFold\tFDR\nchr1\t31\t60\t-1.5\t0.02\n' > \
+  "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh/all_differential_peaks.tsv"
+printf 'chr1\t70\t90\tcutrun_peak|Fold=3|FDR=0.001\t3\n' > \
+  "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh/significant_differential_peaks.bed"
+printf 'chr1\tfake\texon\t1\t100\t.\t+\t.\tgene_id "g1";\n' > "$annotation_root/reference.gtf"
+bash "$repo_root/scripts_DoNotTouch/Homer/annotate_peak_results.sh" \
+  "$annotation_root" mm39 "$annotation_root/reference.gtf"
+assert_file "$annotation_root/peak_annotation/_COMPLETE"
+assert_file "$annotation_root/peak_annotation/peak_annotation_summary.tsv"
+assert_file "$annotation_root/macs2/S1/S1_peaks_annotated.txt"
+assert_file "$annotation_root/diffbind/B_vs_A/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt"
+assert_file "$annotation_root/diffbind/legacy/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt"
+assert_file "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh/all_differential_peaks_annotated_with_stats.txt"
+assert_file "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh/significant_differential_peaks_annotated_with_stats.txt"
+grep -q $'^annotated_files\t5$' "$annotation_root/peak_annotation/_COMPLETE"
+
 echo "Peak-runner fake-data smoke tests passed."
