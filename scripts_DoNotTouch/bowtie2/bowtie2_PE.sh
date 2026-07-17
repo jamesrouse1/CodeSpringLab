@@ -61,7 +61,7 @@ rm ${1}_temp2.sortedByCoord.sam
 samtools sort -n -o ${1}_temp3.sam ${1}_temp2.sam
 rm ${1}_temp2.sam
 
-awk '( ($3 ~ /^chr/ && $3 != "chrM" && $3 != "chrUn") || (/^@/) )' ${1}_temp3.sam > ${1}Aligned.sortedByName.out.sam
+awk '( ($3 ~ /^chr([0-9]+|X|Y)$/) || (/^@/) )' ${1}_temp3.sam > ${1}Aligned.sortedByName.out.sam
 rm ${1}_temp3.sam
 
 samtools view -h -bS -o ${1}Aligned.sortedByName.out.bam ${1}Aligned.sortedByName.out.sam

@@ -14,6 +14,16 @@ if grep -q 'example_dataset' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"
   echo "ASSERTION FAILED: ATAC DiffBind must not fabricate samples based on an example path" >&2
   exit 1
 fi
+real_python="$(command -v python3)"
+"$real_python" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())' \
+  "$repo_root/scripts_DoNotTouch/bulkChIPseq.py"
+if grep -Eq 'GRCm39_M29|gencode\.vM29|gencode\.v42|hg38_p13|mm10' \
+  "$repo_root/scripts_DoNotTouch/bulkChIPseq.py"; then
+  echo "ASSERTION FAILED: CodeSpringLab ChIP-seq still references a legacy genome" >&2
+  exit 1
+fi
+grep -Fq '^chr([0-9]+|X|Y)$' "$repo_root/scripts_DoNotTouch/bowtie2/bowtie2_PE.sh"
+grep -Fq '^chr([0-9]+|X|Y)$' "$repo_root/scripts_DoNotTouch/bowtie2/bowtie2_chip_SE.sh"
 while IFS= read -r shell_script; do
   bash -n "$shell_script"
 done < <(find "$repo_root/scripts_DoNotTouch" -type f -name '*.sh' -print)

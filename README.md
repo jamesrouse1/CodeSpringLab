@@ -79,7 +79,7 @@ The ATAC-seq workflow organizes read processing, alignment, QC metrics, signal t
   <img src="./scripts_DoNotTouch/flowchart_chip.png" width="700" />
 </p>
 
-The ChIP-seq workflow supports alignment, QC, peak analysis, and organized output folders for downstream interpretation.
+The ChIP-seq workflow supports single- and paired-end alignment, duplicate-removed CPM signal tracks, explicit target-to-input matching, MACS2 narrow or broad peak calling, and DiffBind/DESeq2 differential binding. It uses the current mouse GRCm39/GENCODE M39 and human GRCh38/GENCODE v50 Bowtie2 and annotation resources; legacy M29, v42, and mm10 references are not used by the ChIP workflow.
 
 ## Typical Server Setup
 

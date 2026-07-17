@@ -48,7 +48,7 @@ module load picard/2.21.6-Java-11
 current_stage="aligning single-end reads"
 bowtie2 --very-sensitive --threads 8 --no-unal --end-to-end --phred33 -x "$index" -U "$read1" 2> "$bowtie_log" |
   samtools view -h -q 30 -F 4 - |
-  awk 'BEGIN{OFS="\t"} /^@/ || ($3 ~ /^chr/ && $3 != "chrM" && $3 !~ /^chrUn/) {print}' |
+  awk 'BEGIN{OFS="\t"} /^@/ || ($3 ~ /^chr([0-9]+|X|Y)$/) {print}' |
   samtools view -b -o "${tmp_dir}/filtered.bam" -
 samtools sort -@ 8 -T "${tmp_dir}/sort" -o "$raw_bam" "${tmp_dir}/filtered.bam"
 samtools quickcheck -v "$raw_bam"

@@ -30,6 +30,37 @@ project_name=getattr(config, 'project_name', 'example_dataset')
 param=getattr(config, 'parameters_exist', 'n')
 res_dir=getattr(config, 'results_directory', '../../csl_results/')
 
+CHIP_GENOME_RESOURCES = {
+    "mouse": {
+        "genome_version": "mouse_gencodeM39",
+        "label": "Mouse GRCm39 / GENCODE M39",
+        "effective_genome_size": "2654621783",
+        "macs2_genome_size": "1.87e+9",
+        "bowtie2_index": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/bowtie2_index/GRCm39_gencodeM39",
+        "chrom_sizes": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/GRCm39.chrom.sizes",
+        "tss_bed": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.annotation_onlyChrNoMito.bed",
+        "gtf": "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.primary_assembly.annotation.gtf",
+        "homer_genome": "mm39",
+    },
+    "human": {
+        "genome_version": "human_gencode50",
+        "label": "Human GRCh38 / GENCODE v50",
+        "effective_genome_size": "2913022398",
+        "macs2_genome_size": "2.7e+9",
+        "bowtie2_index": "/grid/bsr/data/data/utama/genome/human_gencode50/bowtie2_index/GRCh38_gencode50",
+        "chrom_sizes": "/grid/bsr/data/data/utama/genome/human_gencode50/GRCh38.chrom.sizes",
+        "tss_bed": "/grid/bsr/data/data/utama/genome/human_gencode50/gencode.v50.annotation_onlyChrNoMito.bed",
+        "gtf": "/grid/bsr/data/data/utama/genome/human_gencode50/gencode.v50.primary_assembly.annotation.gtf",
+        "homer_genome": "hg38",
+    },
+}
+
+def chip_genome_resources(genome):
+    key = str(genome).strip().lower()
+    if key not in CHIP_GENOME_RESOURCES:
+        raise ValueError("ChIP-seq genome must be 'mouse' or 'human', not: "+str(genome))
+    return CHIP_GENOME_RESOURCES[key].copy()
+
 
 CONFIG_KEYS = config_store.CONFIG_KEYS
 
@@ -648,14 +679,10 @@ def bowtie2_Prep(genome,pairing,read_dir,inpath_design):
 
     print("Bowtie2 alignment results will be stored in "+res_dir+project_name+"/data/bowtie2/")
     
-    if genome == 'mouse':
-        effgenomesize = "2654621783"
-        chromsize = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/chrom.sizes"
-        genome_index_path = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/GRCm39_M29_gencode_bowtie2index/GRCm39_M29_gencode"
-    elif genome == 'human':
-        effgenomesize = "2913022398"
-        chromsize = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/chrom.sizes"
-        genome_index_path = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/hg38_p13_gencode_bowtie2index/hg38_p13_gencode"
+    resources = chip_genome_resources(genome)
+    effgenomesize = resources["effective_genome_size"]
+    chromsize = resources["chrom_sizes"]
+    genome_index_path = resources["bowtie2_index"]
     
     #read1_list = read_dir+'/'+prefix+'_R1_001.fastq.gz'
     #read2_list = read_dir+'/'+prefix+'_R2_001.fastq.gz'
@@ -670,7 +697,7 @@ def bowtie2_Prep(genome,pairing,read_dir,inpath_design):
     else:
         scriptpath_bowtie2 = '../scripts_DoNotTouch/bowtie2/qsub_bowtie2_chip_SE.sh'
 
-    _save_config_updates(genome=genome, pairing=pairing, read_path_destination=read_dir, inpath_design=inpath_design, out_dir_bowtie2=out_dir)
+    _save_config_updates(genome=genome, genome_version=resources["genome_version"], pairing=pairing, read_path_destination=read_dir, inpath_design=inpath_design, out_dir_bowtie2=out_dir)
     return genome_index_path,read1_list,read2_list,out_prefix_list,out_dir,effgenomesize,chromsize,scriptpath_bowtie2
 
 def bowtie2_PrepDirect():
@@ -754,34 +781,26 @@ def macs2_Prep(genome,out_dir,pairing,inpath_design):
     for i in range(len(prefix)):
         os.makedirs(macs2_dir+prefix[i],exist_ok=True)
     
-    if genome == 'mouse':
-        homerspecies = "mm39"
-        genomesize = "1.87e+9"
-        chromsize = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/chrom.sizes"
-        anno_onlyChrNoMito = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation_onlyChrNoMito.bed"
-    elif genome == 'human':
-        homerspecies = "hg38"
-        genomesize = "2.7e+9"
-        chromsize = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/chrom.sizes"
-        anno_onlyChrNoMito = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation_onlyChrNoMito.bed"
+    resources = chip_genome_resources(genome)
+    homerspecies = resources["homer_genome"]
+    genomesize = resources["macs2_genome_size"]
+    chromsize = resources["chrom_sizes"]
+    anno_onlyChrNoMito = resources["tss_bed"]
     
-    if pairing == "y":
-        scriptpath_macs2 = '../scripts_DoNotTouch/MACS2/qsub_macs2_chip_PE.sh'
-    else:
-        scriptpath_macs2 = '../scripts_DoNotTouch/MACS2/qsub_macs2_chip_SE.sh'
+    scriptpath_macs2 = '../scripts_DoNotTouch/MACS2/qsub_macs2_chip_SE.sh'
 
     print("========================================")
     print("Remove all kinds of read duplicates:(e.g y/n)")
     removeDup = input()
     print("========================================")
     if removeDup == "y":
-        bed_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord_removeDup.out.bed'
+        bed_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord_removeDup.out.bam'
     else:
-        bed_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bed'
+        bed_list = out_dir+prefix+'/'+prefix+'Aligned.sortedByCoord.out.bam'
     
     macs2_prefix_list = macs2_dir+prefix+'/'
 
-    _save_config_updates(genome=genome, pairing=pairing, inpath_design=inpath_design, out_dir_bowtie2=out_dir, out_peak_macs2=macs2_dir, removeDup=removeDup)
+    _save_config_updates(genome=genome, genome_version=resources["genome_version"], pairing=pairing, inpath_design=inpath_design, out_dir_bowtie2=out_dir, out_peak_macs2=macs2_dir, removeDup=removeDup)
     return scriptpath_macs2,genomesize,chromsize,bed_list,macs2_prefix_list,prefix,anno_onlyChrNoMito,macs2_dir,homerspecies
 
 def macs2_PrepDirect():
@@ -802,64 +821,49 @@ def macs2_RunPeakCalling(scriptpath_macs2,genomesize,chromsize,bed_list,macs2_pr
     global project_name
     global res_dir
     
-    ####### Split bed_list into chip and input #####
+    ####### Resolve each ChIP target to its explicit matched input #####
     design = pd.read_table(inpath_design+'/design_matrix.txt',index_col=0)
-    design = design.iloc[:,:len(design.columns)-1]
-    
-    print("========================================")
-    print("Here's the list of phenotypes/conditions/experiments")
-    design_var=[]
-    for i in range(len(design.columns)):
-        design_var.append(design.columns[i])
-        print(design.columns[i]+':')
-        print(set(design.iloc[:,i]))
-    
-    print("========================================")
-    print("Which phenotype/condition/replicate/batch should be the input reference/baseline?(e.g input)")
-    refcond = input()
-    
-    print("========================================")
-    print("Which phenotype/condition/replicate/batch to be ChIP?(e.g chip)")
-    compared = input()
-    _save_config_updates(refcond=refcond, compared=compared)
-    
-    #bed_list_df = pd.DataFrame(bed_list)
-    #prefix_df = pd.DataFrame(prefix)
-    #pattern = '|'.join(prefix)
-    
-    
-    refcond_names = design[design.isin([refcond]).any(axis=1)].index
-    pattern_refcond = '|'.join(refcond_names)
-    #input_bed_list = bed_list_df[bed_list_df.isin(refcond_names).any(1).values]
-    input_bed_list = bed_list[bed_list.str.contains(pattern_refcond)]
-    input_bed_list.index = list(range(len(input_bed_list)))
-    
-    compared_names = design[design.isin([compared]).any(axis=1)].index
-    pattern_compared = '|'.join(compared_names)
-    #chip_bed_list = bed_list_df[bed_list_df.isin(compared_names).any(1).values]
-    chip_bed_list = bed_list[bed_list.str.contains(pattern_compared)]
-    prefix = prefix[prefix.isin(compared_names)]
-    macs2_prefix_list = macs2_prefix_list[macs2_prefix_list.str.contains(pattern_compared)]
-    #input_bed_list.index = chip_bed_list.index
-    chip_bed_list.index = input_bed_list.index
-    prefix.index = input_bed_list.index
-    macs2_prefix_list.index = input_bed_list.index
+    design.index = design.index.astype(str)
+    bam_by_sample = dict(zip(prefix.astype(str), bed_list.astype(str)))
+    out_by_sample = dict(zip(prefix.astype(str), macs2_prefix_list.astype(str)))
+    if {'reference', 'control_sample'}.issubset(design.columns):
+        reference_values = design['reference'].astype(str).str.strip().str.lower()
+        target_names = list(design.index[reference_values == 'chip'].astype(str))
+        control_names = [str(design.loc[sample, 'control_sample']).strip() for sample in target_names]
+        invalid = [sample for sample, control in zip(target_names, control_names)
+                   if not control or control not in design.index or str(design.loc[control, 'reference']).strip().lower() != 'input']
+        if invalid:
+            raise ValueError("Every ChIP target needs a valid reference=input control_sample: "+", ".join(invalid))
+    else:
+        print("========================================")
+        print("Which design value identifies input controls? (e.g. input)")
+        refcond = input().strip()
+        print("Which design value identifies ChIP targets? (e.g. chip)")
+        compared = input().strip()
+        _save_config_updates(refcond=refcond, compared=compared)
+        control_candidates = list(design[design.isin([refcond]).any(axis=1)].index.astype(str))
+        target_names = list(design[design.isin([compared]).any(axis=1)].index.astype(str))
+        if len(control_candidates) != len(target_names):
+            raise ValueError("Legacy ChIP/input matching requires equal target and input counts. Add control_sample for explicit matching.")
+        control_names = control_candidates
 
-    ################################################
+    missing_bams = [sample for sample in target_names+control_names if sample not in bam_by_sample or not os.path.isfile(bam_by_sample[sample])]
+    if missing_bams:
+        raise FileNotFoundError("Missing ChIP/input BAMs: "+", ".join(sorted(set(missing_bams))))
+
+    input_format = "BAMPE" if str(_config_value("pairing", "n")).lower() == "y" else "BAM"
+    runner = '../scripts_DoNotTouch/MACS2/macs2_chip_SE.sh'
     
     jobid = []
-    for i in range(len(chip_bed_list)):
+    for sample, control in zip(target_names, control_names):
         stderr = "-e "+res_dir+project_name+"/log/error_macs2.txt"
         stdout = "-o "+res_dir+project_name+"/log/output_macs2.txt"
-        command = "sbatch "+stderr+" "+stdout+" "+scriptpath_macs2+" "+prefix[i]+" "+chip_bed_list[i]+" "+genomesize+" "+chromsize+" "+macs2_prefix_list[i]+" "+anno_onlyChrNoMito+" "+project_name+" "+input_bed_list[i]+" "+homerspecies+" "+out_dir
-        #command = "source "+scriptpath_macs2+" "+prefix[i]+" "+chip_bed_list[i]+" "+genomesize+" "+chromsize+" "+macs2_prefix_list[i]+" "+anno_onlyChrNoMito+" "+project_name+" "+input_bed_list[i]+" "+homerspecies+" "+out_dir
-        #job = os.popen(command).read().strip().splitlines()
+        command = "sbatch "+stderr+" "+stdout+" "+scriptpath_macs2+" "+sample+" "+bam_by_sample[sample]+" "+bam_by_sample[control]+" "+input_format+" "+genomesize+" 0.01 narrow "+out_by_sample[sample]+" "+runner
         job = os.popen(command).read().splitlines()
+        if not job:
+            raise RuntimeError("MACS2 sbatch returned no response for "+sample)
         print(job[0])
-        #print(job[1])
-
         jobid.append(job[0].split(' ')[3])
-        #jobid.append(job[1].split(' ')[2])
     
     return jobid
 
@@ -908,10 +912,8 @@ def homer_Prep(genome,out_dir,inpath_design):
         os.remove(res_dir+project_name+"/log/output_homer_diffpeak.txt")
         os.remove(res_dir+project_name+"/log/error_homer_diffpeak.txt")
     
-    if genome == 'mouse':
-        genome_homer = "mm10"
-    elif genome == 'human':
-        genome_homer = "hg38"
+    resources = chip_genome_resources(genome)
+    genome_homer = resources["homer_genome"]
     
     design = pd.read_table(inpath_design+'/design_matrix.txt',index_col=0)
     design = design.iloc[:,:len(design.columns)-1]
@@ -1041,10 +1043,8 @@ def visualization_Prep(genome,out_peak):
     
     scriptpath_tracks = '../scripts_DoNotTouch/genomeTracks/qsub_genomeTracks.sh'
     
-    if genome == 'mouse':
-        genome_index_path = "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation.gtf"
-    elif genome == 'human':
-        genome_index_path = "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf"
+    resources = chip_genome_resources(genome)
+    genome_index_path = resources["gtf"]
     
     _save_config_updates(genome=genome, out_peak_macs2=out_peak, tracks_dir=tracks_dir)
     return genome_index_path,scriptpath_tracks,tracks_dir,macs2_prefix_list,region
