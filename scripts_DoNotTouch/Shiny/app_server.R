@@ -54,14 +54,37 @@ pick_first_existing <- function(filename, dirs) {
   }
   NULL
 }
-mouse_gtf_path <- pick_first_existing("gencode.vM29.annotation.gtf", c(
-  gtf_dir,
-  "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode"
-))
-human_gtf_path <- pick_first_existing("gencode.v42.chr_patch_hapl_scaff.annotation.gtf", c(
-  gtf_dir,
-  "/grid/bsr/data/data/utama/genome/hg38_p13_gencode"
-))
+pick_first_existing_path <- function(paths) {
+  paths <- unique(path.expand(paths[nzchar(paths)]))
+  for (path in paths) {
+    if (file.exists(path)) return(path)
+  }
+  NULL
+}
+configured_species <- tolower(trimws(as.character(config_value("genome_species", ""))[1]))
+configured_gtf <- trimws(as.character(config_value("selected_gtf_path", ""))[1])
+configured_gtf_for <- function(species) {
+  if (!identical(configured_species, species) || !nzchar(configured_gtf)) return(NULL)
+  pick_first_existing_path(configured_gtf)
+}
+mouse_gtf_path <- configured_gtf_for("mouse")
+if (is.null(mouse_gtf_path)) {
+  mouse_gtf_path <- pick_first_existing_path(c(
+    file.path(gtf_dir, "gencode.vM39.primary_assembly.annotation.gtf"),
+    "/grid/bsr/data/data/utama/genome/mouse_gencodeM39/gencode.vM39.primary_assembly.annotation.gtf",
+    file.path(gtf_dir, "gencode.vM29.annotation.gtf"),
+    "/grid/bsr/data/data/utama/genome/GRCm39_M29_gencode/gencode.vM29.annotation.gtf"
+  ))
+}
+human_gtf_path <- configured_gtf_for("human")
+if (is.null(human_gtf_path)) {
+  human_gtf_path <- pick_first_existing_path(c(
+    file.path(gtf_dir, "gencode.v50.primary_assembly.annotation.gtf"),
+    "/grid/bsr/data/data/utama/genome/human_gencode50/gencode.v50.primary_assembly.annotation.gtf",
+    file.path(gtf_dir, "gencode.v42.chr_patch_hapl_scaff.annotation.gtf"),
+    "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf"
+  ))
+}
 deseq2_dir <- file.path(data_dir, "deseq2")
 deseq2_gene_name_dir <- file.path(data_dir, "deseq2_gene_name")
 gseapy_dir <- file.path(data_dir, "gseapy")
@@ -616,7 +639,8 @@ detect_species_from_ids <- function(x) {
 }
 
 read_gtf_gene_map <- function(gtf_path) {
-  if (!file.exists(gtf_path)) return(NULL)
+  if (is.null(gtf_path) || !length(gtf_path) || !nzchar(gtf_path[[1]]) || !file.exists(gtf_path[[1]])) return(NULL)
+  gtf_path <- gtf_path[[1]]
   lines <- readLines(gtf_path, warn = FALSE)
   lines <- lines[substr(lines, 1, 1) != "#"]
   fields <- strsplit(lines, "\t", fixed = TRUE)
