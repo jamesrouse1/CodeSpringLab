@@ -133,11 +133,11 @@ sum(dbobject.DB$Fold>0)
 sum(dbobject.DB$Fold<0)
 
 png(paste(outpath,"/diffbind_pca_byNormCounts.png",sep=""), width = 1000, height = 800, res = 150)
-dba.plotPCA(dbobject,DBA_CONDITION,label=DBA_CONDITION)
+dba.plotPCA(dbobject,DBA_CONDITION,label=DBA_ID)
 dev.off()
 
 png(paste(outpath,"/diffbind_pca_byDiffPeaks.png",sep=""), width = 1000, height = 800, res = 150)
-try(dba.plotPCA(dbobject,contrast=1,label=DBA_CONDITION))
+try(dba.plotPCA(dbobject,contrast=1,label=DBA_ID))
 dev.off()
 
 png(paste(outpath,"/diffbind_volcano_byDiffPeaks.png",sep=""), width = 1000, height = 800, res = 150)

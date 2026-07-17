@@ -16,6 +16,8 @@ if grep -q 'example_dataset' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"
   exit 1
 fi
 grep -Fq 'diffbind_sample_sheet.tsv' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"
+grep -Fq 'dba.plotPCA(dbobject,DBA_CONDITION,label=DBA_ID)' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"
+grep -Fq 'dba.plotPCA(dbobject,contrast=1,label=DBA_ID)' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"
 real_python="$(command -v python3)"
 "$real_python" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())' \
   "$repo_root/scripts_DoNotTouch/bulkChIPseq.py"
