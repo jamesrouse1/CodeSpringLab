@@ -14,6 +14,7 @@ if grep -q 'example_dataset' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"
   echo "ASSERTION FAILED: ATAC DiffBind must not fabricate samples based on an example path" >&2
   exit 1
 fi
+grep -Fq 'diffbind_sample_sheet.tsv' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"
 real_python="$(command -v python3)"
 "$real_python" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())' \
   "$repo_root/scripts_DoNotTouch/bulkChIPseq.py"

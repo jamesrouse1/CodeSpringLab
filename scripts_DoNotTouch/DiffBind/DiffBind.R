@@ -48,6 +48,15 @@ design$bamReads <- paste(inbamlist,"/",design$SampleID,"/",design$SampleID,bam,s
 design$Peaks <- paste(inpeaklist,"/",design$SampleID,"/",design$SampleID,narrowpeak,sep="")
 design$PeakCaller <- rep("narrowpeak",,nrow(design))
 
+# Retain the exact samples, conditions, and files used for this comparison.
+# CodeSpringApp uses this alongside the differential BED to build a
+# comparison-specific genome-browser view.
+write.table(
+  design,
+  file=file.path(outpath,"diffbind_sample_sheet.tsv"),
+  sep="\t", quote=FALSE, row.names=FALSE, col.names=TRUE
+)
+
 names(design)
 design
 
