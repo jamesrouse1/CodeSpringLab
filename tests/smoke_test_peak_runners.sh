@@ -6,6 +6,15 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/codespring_peak_smoke.XXXXXX")"
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
 
+real_rscript="$(command -v Rscript)"
+"$real_rscript" -e 'invisible(parse(file=commandArgs(TRUE)[1])); invisible(parse(file=commandArgs(TRUE)[2]))' \
+  "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R" \
+  "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind_chip.R"
+if grep -q 'example_dataset' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"; then
+  echo "ASSERTION FAILED: ATAC DiffBind must not fabricate samples based on an example path" >&2
+  exit 1
+fi
+
 fake_bin="$work/bin"
 mkdir -p "$fake_bin"
 cat > "$fake_bin/macs2" <<'FAKE_MACS2'

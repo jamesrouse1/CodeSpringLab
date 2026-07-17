@@ -38,12 +38,6 @@ design_compared$Replicate <- 1:nrow(design_compared)
 
 design <- rbind(design_refcond,design_compared)
 
-### Add rep3 just for example dataset ###
-if (grepl("example_dataset",peakpath,fixed=TRUE)){
-	design <- rbind(design,list("CD4_day1_rep3","day1",3),list("CD4_day3_rep3","day3",3))
-}
-#########################################
-
 bam <- rep("Aligned.sortedByCoord_removeDup.out.bam",nrow(design))
 narrowpeak <- rep("_peaks.narrowPeak",nrow(design))
 
