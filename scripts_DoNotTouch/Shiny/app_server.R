@@ -355,6 +355,36 @@ gseapy_results_available <- function() {
 }
 gseapy_available <- gseapy_results_available()
 
+rna_stage_status <- data.frame(
+  stage = c("Design matrix", "Initial QC", "Alignment", "Gene counts", "Differential expression", "Pathway analysis", "RSEM (optional)", "Kallisto (optional)"),
+  status = ifelse(
+    c(nrow(design_df) > 0, fastqc_raw_available || fastqc_trim_available, star_available, count_matrix_available,
+      deseq2_available, gseapy_available, rsem_available, kallisto_available),
+    "Complete", "Not started"
+  ),
+  stringsAsFactors = FALSE
+)
+
+rna_result_file_catalog <- function(root = data_dir) {
+  if (!dir.exists(root)) return(data.frame(category = character(0), file = character(0), size = character(0), modified = character(0), stringsAsFactors = FALSE))
+  paths <- list.files(root, recursive = TRUE, full.names = TRUE, all.files = FALSE)
+  paths <- paths[file.exists(paths) & !dir.exists(paths)]
+  if (!length(paths)) return(data.frame(category = character(0), file = character(0), size = character(0), modified = character(0), stringsAsFactors = FALSE))
+  info <- file.info(paths)
+  relative <- substring(normalizePath(paths, winslash = "/", mustWork = FALSE), nchar(normalizePath(root, winslash = "/", mustWork = FALSE)) + 2L)
+  category <- sub("/.*$", "", relative)
+  category[!grepl("/", relative, fixed = TRUE)] <- "project"
+  data.frame(
+    category = category,
+    file = relative,
+    size = format(info$size, big.mark = ",", scientific = FALSE),
+    modified = format(info$mtime, "%Y-%m-%d %H:%M"),
+    stringsAsFactors = FALSE
+  )
+}
+
+rna_result_files <- rna_result_file_catalog()
+
 design_samples <- unique(as.character(design_df$sample))
 design_samples <- design_samples[!is.na(design_samples) & nzchar(design_samples)]
 fallback_sample_sources <- unique(c(
@@ -1747,7 +1777,41 @@ counts_subtabs <- c(
   )
 )
 
+rna_overview_tab <- tabPanel(
+  "Overview",
+  br(),
+  div(class = "results-actions", span(class = "updated-note", "Live summary of saved pipeline outputs")),
+  div(class = "metric-grid",
+    div(class = "metric-card", span("Samples"), strong(format(length(samples), big.mark = ",")), tags$small("Saved design matrix")),
+    div(class = "metric-card", span("Pipeline stages"), strong(paste0(sum(rna_stage_status$status == "Complete"), "/", nrow(rna_stage_status))), tags$small("Completed or available")),
+    div(class = "metric-card", span("Counted genes"), strong(format(nrow(count_matrix_nonzero_df), big.mark = ",")), tags$small("Nonzero featureCounts rows")),
+    div(class = "metric-card", span("Result files"), strong(format(nrow(rna_result_files), big.mark = ",")), tags$small("Files under the project data folder"))
+  ),
+  h4("Pipeline status"),
+  table_widget("rna_overview_status"),
+  tags$hr(),
+  h4("Design matrix"),
+  tags$p(class = "muted-note", "Samples and metadata used by RNA-seq quantification and comparisons."),
+  table_widget("rna_overview_design")
+)
+
+rna_files_tab <- tabPanel(
+  "Files",
+  br(),
+  sidebarLayout(
+    sidebarPanel(
+      width = 3,
+      selectInput("rna_file_category", "Category", choices = c("All files" = "all", stats::setNames(sort(unique(rna_result_files$category)), sort(unique(rna_result_files$category)))), selected = "all", selectize = FALSE),
+      downloadButton("download_rna_file_catalog", "Download file catalog"),
+      tags$hr(),
+      helpText("Files are listed relative to this project's data folder, matching the Files tab used by the other analysis types.")
+    ),
+    mainPanel(width = 9, table_widget("rna_files_table"))
+  )
+)
+
 app_tabs <- list(
+  rna_overview_tab,
   tabPanel("QC", do.call(tabsetPanel, qc_subtabs)),
   tabPanel("Counts", do.call(tabsetPanel, c(list(id = "counts_subtab"), counts_subtabs))),
   tabPanel(
@@ -2017,7 +2081,8 @@ app_tabs <- list(
             )
           )
         )
-  )
+  ),
+  rna_files_tab
 )
 
 ui <- fluidPage(
@@ -2106,6 +2171,38 @@ ui <- fluidPage(
       }
       .main-tabs {
         padding: 20px 22px 26px 22px;
+      }
+      .results-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 14px;
+      }
+      .updated-note, .muted-note {
+        color: #536a82;
+      }
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(150px, 1fr));
+        gap: 14px;
+        margin-bottom: 24px;
+      }
+      .metric-card {
+        background: #ffffff;
+        border: 1px solid #dbe5f0;
+        border-top: 4px solid #2f78c4;
+        border-radius: 10px;
+        box-shadow: 0 5px 14px rgba(15, 45, 75, 0.07);
+        padding: 16px;
+      }
+      .metric-card span, .metric-card small {
+        display: block;
+        color: #60758b;
+      }
+      .metric-card strong {
+        display: block;
+        color: #10233a;
+        font-size: 25px;
+        margin: 5px 0;
       }
       .main-tabs > .tabbable > .nav-tabs {
         border-bottom: none;
@@ -2504,6 +2601,9 @@ ui <- fluidPage(
         .main-tabs {
           padding: 14px 12px 18px 12px;
         }
+        .metric-grid {
+          grid-template-columns: repeat(2, minmax(140px, 1fr));
+        }
       }
     "))
   ),
@@ -2515,7 +2615,7 @@ ui <- fluidPage(
         class = "hero-topbar",
         div(
           class = "hero-copy",
-          h1(class = "hero-title", "RNA-Seq Results Explorer"),
+          h1(class = "hero-title", "RNA-seq Results Explorer"),
           div(class = "hero-kicker", "Developed by CSHL's Bioinformatics Shared Resource")
         ),
         div(
@@ -2534,6 +2634,24 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   gtf_cache <- reactiveValues(mouse = NULL, human = NULL)
+
+  rna_files_filtered <- reactive({
+    category <- value_or(input$rna_file_category, "all")
+    if (identical(category, "all")) rna_result_files else rna_result_files[rna_result_files$category == category, , drop = FALSE]
+  })
+  if (DT_AVAILABLE) {
+    output$rna_overview_status <- DT::renderDT(DT::datatable(rna_stage_status, rownames = FALSE, options = list(dom = "t", pageLength = nrow(rna_stage_status))))
+    output$rna_overview_design <- DT::renderDT(DT::datatable(design_df, rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)))
+    output$rna_files_table <- DT::renderDT(DT::datatable(rna_files_filtered(), rownames = FALSE, options = list(pageLength = 20, scrollX = TRUE)))
+  } else {
+    output$rna_overview_status <- renderTable(rna_stage_status)
+    output$rna_overview_design <- renderTable(design_df)
+    output$rna_files_table <- renderTable(rna_files_filtered())
+  }
+  output$download_rna_file_catalog <- downloadHandler(
+    filename = function() paste0(project_name, "_file_catalog.csv"),
+    content = function(file) write.csv(rna_files_filtered(), file, row.names = FALSE, quote = TRUE)
+  )
 
   get_gtf_map <- function(species) {
     if (identical(species, "mouse")) {

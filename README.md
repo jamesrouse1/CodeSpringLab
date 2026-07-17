@@ -63,7 +63,7 @@ CodeSpringLab/
   <img src="./scripts_DoNotTouch/flowchart.png" width="700" />
 </p>
 
-The RNA-seq workflow includes trimming, QC, alignment, quantification, differential expression, pathway analysis, and visualization through the RNA-seq Results Explorer.
+The RNA-seq workflow includes trimming, QC, alignment, quantification, differential expression, pathway analysis, and visualization through the RNA-seq Results Explorer. Its navigation follows the same format as the ATAC-seq, CUT&RUN, and ChIP-seq explorers: Overview first, QC and assay-specific results in the middle, and a categorized Files view last.
 
 ## Bulk ATAC-seq
 
