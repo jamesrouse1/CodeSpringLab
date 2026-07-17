@@ -27,11 +27,14 @@ parsed <- lapply(strsplit(as.character(table[[peak_column]]), "|", fixed = TRUE)
 
 stat_names <- unique(unlist(lapply(parsed, names), use.names = FALSE))
 stat_names <- stat_names[nzchar(stat_names)]
+added_columns <- FALSE
 for (name in stat_names) {
   if (name %in% names(table)) next
   values <- vapply(parsed, function(row) if (name %in% names(row)) row[[name]] else NA_character_, character(1))
   table[[name]] <- type.convert(values, as.is = TRUE, na.strings = c("NA", "NaN", ""))
+  added_columns <- TRUE
 }
+if (!added_columns) quit(save = "no", status = 0L)
 
 destination_dir <- dirname(output)
 dir.create(destination_dir, recursive = TRUE, showWarnings = FALSE)

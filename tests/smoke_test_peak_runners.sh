@@ -290,6 +290,18 @@ head -n 1 "$annotation_root/diffbind/B_vs_A/DifferentialPeaks_B_vs_A_ref_annotat
 head -n 1 "$annotation_root/diffbind/legacy/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt" | grep -q $'p.value\tFDR'
 grep -q $'^annotated_files\t5$' "$annotation_root/peak_annotation/_COMPLETE"
 
+# A rerun with unchanged inputs must reuse the current annotations instead of
+# invoking HOMER again. Force the fake HOMER executable to fail so this test
+# proves the reuse path is actually taken.
+export FAKE_HOMER_MODE=fail
+bash "$repo_root/scripts_DoNotTouch/Homer/annotate_peak_results.sh" \
+  "$annotation_root" mm39 "$annotation_root/reference.gtf" > "$work/peak_annotation_reuse.out" 2>&1
+unset FAKE_HOMER_MODE
+grep -q 'Reusing current annotation' "$work/peak_annotation_reuse.out"
+assert_file "$annotation_root/peak_annotation/_COMPLETE"
+assert_absent "$annotation_root/peak_annotation/_RUN_STARTED"
+grep -q $'^annotated_files\t5$' "$annotation_root/peak_annotation/_COMPLETE"
+
 annotation_fail_root="$work/peak_annotation_failure"
 mkdir -p "$annotation_fail_root/macs2/S1"
 printf 'chr1\t10\t30\tmacs_peak\t100\t.\t12\t8\t6\t5\n' > \

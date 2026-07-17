@@ -80,6 +80,16 @@ run_annotation() {
     echo "ERROR: no valid genomic intervals remained after preparing: $source" >&2
     return 1
   fi
+  if [[ -s "$destination" && ! "$source" -nt "$destination" ]] && head -n 1 "$destination" | grep -q '^PeakID'; then
+    echo "Reusing current annotation ($peak_count peaks): $destination"
+    Rscript "$stats_expander" "$destination"
+    printf '%s\t%s\t%s\t%s\t%s\tcomplete\n' \
+      "$result_type" "$label" "$peak_count" "$source" "$destination" >> "$summary_tmp"
+    annotated_count=$((annotated_count + 1))
+    total_peaks=$((total_peaks + peak_count))
+    return 0
+  fi
+  echo "Annotating $result_type / $label ($peak_count peaks): $source"
   output_tmp="$tmp_root/$(safe_label "${result_type}_${label}").annotated.txt"
   if [[ -n "$gtf" ]]; then
     annotatePeaks.pl "$prepared" "$genome" -gtf "$gtf" > "$output_tmp"
