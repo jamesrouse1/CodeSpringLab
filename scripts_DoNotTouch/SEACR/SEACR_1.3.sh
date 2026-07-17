@@ -53,8 +53,8 @@ then
 	exit 1
 fi
 
-password=`head /dev/urandom | LC_CTYPE=C tr -dc A-Za-z0-9 | head -c 13; echo ''`
-password2=`head /dev/urandom | LC_CTYPE=C tr -dc A-Za-z0-9 | head -c 13; echo ''`
+password="$(LC_ALL=C tr -dc A-Za-z0-9 < /dev/urandom | head -c 13; echo '')"
+password2="$(LC_ALL=C tr -dc A-Za-z0-9 < /dev/urandom | head -c 13; echo '')"
 
 exp=`basename $1`
 
@@ -115,18 +115,18 @@ fi
 
 echo "Calculating optimal AUC threshold: $(date)"
 
-path=`dirname $0`
+path="$(cd -- "$(dirname -- "$0")" && pwd)"
 if [[ -f $2 ]] && [[ $norm == "norm" ]]
 then
 	echo "Calculating threshold using normalized control: $(date)"
-	Rscript $path/SEACR_1.3.R --exp=$password.auc --ctrl=$password2.auc --norm=yes --output=$password
+	Rscript "$path/SEACR_1.3.R" --exp=$password.auc --ctrl=$password2.auc --norm=yes --output=$password
 elif [[ -f $2 ]]
 then
 	echo "Calculating threshold using non-normalized control: $(date)"
-	Rscript $path/SEACR_1.3.R --exp=$password.auc --ctrl=$password2.auc --norm=no --output=$password
+	Rscript "$path/SEACR_1.3.R" --exp=$password.auc --ctrl=$password2.auc --norm=no --output=$password
 else
 	echo "Using user-provided threshold: $(date)"
-	Rscript $path/SEACR_1.3.R --exp=$password.auc --ctrl=$2 --norm=no --output=$password
+	Rscript "$path/SEACR_1.3.R" --exp=$password.auc --ctrl=$2 --norm=no --output=$password
 fi
 	
 fdr=`cat $password.fdr.txt | sed -n '1p'`			## Added 5/15/19 for SEACR_1.1
@@ -162,7 +162,7 @@ fi
 echo "Merging nearby features and eliminating control-enriched features: $(date)"
 
 # module load bedtools ## For use on cluster
-mean=`awk '{s+=$3-$2; t++}END{print s/(t*10)}' $password.auc.threshold.bed`
+mean=`awk '{s+=$3-$2; t++}END{if(t>0) print s/(t*10); else print 0}' $password.auc.threshold.bed`
 
 if [[ -f $2 ]]
 then

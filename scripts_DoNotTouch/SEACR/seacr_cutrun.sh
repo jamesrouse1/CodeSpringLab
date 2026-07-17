@@ -9,6 +9,14 @@ out_prefix="$5"
 project_name="$6"
 target_fragments="${7:-none}"
 
+[[ -s "$target_bedgraph" ]] || { echo "ERROR: target bedGraph is missing or empty: $target_bedgraph" >&2; exit 2; }
+[[ "$norm" == "norm" || "$norm" == "non" ]] || { echo "ERROR: SEACR normalization must be norm or non, not: $norm" >&2; exit 2; }
+[[ "$stringency" == "stringent" || "$stringency" == "relaxed" ]] || { echo "ERROR: SEACR stringency must be stringent or relaxed, not: $stringency" >&2; exit 2; }
+if [[ "$control_bedgraph" != "none" && ! -s "$control_bedgraph" ]]; then
+  echo "ERROR: control bedGraph is missing or empty: $control_bedgraph" >&2
+  exit 2
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seacr_script="${script_dir}/SEACR_1.3.sh"
 seacr_r_script="${script_dir}/SEACR_1.3.R"
@@ -19,16 +27,33 @@ if [[ ! -s "$seacr_script" || ! -s "$seacr_r_script" ]]; then
   exit 2
 fi
 
-mkdir -p "$(dirname "$out_prefix")"
+out_dir="$(dirname "$out_prefix")"
+mkdir -p "$out_dir"
+out_dir="$(cd -- "$out_dir" && pwd)"
+out_prefix="$out_dir/$(basename "$out_prefix")"
+target_bedgraph="$(cd -- "$(dirname "$target_bedgraph")" && pwd)/$(basename "$target_bedgraph")"
+if [[ "$control_bedgraph" != "none" ]]; then
+  control_bedgraph="$(cd -- "$(dirname "$control_bedgraph")" && pwd)/$(basename "$control_bedgraph")"
+fi
+seacr_tmp="$(mktemp -d "$out_dir/.seacr_tmp.XXXXXX")"
+cleanup() { rm -rf -- "$seacr_tmp"; }
+trap cleanup EXIT
+ln -s "$target_bedgraph" "$seacr_tmp/target.bedgraph"
+if [[ "$control_bedgraph" != "none" ]]; then
+  ln -s "$control_bedgraph" "$seacr_tmp/control.bedgraph"
+fi
 module load EBModules
 module load BEDTools/2.30.0-GCC-10.3.0
 module load R/4.1.2-foss-2021a
 
 if [[ "$control_bedgraph" == "none" || ! -s "$control_bedgraph" ]]; then
-  bash "$seacr_script" "$target_bedgraph" 0.01 "$norm" "$stringency" "$out_prefix"
+  (cd "$seacr_tmp" && bash "$seacr_script" target.bedgraph 0.01 "$norm" "$stringency" result)
 else
-  bash "$seacr_script" "$target_bedgraph" "$control_bedgraph" "$norm" "$stringency" "$out_prefix"
+  (cd "$seacr_tmp" && bash "$seacr_script" target.bedgraph control.bedgraph "$norm" "$stringency" result)
 fi
+generated_peak="$seacr_tmp/result.${stringency}.bed"
+[[ -f "$generated_peak" ]] || { echo "ERROR: SEACR did not create the expected peak file: $generated_peak" >&2; exit 1; }
+mv "$generated_peak" "${out_prefix}.${stringency}.bed"
 
 echo -e "target_bedgraph\t${target_bedgraph}" > "${out_prefix}_seacr_summary.txt"
 echo -e "control_bedgraph\t${control_bedgraph}" >> "${out_prefix}_seacr_summary.txt"
