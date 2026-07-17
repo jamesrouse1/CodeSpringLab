@@ -5,7 +5,10 @@
 #SBATCH --export=NONE
 #SBATCH --time=2-00:00:00
 
-source ../scripts_DoNotTouch/Kallisto/kallisto_PE.sh $1 $2 $3 $4
-
-# Ori script with grid qsub
-#qsub -l mem_free=50G -pe threads 4 -cwd -o ../../csl_results/${5}/log/output_kallisto.txt -e ../../csl_results/${5}/log/error_kallisto.txt -V ../scripts_DoNotTouch/Kallisto/kallisto_PE.sh $1 $2 $3 $4
+set -Eeuo pipefail
+runner="${6:-}"
+if [[ -z "$runner" || ! -s "$runner" ]]; then
+  runner="${SLURM_SUBMIT_DIR:-$PWD}/../scripts_DoNotTouch/Kallisto/kallisto_PE.sh"
+fi
+[[ -s "$runner" ]] || { echo "ERROR: paired-end Kallisto runner was not found: $runner" >&2; exit 2; }
+exec bash "$runner" "$1" "$2" "$3" "$4"

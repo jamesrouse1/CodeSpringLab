@@ -101,4 +101,4 @@ Run the complete local smoke suite from the repository root:
 bash tests/run_all.sh
 ```
 
-The suite exercises the RNA runner chain with controlled fake external tools, the peak-calling and differential-peak runners, pooled FASTQ handling, completion and failure behavior, and the bundled SEACR R algorithm on synthetic bedGraph data. The fake-tool tests validate CodeSpringLab orchestration without requiring cluster modules; the SEACR test executes the bundled caller itself.
+The suite exercises the RNA runner chain with controlled fake external tools, including Cutadapt, FastQC, STAR, featureCounts, Kallisto, and RSEM; CUT&RUN post-alignment repair; peak calling and differential peaks; pooled FASTQ handling; completion and failure behavior; and the bundled SEACR R algorithm on synthetic bedGraph data. The fake-tool tests validate CodeSpringLab orchestration without requiring cluster modules; the SEACR test executes the bundled caller itself.

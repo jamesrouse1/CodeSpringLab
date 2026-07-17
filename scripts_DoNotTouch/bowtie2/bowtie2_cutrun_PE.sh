@@ -171,7 +171,10 @@ fi
 mapped_reads="$(samtools view -c -F 4 "${out_prefix}Aligned.sortedByCoord.out.bam")"
 dedup_reads="$(samtools view -c -F 4 "${out_prefix}Aligned.sortedByCoord_removeDup.out.bam")"
 fragment_count="$(wc -l < "${out_prefix}_fragments.bed")"
-duplicate_fraction="$(awk 'BEGIN{v="NA"} /^PERCENT_DUPLICATION/ {getline; split($0,a,"\t"); v=a[9]} END{print v}' "${out_prefix}_markedDup_metrics.txt")"
+duplicate_fraction="NA"
+if [[ -s "${out_prefix}_markedDup_metrics.txt" ]]; then
+  duplicate_fraction="$(awk 'BEGIN{v="NA"} /^PERCENT_DUPLICATION/ {getline; split($0,a,"\t"); v=a[9]} END{print v}' "${out_prefix}_markedDup_metrics.txt")"
+fi
 awk '{print $3-$2}' "${out_prefix}_fragments.bed" > "${out_prefix}_fragment_lengths.txt"
 awk 'BEGIN{OFS="\t"; print "metric","value"} {n++; s+=$1; if (n==1 || $1<min) min=$1; if ($1>max) max=$1} END{if(n>0){print "fragments",n; print "mean_fragment_length",s/n; print "min_fragment_length",min; print "max_fragment_length",max}}' "${out_prefix}_fragment_lengths.txt" > "${out_prefix}_fragment_length_summary.txt"
 {
