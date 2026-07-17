@@ -140,6 +140,7 @@ bash "$repo_root/scripts_DoNotTouch/MACS2/macs2_PE.sh" \
 assert_file "$atac_out/S1_macs2_complete.txt"
 assert_file "$atac_out/S1_macs2_summary.txt"
 assert_file "$atac_out/S1_peaks.narrowPeak"
+assert_file "$atac_out/S1_peaks_annotated.txt"
 if find "$atac_out" -maxdepth 1 -name '.macs2_tmp_*' | grep -q .; then
   echo "ASSERTION FAILED: ATAC MACS2 temporary directory was not cleaned" >&2
   exit 1
@@ -156,6 +157,18 @@ fi
 grep -q "internal peak-calling exception" "$work/atac_traceback.out"
 assert_absent "$atac_out/S1_macs2_complete.txt"
 unset FAKE_MACS2_MODE
+
+rm -f "$atac_out/S1_macs2_complete.txt" "$atac_out/S1_peaks_annotated.txt"
+export FAKE_HOMER_MODE=fail
+if bash "$repo_root/scripts_DoNotTouch/MACS2/macs2_PE.sh" \
+  S1 "$atac_root/S1.bed" mm unused "$atac_out" "$atac_root/tss.bed" 0.05 mm39 "$atac_root/bowtie2" \
+  > "$work/atac_annotation_fail.out" 2>&1; then
+  echo "ASSERTION FAILED: ATAC MACS2 accepted a failed integrated HOMER annotation" >&2
+  exit 1
+fi
+assert_absent "$atac_out/S1_macs2_complete.txt"
+assert_absent "$atac_out/S1_peaks_annotated.txt"
+unset FAKE_HOMER_MODE
 
 export FAKE_MACS2_MODE=zero
 bash "$repo_root/scripts_DoNotTouch/MACS2/macs2_PE.sh" \

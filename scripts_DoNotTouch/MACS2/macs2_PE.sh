@@ -108,11 +108,27 @@ module load R/4.1.2-foss-2021a
 
 export PATH=$PATH:/grid/bsr/data/data/utama/tools/homer/bin/
 
-if command -v annotatePeaks.pl >/dev/null 2>&1; then
-    annotatePeaks.pl "${5}/${1}_peaks.xls" "${8}" > "${5}/${1}_peaks_annotated.txt" || \
-        echo "WARNING: HOMER peak annotation failed for ${1}; MACS2 peaks are still valid." >&2
+annotation="${5}/${1}_peaks_annotated.txt"
+annotation_tmp="${annotation}.tmp.$$"
+rm -f "$annotation_tmp"
+if [[ -s "$peak_file" ]]; then
+    command -v annotatePeaks.pl >/dev/null 2>&1 || {
+        echo "ERROR: HOMER annotatePeaks.pl is unavailable; ${1} MACS2 annotation was not completed." >&2
+        exit 127
+    }
+    if ! annotatePeaks.pl "${5}/${1}_peaks.xls" "${8}" > "$annotation_tmp"; then
+        echo "ERROR: HOMER peak annotation failed for ${1}." >&2
+        rm -f "$annotation_tmp"
+        exit 1
+    fi
+    if [[ ! -s "$annotation_tmp" ]] || ! head -n 1 "$annotation_tmp" | grep -q '^PeakID'; then
+        echo "ERROR: HOMER produced an empty or invalid MACS2 annotation for ${1}." >&2
+        rm -f "$annotation_tmp"
+        exit 1
+    fi
+    mv -f "$annotation_tmp" "$annotation"
 else
-    echo "WARNING: Skipping optional HOMER annotation for ${1}; annotatePeaks.pl is unavailable." >&2
+    printf 'Status\tNo MACS2 peaks passed the selected threshold\nSample\t%s\n' "${1}" > "$annotation"
 fi
 
 peak_count="$(wc -l < "$peak_file" | tr -d '[:space:]')"
