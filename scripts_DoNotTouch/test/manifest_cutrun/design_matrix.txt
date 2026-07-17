@@ -1,0 +1,7 @@
+sample	include	cell_type	mark	target_class	seacr_stringency	condition	replicate	control_sample	filename
+Neuron_H3K27ac_AA1	TRUE	Neuron	H3K27ac	histone_narrow	auto	AA	1	Neuron_IgG_AA	treated1_R1_001.fastq.gz,treated1_R2_001.fastq.gz
+Neuron_H3K27ac_AA2	TRUE	Neuron	H3K27ac	histone_narrow	auto	AA	2	Neuron_IgG_AA	treated2_R1_001.fastq.gz,treated2_R2_001.fastq.gz
+Neuron_H3K27ac_Veh1	TRUE	Neuron	H3K27ac	histone_narrow	auto	Veh	1	Neuron_IgG_Veh	control1_R1_001.fastq.gz,control1_R2_001.fastq.gz
+Neuron_H3K27ac_Veh2	TRUE	Neuron	H3K27ac	histone_narrow	auto	Veh	2	Neuron_IgG_Veh	control2_R1_001.fastq.gz,control2_R2_001.fastq.gz
+Neuron_IgG_AA	TRUE	Neuron	IgG	control	auto	AA	1		treated3_R1_001.fastq.gz,treated3_R2_001.fastq.gz
+Neuron_IgG_Veh	TRUE	Neuron	IgG	control	auto	Veh	1		control3_R1_001.fastq.gz,control3_R2_001.fastq.gz
