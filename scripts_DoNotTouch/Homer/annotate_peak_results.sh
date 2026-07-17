@@ -43,11 +43,17 @@ fi
 annotation_root="$data_dir/peak_annotation"
 summary="$annotation_root/peak_annotation_summary.tsv"
 complete_marker="$annotation_root/_COMPLETE"
+running_marker="$annotation_root/_RUN_STARTED"
 tmp_root="$annotation_root/.tmp_${SLURM_JOB_ID:-$$}"
 mkdir -p "$annotation_root"
 rm -rf "$tmp_root"
 mkdir -p "$tmp_root"
 rm -f "$complete_marker"
+{
+  printf 'status\trunning\n'
+  printf 'job_id\t%s\n' "${SLURM_JOB_ID:-local}"
+  printf 'started_at\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+} > "$running_marker"
 cleanup() { rm -rf "$tmp_root"; }
 trap cleanup EXIT
 
@@ -187,6 +193,7 @@ mv -f "$summary_tmp" "$summary"
   printf 'gtf\t%s\n' "$gtf"
   printf 'completed_at\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
 } > "$complete_marker"
+rm -f "$running_marker"
 
 echo "Annotated $annotated_count peak files containing $total_peaks total intervals."
 echo "Summary: $summary"

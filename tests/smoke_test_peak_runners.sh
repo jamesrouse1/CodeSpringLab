@@ -266,6 +266,7 @@ printf 'chr1\tfake\texon\t1\t100\t.\t+\t.\tgene_id "g1";\n' > "$annotation_root/
 bash "$repo_root/scripts_DoNotTouch/Homer/annotate_peak_results.sh" \
   "$annotation_root" mm39 "$annotation_root/reference.gtf"
 assert_file "$annotation_root/peak_annotation/_COMPLETE"
+assert_absent "$annotation_root/peak_annotation/_RUN_STARTED"
 assert_file "$annotation_root/peak_annotation/peak_annotation_summary.tsv"
 assert_file "$annotation_root/macs2/S1/S1_peaks_annotated.txt"
 assert_file "$annotation_root/diffbind/B_vs_A/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt"
@@ -273,5 +274,20 @@ assert_file "$annotation_root/diffbind/legacy/DifferentialPeaks_B_vs_A_ref_annot
 assert_file "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh/all_differential_peaks_annotated_with_stats.txt"
 assert_file "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh/significant_differential_peaks_annotated_with_stats.txt"
 grep -q $'^annotated_files\t5$' "$annotation_root/peak_annotation/_COMPLETE"
+
+annotation_fail_root="$work/peak_annotation_failure"
+mkdir -p "$annotation_fail_root/macs2/S1"
+printf 'chr1\t10\t30\tmacs_peak\t100\t.\t12\t8\t6\t5\n' > \
+  "$annotation_fail_root/macs2/S1/S1_peaks.narrowPeak"
+printf 'chr1\tfake\texon\t1\t100\t.\t+\t.\tgene_id "g1";\n' > "$annotation_fail_root/reference.gtf"
+export FAKE_HOMER_MODE=fail
+if bash "$repo_root/scripts_DoNotTouch/Homer/annotate_peak_results.sh" \
+  "$annotation_fail_root" mm39 "$annotation_fail_root/reference.gtf" > "$work/peak_annotation_failure.out" 2>&1; then
+  echo "ASSERTION FAILED: failed peak annotation returned success" >&2
+  exit 1
+fi
+assert_file "$annotation_fail_root/peak_annotation/_RUN_STARTED"
+assert_absent "$annotation_fail_root/peak_annotation/_COMPLETE"
+unset FAKE_HOMER_MODE
 
 echo "Peak-runner fake-data smoke tests passed."
