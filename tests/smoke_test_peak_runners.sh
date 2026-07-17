@@ -7,6 +7,7 @@ cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
 
 real_rscript="$(command -v Rscript)"
+export CSL_REAL_RSCRIPT="$real_rscript"
 "$real_rscript" -e 'invisible(parse(file=commandArgs(TRUE)[1])); invisible(parse(file=commandArgs(TRUE)[2]))' \
   "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R" \
   "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind_chip.R"
@@ -82,7 +83,12 @@ FAKE_HEATMAP
 cat > "$fake_bin/annotatePeaks.pl" <<'FAKE_HOMER'
 #!/usr/bin/env bash
 if [[ "${FAKE_HOMER_MODE:-success}" == "fail" ]]; then echo "forced annotation failure" >&2; exit 7; fi
-printf 'PeakID\tAnnotation\npeak1\tPromoter\n'
+printf 'PeakID\tAnnotation\n'
+if [[ -f "${1:-}" ]]; then
+  awk 'BEGIN {OFS="\t"} NF >= 4 {print $4, "Promoter"}' "$1"
+else
+  printf 'peak1\tPromoter\n'
+fi
 FAKE_HOMER
 cat > "$fake_bin/getDifferentialPeaksReplicates.pl" <<'FAKE_HOMER_DIFF'
 #!/usr/bin/env bash
@@ -93,6 +99,9 @@ cat > "$fake_bin/Rscript" <<'FAKE_RSCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 script="$1"
+if [[ "$(basename "$script")" == "expand_peakid_stats.R" ]]; then
+  exec "$CSL_REAL_RSCRIPT" "$@"
+fi
 if [[ "$(basename "$script")" == "DiffBind_chip.R" ]]; then
   outdir="$2"; reference="$4"; comparison="$5"
 else
@@ -100,11 +109,11 @@ else
 fi
 mkdir -p "$outdir"
 prefix="DifferentialPeaks_${comparison}_vs_${reference}_ref"
-printf 'Fold\tFDR\n1\t0.01\n' > "$outdir/${prefix}.txt"
+printf 'Fold\tp.value\tFDR\n1\t0.002\t0.01\n' > "$outdir/${prefix}.txt"
 if [[ "${FAKE_DIFFBIND_MODE:-success}" == "zero" ]]; then
   : > "$outdir/${prefix}.with_stats.bed"
 else
-  printf 'chr1\t10\t30\tpeak1\t1\n' > "$outdir/${prefix}.with_stats.bed"
+  printf 'chr1\t10\t30\tpeak1|Fold=1|p.value=0.002|FDR=0.01\t1\n' > "$outdir/${prefix}.with_stats.bed"
 fi
 if [[ "$(basename "$script")" == "DiffBind_chip.R" ]]; then
   printf 'status\tcomplete\n' > "$outdir/_DIFFBIND_COMPLETE"
@@ -185,6 +194,7 @@ bash "$repo_root/scripts_DoNotTouch/DiffBind/diffbind.sh" \
 assert_file "$diff_root/success/_COMPLETE"
 assert_absent "$diff_root/success/_RUN_STARTED"
 grep -q $'^status\tcomplete$' "$diff_root/success/_COMPLETE"
+head -n 1 "$diff_root/success/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt" | grep -q $'p.value\tFDR'
 
 export FAKE_HOMER_MODE=fail
 if bash "$repo_root/scripts_DoNotTouch/DiffBind/diffbind.sh" \
@@ -216,6 +226,7 @@ assert_file "$chip_diff_root/success/_COMPLETE"
 assert_absent "$chip_diff_root/success/_RUN_STARTED"
 assert_absent "$chip_diff_root/success/_DIFFBIND_COMPLETE"
 grep -q $'^status\tcomplete$' "$chip_diff_root/success/_COMPLETE"
+head -n 1 "$chip_diff_root/success/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt" | grep -q $'p.value\tFDR'
 
 export FAKE_HOMER_MODE=fail
 if bash "$repo_root/scripts_DoNotTouch/DiffBind/diffbind_chip.sh" \
@@ -254,7 +265,7 @@ mkdir -p \
   "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh"
 printf 'chr1\t10\t30\tmacs_peak\t100\t.\t12\t8\t6\t5\n' > \
   "$annotation_root/macs2/S1/S1_peaks.narrowPeak"
-printf 'chr1\t20\t50\tdiff_peak|Fold=2|FDR=0.01\t2\n' > \
+printf 'chr1\t20\t50\tdiff_peak|Fold=2|p.value=0.001|FDR=0.01\t2\n' > \
   "$annotation_root/diffbind/B_vs_A/DifferentialPeaks_B_vs_A_ref.with_stats.bed"
 printf 'seqnames\tstart\tend\twidth\tstrand\tConc\tConc_A\tConc_B\tFold\tp.value\tFDR\nchr1\t101\t140\t40\t+\t5\t4\t6\t2\t0.001\t0.01\n' > \
   "$annotation_root/diffbind/legacy/DifferentialPeaks_B_vs_A_ref.txt"
@@ -273,6 +284,8 @@ assert_file "$annotation_root/diffbind/B_vs_A/DifferentialPeaks_B_vs_A_ref_annot
 assert_file "$annotation_root/diffbind/legacy/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt"
 assert_file "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh/all_differential_peaks_annotated_with_stats.txt"
 assert_file "$annotation_root/cutrun_diffbind/Creb/APC_AA_vs_Veh/significant_differential_peaks_annotated_with_stats.txt"
+head -n 1 "$annotation_root/diffbind/B_vs_A/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt" | grep -q $'p.value\tFDR'
+head -n 1 "$annotation_root/diffbind/legacy/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt" | grep -q $'p.value\tFDR'
 grep -q $'^annotated_files\t5$' "$annotation_root/peak_annotation/_COMPLETE"
 
 annotation_fail_root="$work/peak_annotation_failure"

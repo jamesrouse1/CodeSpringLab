@@ -39,6 +39,12 @@ if ! command -v annotatePeaks.pl >/dev/null 2>&1; then
   echo "ERROR: annotatePeaks.pl was not found. Set CSL_HOMER_BIN or install HOMER in the shared tools location." >&2
   exit 127
 fi
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+stats_expander="$script_dir/expand_peakid_stats.R"
+if [[ ! -s "$stats_expander" ]] || ! command -v Rscript >/dev/null 2>&1; then
+  echo "ERROR: the peak-statistics expander or Rscript is unavailable: $stats_expander" >&2
+  exit 127
+fi
 
 annotation_root="$data_dir/peak_annotation"
 summary="$annotation_root/peak_annotation_summary.tsv"
@@ -86,6 +92,7 @@ run_annotation() {
   fi
   mkdir -p "$(dirname "$destination")"
   mv -f "$output_tmp" "$destination"
+  Rscript "$stats_expander" "$destination"
   printf '%s\t%s\t%s\t%s\t%s\tcomplete\n' \
     "$result_type" "$label" "$peak_count" "$source" "$destination" >> "$summary_tmp"
   annotated_count=$((annotated_count + 1))

@@ -61,6 +61,8 @@ export PATH="$PATH:/grid/bsr/data/data/utama/tools/homer/bin"
 
 annotatePeaks.pl "$bed_file" "$homer_genome" \
   > "${outpath}/${prefix}_annotated_with_stats.txt"
+Rscript "$(cd -- "$(dirname -- "$0")/../Homer" && pwd)/expand_peakid_stats.R" \
+  "${outpath}/${prefix}_annotated_with_stats.txt"
 
 if [[ ! -s "${outpath}/${prefix}_annotated_with_stats.txt" ]]; then
   echo "ERROR: Homer annotation output is empty for ${prefix}" >&2

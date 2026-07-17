@@ -62,6 +62,7 @@ module load Anaconda3/2021.05
 module load R/4.1.2-foss-2021a
 export PATH="$PATH:/grid/bsr/data/data/utama/tools/homer/bin"
 annotatePeaks.pl "$bed_file" "$homer_genome" > "$annotation"
+Rscript "$(cd -- "$(dirname -- "$0")/../Homer" && pwd)/expand_peakid_stats.R" "$annotation"
 [[ -s "$annotation" ]] || { echo "ERROR: ChIP differential-peak annotation is empty." >&2; exit 1; }
 rm -f "${outdir}/_DIFFBIND_COMPLETE"
 rm -f "$run_started"
