@@ -62,17 +62,21 @@ bedtools bamtobed -bedpe -i "$name_sorted_bam" \
 mv "$tmp_fragments" "${out_prefix}_fragments.bed"
 
 bedtools genomecov -bg -i "${out_prefix}_fragments.bed" -g "$chrom_sizes" > "${out_prefix}_fragments.raw.bedgraph"
-normalized_bedgraph="${out_prefix}_fragments.raw.bedgraph"
-scale_factor="1"
+
+# Keep a CPM track for each sensitivity run as well, irrespective of the
+# optional display normalization selected by the user.
+fragment_count="$(wc -l < "${out_prefix}_fragments.bed")"
+cpm_scale_factor="$(awk -v c="$fragment_count" 'BEGIN{if(c>0) printf "%.10f",1000000/c; else print "0"}')"
+awk -v sf="$cpm_scale_factor" 'BEGIN{OFS="\t"} {$4=$4*sf; print}' "${out_prefix}_fragments.raw.bedgraph" > "${out_prefix}_fragments.CPM.bedgraph"
+normalized_bedgraph="${out_prefix}_fragments.CPM.bedgraph"
+scale_factor="$cpm_scale_factor"
 if [[ "$normalization_mode" == "spikein" ]]; then
   scale_factor="$spikein_scale_factor"
   awk -v sf="$scale_factor" 'BEGIN{OFS="\t"} {$4=$4*sf; print}' "${out_prefix}_fragments.raw.bedgraph" > "${out_prefix}_fragments.spikein.bedgraph"
   normalized_bedgraph="${out_prefix}_fragments.spikein.bedgraph"
-elif [[ "$normalization_mode" == "cpm" ]]; then
-  fragment_count="$(wc -l < "${out_prefix}_fragments.bed")"
-  scale_factor="$(awk -v c="$fragment_count" 'BEGIN{if(c>0) printf "%.10f",1000000/c; else print "0"}')"
-  awk -v sf="$scale_factor" 'BEGIN{OFS="\t"} {$4=$4*sf; print}' "${out_prefix}_fragments.raw.bedgraph" > "${out_prefix}_fragments.CPM.bedgraph"
-  normalized_bedgraph="${out_prefix}_fragments.CPM.bedgraph"
+elif [[ "$normalization_mode" == "none" ]]; then
+  normalized_bedgraph="${out_prefix}_fragments.raw.bedgraph"
+  scale_factor="1"
 fi
 
 seacr_target_bedgraph="$normalized_bedgraph"
@@ -94,6 +98,8 @@ source "$seacr_runner" "$seacr_target_bedgraph" "$control_bedgraph" "$seacr_norm
   echo -e "normalization_mode\t${normalization_mode}"
   echo -e "scale_factor\t${scale_factor}"
   echo -e "normalized_bedgraph\t${normalized_bedgraph}"
+  echo -e "cpm_bedgraph\t${out_prefix}_fragments.CPM.bedgraph"
+  echo -e "cpm_scale_factor\t${cpm_scale_factor}"
   echo -e "seacr_target_bedgraph\t${seacr_target_bedgraph}"
   echo -e "bigwig\t${bigwig}"
 } >> "${out_prefix}_seacr_summary.txt"

@@ -118,9 +118,15 @@ mv "$tmp_fragments" "${out_prefix}_fragments.bed"
 
 bedtools genomecov -bg -i "${out_prefix}_fragments.bed" -g "$chromsize" > "${out_prefix}_fragments.raw.bedgraph"
 
+# Always write CPM from this exact fragment coverage, including for spike-in
+# runs, so SEACR and visualization can use one common pre-normalized track.
+fragment_count_for_scale="$(wc -l < "${out_prefix}_fragments.bed")"
+cpm_scale_factor="$(awk -v c="$fragment_count_for_scale" 'BEGIN{if (c>0) printf "%.10f", 1000000/c; else print "0"}')"
+awk -v sf="$cpm_scale_factor" 'BEGIN{OFS="\t"} {$4=$4*sf; print}' "${out_prefix}_fragments.raw.bedgraph" > "${out_prefix}_fragments.CPM.bedgraph"
+
 spikein_mapped_reads="0"
 spikein_scale_factor="NA"
-normalized_bedgraph="${out_prefix}_fragments.raw.bedgraph"
+normalized_bedgraph="${out_prefix}_fragments.CPM.bedgraph"
 if [[ "$normalization_mode" == "spikein" ]]; then
   bowtie2 --very-sensitive --dovetail --threads 8 \
     --no-unal --no-mixed --no-discordant --end-to-end -X "$max_fragment" --phred33 \
@@ -129,21 +135,27 @@ if [[ "$normalization_mode" == "spikein" ]]; then
     | samtools view -h -bS - \
     | samtools sort -T "${tmp_dir}/spikein_coordinate" -o "${out_prefix}_${spikein_name}.bam" -
   samtools index -b "${out_prefix}_${spikein_name}.bam"
-  spikein_mapped_reads="$(samtools view -c -F 4 "${out_prefix}_${spikein_name}.bam")"
+  # Use the same MAPQ threshold as the primary-genome signal when deriving
+  # the spike-in scale factor; low-MAPQ E. coli alignments are not reliable
+  # quantitative spike-in observations.
+  spikein_mapped_reads="$(samtools view -c -F 4 -q "$mapq" "${out_prefix}_${spikein_name}.bam")"
   if [[ "$spikein_mapped_reads" -lt "$spikein_min_reads" ]]; then
     echo "WARNING: spike-in mapped reads (${spikein_mapped_reads}) are below the requested minimum (${spikein_min_reads}). Spike-in-normalized bedGraph will still be written, but interpretation should be cautious." >&2
   fi
   spikein_scale_factor="$(awk -v c="$spikein_mapped_reads" 'BEGIN{if (c>0) printf "%.10f", 10000/c; else print "0"}')"
   awk -v sf="$spikein_scale_factor" 'BEGIN{OFS="\t"} {$4=$4*sf; print}' "${out_prefix}_fragments.raw.bedgraph" > "${out_prefix}_fragments.spikein.bedgraph"
   normalized_bedgraph="${out_prefix}_fragments.spikein.bedgraph"
-elif [[ "$normalization_mode" == "cpm" ]]; then
-  fragment_count_for_scale="$(wc -l < "${out_prefix}_fragments.bed")"
-  cpm_scale_factor="$(awk -v c="$fragment_count_for_scale" 'BEGIN{if (c>0) printf "%.10f", 1000000/c; else print "0"}')"
-  awk -v sf="$cpm_scale_factor" 'BEGIN{OFS="\t"} {$4=$4*sf; print}' "${out_prefix}_fragments.raw.bedgraph" > "${out_prefix}_fragments.CPM.bedgraph"
-  normalized_bedgraph="${out_prefix}_fragments.CPM.bedgraph"
+elif [[ "$normalization_mode" == "none" ]]; then
+  normalized_bedgraph="${out_prefix}_fragments.raw.bedgraph"
 fi
 
 module load deepTools/3.5.2-foss-2022a
+ bamCoverage -b "$bam_for_signal" \
+  --normalizeUsing CPM \
+  --binSize 10 \
+  --ignoreForNormalization chrM MT \
+  --outFileFormat bigwig \
+  --outFileName "${out_prefix}_fragments.CPM.bw"
 if [[ "$normalization_mode" == "none" ]]; then
   bamCoverage -b "$bam_for_signal" \
     --normalizeUsing None \
@@ -159,13 +171,6 @@ elif [[ "$normalization_mode" == "spikein" ]]; then
     --ignoreForNormalization chrM MT \
     --outFileFormat bigwig \
     --outFileName "${out_prefix}_fragments.spikein.bw"
-else
-  bamCoverage -b "$bam_for_signal" \
-    --normalizeUsing CPM \
-    --binSize 10 \
-    --ignoreForNormalization chrM MT \
-    --outFileFormat bigwig \
-    --outFileName "${out_prefix}_fragments.CPM.bw"
 fi
 
 mapped_reads="$(samtools view -c -F 4 "${out_prefix}Aligned.sortedByCoord.out.bam")"
@@ -187,8 +192,12 @@ awk 'BEGIN{OFS="\t"; print "metric","value"} {n++; s+=$1; if (n==1 || $1<min) mi
   echo -e "dedup_mode\t${dedup_mode}"
   echo -e "normalization_mode\t${normalization_mode}"
   echo -e "normalized_bedgraph\t${normalized_bedgraph}"
+  echo -e "raw_bedgraph\t${out_prefix}_fragments.raw.bedgraph"
+  echo -e "cpm_bedgraph\t${out_prefix}_fragments.CPM.bedgraph"
+  echo -e "cpm_scale_factor\t${cpm_scale_factor}"
   echo -e "spikein_name\t${spikein_name}"
   echo -e "spikein_index\t${spikein_index}"
+  echo -e "spikein_mapq\t${mapq}"
   echo -e "spikein_mapped_reads\t${spikein_mapped_reads}"
   echo -e "spikein_scale_factor\t${spikein_scale_factor}"
   echo -e "duplicate_fraction\t${duplicate_fraction}"
