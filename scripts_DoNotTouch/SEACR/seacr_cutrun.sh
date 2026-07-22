@@ -42,6 +42,22 @@ ln -s "$target_bedgraph" "$seacr_tmp/target.bedgraph"
 if [[ "$control_bedgraph" != "none" ]]; then
   ln -s "$control_bedgraph" "$seacr_tmp/control.bedgraph"
 fi
+## SLURM jobs use a minimal environment, so the module function may not be
+## initialized even though it is available in an interactive login shell.
+if ! type module >/dev/null 2>&1; then
+  for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /cm/local/apps/environment-modules/current/init/bash; do
+    if [[ -s "$module_init" ]]; then
+      # shellcheck disable=SC1090
+      source "$module_init"
+      break
+    fi
+  done
+fi
+if ! type module >/dev/null 2>&1; then
+  echo "ERROR: the cluster module command is unavailable in this SLURM job." >&2
+  exit 127
+fi
+
 module load EBModules
 module load BEDTools/2.30.0-GCC-10.3.0
 module load R/4.1.2-foss-2021a
