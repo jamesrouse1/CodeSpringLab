@@ -78,7 +78,18 @@ echo -e "stringency\t${stringency}" >> "${out_prefix}_seacr_summary.txt"
 
 peak_bed="${out_prefix}.${stringency}.bed"
 echo -e "peak_bed\t${peak_bed}" >> "${out_prefix}_seacr_summary.txt"
-echo -e "peak_count\t$(if [[ -s "$peak_bed" ]]; then wc -l < "$peak_bed"; else echo 0; fi)" >> "${out_prefix}_seacr_summary.txt"
+peak_count="$(if [[ -s "$peak_bed" ]]; then wc -l < "$peak_bed"; else echo 0; fi)"
+echo -e "peak_count\t${peak_count}" >> "${out_prefix}_seacr_summary.txt"
+no_peaks_marker="${out_prefix}_no_called_peaks.txt"
+if [[ "$peak_count" -eq 0 ]]; then
+  cat > "$no_peaks_marker" <<EOF
+SEACR completed successfully but called zero ${stringency} peaks.
+Peak BED: ${peak_bed}
+Normalization: ${norm}
+EOF
+else
+  rm -f "$no_peaks_marker"
+fi
 if [[ -s "$peak_bed" && "$target_fragments" != "none" && -s "$target_fragments" ]]; then
   total_fragments="$(wc -l < "$target_fragments")"
   fragments_in_peaks="$(bedtools intersect -nonamecheck -u -a "$target_fragments" -b "$peak_bed" | wc -l)"
