@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# qsub_seacr_cutrun.sh deliberately uses --export=NONE.  Some Slurm nodes then
+# provide a malformed PATH, so restore the standard system command locations
+# before using dirname/basename or sourcing the module initialization.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+
 target_bedgraph="$1"
 control_bedgraph="$2"
 norm="${3:-norm}"

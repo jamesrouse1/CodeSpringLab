@@ -5,6 +5,9 @@
 #SBATCH --export=NONE
 #SBATCH --time=12:00:00
 
+# --export=NONE can leave PATH empty or malformed on some compute nodes.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+
 seacr_runner="${8:-}"
 if [[ -z "$seacr_runner" || ! -s "$seacr_runner" ]]; then
   seacr_runner="${SLURM_SUBMIT_DIR:-$PWD}/../scripts_DoNotTouch/SEACR/seacr_cutrun.sh"
