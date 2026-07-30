@@ -182,12 +182,16 @@ make_differential_summary <- function() {
       `Significant peaks (FDR <= 0.05)` = if (nzchar(first_value(summary, "significant_peaks"))) first_value(summary, "significant_peaks") else tabular_rows(sig_table),
       `Higher in comparison` = first_value(summary, "increased_in_comparison"), `Higher in reference` = first_value(summary, "increased_in_reference"),
       `Annotated all-peaks file` = all_table, `Annotated significant-peaks file` = sig_table,
+      `All differential peaks BED` = file.path(out_dir, "all_differential_peaks.bed"),
+      `Significant differential peaks BED` = file.path(out_dir, "significant_differential_peaks.bed"),
+      `Master consensus peaks BED` = file.path(out_dir, "master_consensus_peaks.bed"),
       `Annotation status` = first_value(summary, "annotation_status"), stringsAsFactors = FALSE, check.names = FALSE
     )
     if (NROW(sheet)) for (i in seq_len(NROW(sheet))) {
       sample <- as.character(sheet$SampleID[[i]])
       label <- paste(as.character(sheet$Condition[[i]]), paste0("rep", as.character(sheet$Replicate[[i]])), sample, sep = " ")
       peak_file <- as.character(sheet$Peaks[[i]])
+      bam_dir <- dirname(as.character(sheet$bamReads[[i]]))
       row[[paste0(label, " | caller peaks")]] <- line_count(peak_file)
       qc_hit <- if ("ID" %in% names(qc)) qc[as.character(qc$ID) == sample, , drop = FALSE] else data.frame()
       norm_hit <- if ("SampleID" %in% names(norm)) norm[as.character(norm$SampleID) == sample, , drop = FALSE] else data.frame()
@@ -195,6 +199,8 @@ make_differential_summary <- function() {
       row[[paste0(label, " | FRiP")]] <- if (NROW(qc_hit) && "FRiP" %in% names(qc_hit)) qc_hit$FRiP[[1]] else NA
       row[[paste0(label, " | library size")]] <- if (NROW(norm_hit) && "library_size" %in% names(norm_hit)) norm_hit$library_size[[1]] else NA
       row[[paste0(label, " | normalization factor")]] <- if (NROW(norm_hit) && "normalization_factor" %in% names(norm_hit)) norm_hit$normalization_factor[[1]] else NA
+      row[[paste0(label, " | CPM BigWig")]] <- file.path(bam_dir, paste0(sample, "_fragments.CPM.bw"))
+      row[[paste0(label, " | spike-in BigWig")]] <- file.path(bam_dir, paste0(sample, "_fragments.spikein.bw"))
     }
     row
   })
