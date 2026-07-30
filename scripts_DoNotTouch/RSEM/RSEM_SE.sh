@@ -18,13 +18,10 @@ if ! type module >/dev/null 2>&1; then
   done
 fi
 type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavailable." >&2; exit 127; }
+module purge
 module load EBModules
 module load RSeQC/4.0.0-foss-2021b
-module load STAR/2.7.10a-GCC-10.3.0
-module load RSEM/1.3.3-foss-2019b
-module load SAMtools/1.16.1-GCC-11.3.0
 command -v infer_experiment.py >/dev/null 2>&1 || { echo "ERROR: infer_experiment.py was not found after loading RSeQC." >&2; exit 127; }
-command -v rsem-calculate-expression >/dev/null 2>&1 || { echo "ERROR: rsem-calculate-expression was not found after loading RSEM." >&2; exit 127; }
 [[ -s "$genome_bam" ]] || { echo "ERROR: genome-coordinate BAM is missing or empty: $genome_bam" >&2; exit 2; }
 [[ -s "$transcript_bam" ]] || { echo "ERROR: transcriptome BAM is missing or empty: $transcript_bam" >&2; exit 2; }
 [[ -s "$strand_bed" ]] || { echo "ERROR: strand-detection BED is missing or empty: $strand_bed" >&2; exit 2; }
@@ -47,10 +44,18 @@ if ! awk -v fw="$fw" -v rv="$rv" 'BEGIN {exit !(fw ~ /^[0-9.]+$/ && rv ~ /^[0-9.
 fi
 strand="$(awk -v fw="$fw" -v rv="$rv" 'BEGIN {d=(fw-rv)*100/(fw+rv); if (d<0) a=-d; else a=d; if (a<50) print "none"; else if (d>0) print "forward"; else print "reverse"}')"
 
+# Keep the foss-2021b RSeQC/FlexiBLAS stack separate from the foss-2019b
+# RSEM stack. Mixing them makes infer_experiment.py look for libflexiblas.so.3
+# after the matching library path has been replaced by the older toolchain.
+module purge
+module load EBModules
+module load RSEM/1.3.3-foss-2019b
+hash -r
+command -v rsem-calculate-expression >/dev/null 2>&1 || { echo "ERROR: rsem-calculate-expression was not found after loading RSEM." >&2; exit 127; }
+
 ulimit -n 10000
 rsem-calculate-expression -p "${SLURM_CPUS_PER_TASK:-8}" --strandedness "$strand" \
   --bam "$transcript_bam" "$rsem_index" "$out_prefix"
 [[ -s "$genes_result" ]] || { echo "ERROR: RSEM did not create a non-empty genes result: $genes_result" >&2; exit 1; }
 [[ -s "$isoforms_result" ]] || { echo "ERROR: RSEM did not create a non-empty isoforms result: $isoforms_result" >&2; exit 1; }
 rm -f -- "${out_prefix}.transcript.bam"
-

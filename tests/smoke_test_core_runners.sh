@@ -8,7 +8,18 @@ trap cleanup EXIT
 
 fake_bin="$work/bin"
 mkdir -p "$fake_bin"
-module() { :; }
+module() {
+  if [[ "${1:-}" == "purge" ]]; then
+    unset FAKE_MODULE_RSEQC FAKE_MODULE_RSEM
+    return 0
+  fi
+  if [[ "${1:-}" == "load" ]]; then
+    case "${2:-}" in
+      RSeQC/*) export FAKE_MODULE_RSEQC=1 ;;
+      RSEM/*) export FAKE_MODULE_RSEM=1 ;;
+    esac
+  fi
+}
 export -f module
 
 cat > "$fake_bin/STAR" <<'FAKE_STAR'
@@ -46,6 +57,8 @@ FAKE_SAMTOOLS
 cat > "$fake_bin/infer_experiment.py" <<'FAKE_INFER'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ "${FAKE_MODULE_RSEQC:-0}" == "1" ]] || { echo "fake infer_experiment.py requires RSeQC" >&2; exit 87; }
+[[ "${FAKE_MODULE_RSEM:-0}" != "1" ]] || { echo "RSeQC and RSEM module stacks were mixed" >&2; exit 88; }
 if [[ "${FAKE_INFER_MODE:-success}" == "malformed" ]]; then
   printf 'unable to infer\n'
   exit 0
@@ -109,6 +122,8 @@ FAKE_KALLISTO
 cat > "$fake_bin/rsem-calculate-expression" <<'FAKE_RSEM'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ "${FAKE_MODULE_RSEM:-0}" == "1" ]] || { echo "fake RSEM requires the RSEM module" >&2; exit 87; }
+[[ "${FAKE_MODULE_RSEQC:-0}" != "1" ]] || { echo "RSEM and RSeQC module stacks were mixed" >&2; exit 88; }
 printf '%s\n' "$*" > "${FAKE_RSEM_ARGS:?}"
 argc=$#
 ((argc >= 3)) || exit 2
