@@ -10,7 +10,7 @@ suppressPackageStartupMessages({
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 5L) {
-  stop("Usage: cutrun_diffbind.R <resolved_samples.tsv> <out_dir> <reference_condition> <min_replicates> <genome> [blacklist.bed|none] [comparison] [cell_type] [mark]")
+  stop("Usage: cutrun_diffbind.R <resolved_samples.tsv> <out_dir> <reference_condition> <min_replicates> <genome> [blacklist.bed|none] [comparison] [cell_type] [mark] [minimum_peaks_per_sample] [peak_source]")
 }
 
 sample_file <- normalizePath(args[[1]], mustWork = TRUE)
@@ -22,8 +22,12 @@ blacklist_path <- if (length(args) >= 6L) args[[6]] else "none"
 selected_comparison <- if (length(args) >= 7L) trimws(args[[7]]) else ""
 selected_cell_type <- if (length(args) >= 8L) trimws(args[[8]]) else ""
 selected_mark <- if (length(args) >= 9L) trimws(args[[9]]) else ""
+minimum_peaks_per_sample <- if (length(args) >= 10L) suppressWarnings(as.integer(args[[10]])) else 1L
+selected_peak_source <- if (length(args) >= 11L) trimws(args[[11]]) else "legacy"
 single_comparison <- nzchar(selected_comparison) && nzchar(selected_cell_type) && nzchar(selected_mark)
 if (!is.finite(min_replicates) || min_replicates < 1L) min_replicates <- 1L
+if (!is.finite(minimum_peaks_per_sample) || minimum_peaks_per_sample < 1L) minimum_peaks_per_sample <- 1L
+if (!nzchar(selected_peak_source)) selected_peak_source <- "unspecified"
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 slug <- function(x) {
@@ -36,9 +40,9 @@ write_tsv <- function(x, path, row.names = FALSE) {
   write.table(x, path, sep = "\t", quote = FALSE, row.names = row.names, col.names = TRUE)
 }
 
-read_seacr <- function(path) {
+read_peak_bed <- function(path) {
   x <- read.delim(path, header = FALSE, sep = "\t", comment.char = "", quote = "", stringsAsFactors = FALSE)
-  if (ncol(x) < 3L) stop("SEACR file has fewer than three columns: ", path)
+  if (ncol(x) < 3L) stop("Peak file has fewer than three columns: ", path)
   start <- suppressWarnings(as.integer(x[[2]]))
   end <- suppressWarnings(as.integer(x[[3]]))
   keep <- !is.na(start) & !is.na(end) & end > start & nzchar(as.character(x[[1]]))
@@ -104,6 +108,8 @@ record_run <- function(cell_type, mark, comparison, status, samples_n, peaks_n =
     status = status,
     samples = samples_n,
     consensus_peaks = peaks_n,
+    peak_source = selected_peak_source,
+    minimum_peaks_per_sample = minimum_peaks_per_sample,
     normalization = normalization,
     directory = directory,
     message = message,
@@ -143,7 +149,25 @@ for (group_name in unique(samples$analysis_group)) {
     unlink(file.path(out_dir, "ERROR.txt"), force = TRUE)
 
     result <- tryCatch({
-      peaksets <- setNames(lapply(analysis_samples$Peaks, read_seacr), analysis_samples$SampleID)
+      peaksets <- setNames(lapply(analysis_samples$Peaks, read_peak_bed), analysis_samples$SampleID)
+      peak_counts <- vapply(peaksets, length, integer(1))
+      below_threshold <- names(peak_counts)[peak_counts < minimum_peaks_per_sample]
+      if (length(below_threshold)) {
+        stop(
+          "Every sample needs at least ", minimum_peaks_per_sample, " called peaks. Below threshold: ",
+          paste(paste0(below_threshold, " (", peak_counts[below_threshold], ")"), collapse = ", ")
+        )
+      }
+      standardized_dir <- file.path(out_dir, "standardized_input_peaks")
+      dir.create(standardized_dir, recursive = TRUE, showWarnings = FALSE)
+      standardized_peaks <- setNames(file.path(standardized_dir, paste0(slug(names(peaksets)), ".bed")), names(peaksets))
+      for (sample_id in names(peaksets)) {
+        write_bed(
+          peaksets[[sample_id]],
+          standardized_peaks[[sample_id]],
+          data.frame(score = rep.int(1L, length(peaksets[[sample_id]])))
+        )
+      }
       consensus_by_condition <- list()
       for (condition in c(reference_condition, comparison)) {
         ids <- analysis_samples$SampleID[analysis_samples$Condition == condition]
@@ -161,7 +185,7 @@ for (group_name in unique(samples$analysis_group)) {
       master <- GenomicRanges::reduce(combine_granges(consensus_by_condition), ignore.strand = TRUE)
       blacklist_gr <- NULL
       if (!genome %in% c("human", "hg38", "grch38") && nzchar(blacklist_path) && blacklist_path != "none" && file.exists(blacklist_path)) {
-        blacklist_gr <- read_seacr(blacklist_path)
+        blacklist_gr <- read_peak_bed(blacklist_path)
         master <- subsetByOverlaps(master, blacklist_gr, ignore.strand = TRUE, invert = TRUE)
       }
       if (!length(master)) stop("No master consensus peaks remained after blacklist filtering")
@@ -174,7 +198,7 @@ for (group_name in unique(samples$analysis_group)) {
         Factor = analysis_samples$Mark,
         Tissue = analysis_samples$CellType,
         bamReads = analysis_samples$bamReads,
-        Peaks = analysis_samples$Peaks,
+        Peaks = unname(standardized_peaks[analysis_samples$SampleID]),
         PeakCaller = "raw",
         ScoreCol = 4L,
         stringsAsFactors = FALSE
@@ -255,7 +279,8 @@ for (group_name in unique(samples$analysis_group)) {
 
 summary <- if (length(run_rows)) do.call(rbind, run_rows) else data.frame(
   cell_type = character(), mark = character(), comparison = character(), reference = character(), status = character(),
-  samples = integer(), consensus_peaks = integer(), normalization = character(), directory = character(), message = character()
+  samples = integer(), consensus_peaks = integer(), peak_source = character(), minimum_peaks_per_sample = integer(),
+  normalization = character(), directory = character(), message = character()
 )
 write_tsv(summary, file.path(out_root, "cutrun_diffbind_summary.tsv"))
 

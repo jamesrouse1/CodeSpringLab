@@ -11,6 +11,8 @@ export CSL_REAL_RSCRIPT="$real_rscript"
 "$real_rscript" -e 'invisible(parse(file=commandArgs(TRUE)[1])); invisible(parse(file=commandArgs(TRUE)[2]))' \
   "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R" \
   "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind_chip.R"
+"$real_rscript" -e 'invisible(parse(file=commandArgs(TRUE)[1]))' \
+  "$repo_root/scripts_DoNotTouch/DiffBind/cutrun_diffbind.R"
 if grep -q 'example_dataset' "$repo_root/scripts_DoNotTouch/DiffBind/DiffBind.R"; then
   echo "ASSERTION FAILED: ATAC DiffBind must not fabricate samples based on an example path" >&2
   exit 1
@@ -104,6 +106,10 @@ script="$1"
 if [[ "$(basename "$script")" == "expand_peakid_stats.R" ]]; then
   exec "$CSL_REAL_RSCRIPT" "$@"
 fi
+if [[ "$(basename "$script")" == "cutrun_diffbind.R" ]]; then
+  printf '%s\n' "$@" > "${FAKE_CUTRUN_DIFFBIND_ARGS:?}"
+  exit 0
+fi
 if [[ "$(basename "$script")" == "DiffBind_chip.R" ]]; then
   outdir="$2"; reference="$4"; comparison="$5"
 else
@@ -123,6 +129,7 @@ fi
 FAKE_RSCRIPT
 chmod +x "$fake_bin"/*
 export PATH="$fake_bin:$PATH"
+export FAKE_CUTRUN_DIFFBIND_ARGS="$work/cutrun_diffbind_args.txt"
 module() { :; }
 export -f module
 
@@ -229,6 +236,21 @@ assert_file "$diff_root/zero/_COMPLETE"
 assert_file "$diff_root/zero/DifferentialPeaks_B_vs_A_ref_annotated_with_stats.txt"
 grep -q $'^status\tcomplete$' "$diff_root/zero/_COMPLETE"
 unset FAKE_DIFFBIND_MODE
+
+cutrun_diff_root="$work/cutrun_diffbind"
+mkdir -p "$cutrun_diff_root"
+printf 'SampleID\tCellType\tMark\tCondition\tReplicate\tbamReads\tPeaks\tSpikein\tnormalization_mode\n' > "$cutrun_diff_root/samples.tsv"
+printf 'fake R code\n' > "$cutrun_diff_root/cutrun_diffbind.R"
+bash "$repo_root/scripts_DoNotTouch/DiffBind/qsub_cutrun_diffbind.sh" \
+  "$cutrun_diff_root/cutrun_diffbind.R" "$cutrun_diff_root/samples.tsv" "$cutrun_diff_root/output" \
+  Veh 1 mouse none AA AKPS Creb 100 shared_test_overlap \
+  "$repo_root/scripts_DoNotTouch/DiffBind/cutrun_diffbind.sh"
+grep -Fxq '100' "$FAKE_CUTRUN_DIFFBIND_ARGS"
+grep -Fxq 'shared_test_overlap' "$FAKE_CUTRUN_DIFFBIND_ARGS"
+if grep -Fxq "$repo_root/scripts_DoNotTouch/DiffBind/cutrun_diffbind.sh" "$FAKE_CUTRUN_DIFFBIND_ARGS"; then
+  echo "ASSERTION FAILED: CUT&RUN DiffBind runner path leaked into R arguments" >&2
+  exit 1
+fi
 
 chip_diff_root="$work/chip_diffbind"
 mkdir -p "$chip_diff_root"
