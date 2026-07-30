@@ -1200,6 +1200,70 @@ deg_table_path <- function(treatment_value, control_value, label_mode = "gene_id
   file.path(deseq2_result_dir(label_mode), sprintf("DEG_%s_vs_%s(ref).txt", treatment_value, control_value))
 }
 
+infer_completed_compare_col <- function(treatment_value, control_value) {
+  candidates <- comparison_columns[vapply(comparison_columns, function(column) {
+    all(c(treatment_value, control_value) %in% as.character(design_df[[column]]))
+  }, logical(1))]
+  if (length(candidates) == 1L) candidates[[1]] else ""
+}
+
+completed_deseq_comparisons <- function() {
+  files <- if (dir.exists(deseq2_dir)) {
+    list.files(deseq2_dir, pattern = "^normalized_counts_.*\\(ref\\)\\.txt$", full.names = TRUE)
+  } else {
+    character(0)
+  }
+  rows <- lapply(files, function(path) {
+    hit <- regmatches(basename(path), regexec("^normalized_counts_(.*)_vs_(.*)\\(ref\\)\\.txt$", basename(path)))[[1]]
+    if (length(hit) != 3L) return(NULL)
+    treatment <- hit[[2]]
+    control <- hit[[3]]
+    deg_path <- deg_table_path(treatment, control, "gene_id")
+    if (!file.exists(deg_path) || file.info(deg_path)$size <= 0 || file.info(path)$size <= 0) return(NULL)
+    compare_col <- infer_completed_compare_col(treatment, control)
+    if (!nzchar(compare_col)) return(NULL)
+    data.frame(compare_col = compare_col, treatment = treatment, control = control, stringsAsFactors = FALSE)
+  })
+  rows <- Filter(NROW, rows)
+  if (!length(rows)) return(data.frame(compare_col = character(), treatment = character(), control = character()))
+  unique(do.call(rbind, rows))
+}
+
+completed_gsea_comparisons <- function() {
+  dirs <- if (dir.exists(gseapy_dir)) list.dirs(gseapy_dir, recursive = FALSE, full.names = TRUE) else character(0)
+  rows <- lapply(dirs, function(path) {
+    reports <- list.files(path, pattern = "^report\\.gseapy\\..*\\.csv$", recursive = TRUE, full.names = TRUE)
+    reports <- reports[file.exists(reports) & file.info(reports)$size > 0]
+    if (!length(reports)) return(NULL)
+    hit <- regmatches(basename(path), regexec("^(.*)_vs_(.*)$", basename(path)))[[1]]
+    if (length(hit) != 3L) return(NULL)
+    treatment <- hit[[2]]
+    control <- hit[[3]]
+    compare_col <- infer_completed_compare_col(treatment, control)
+    if (!nzchar(compare_col)) return(NULL)
+    data.frame(compare_col = compare_col, treatment = treatment, control = control, stringsAsFactors = FALSE)
+  })
+  rows <- Filter(NROW, rows)
+  if (!length(rows)) return(data.frame(compare_col = character(), treatment = character(), control = character()))
+  unique(do.call(rbind, rows))
+}
+
+completed_deseq_catalog <- completed_deseq_comparisons()
+completed_gsea_catalog <- completed_gsea_comparisons()
+completed_deseq_columns <- unique(completed_deseq_catalog$compare_col)
+completed_gsea_columns <- unique(completed_gsea_catalog$compare_col)
+
+completed_treatments <- function(catalog, compare_col) {
+  if (!NROW(catalog) || !nzchar(value_or(compare_col, ""))) return(character(0))
+  sort(unique(catalog$treatment[catalog$compare_col == compare_col]))
+}
+
+completed_controls <- function(catalog, compare_col, treatment) {
+  if (!NROW(catalog) || !nzchar(value_or(compare_col, "")) || !nzchar(value_or(treatment, ""))) return(character(0))
+  rows <- catalog$compare_col == compare_col & catalog$treatment == treatment
+  sort(unique(catalog$control[rows]))
+}
+
 deg_table_raw_label_mode <- function(treatment_value, control_value) {
   path <- deg_table_path(treatment_value, control_value, "gene_id")
   df <- read_deg_table(path)
@@ -1754,8 +1818,8 @@ counts_subtabs <- c(
           selectInput(
             "deseq_compare_col",
             "Comparison column",
-            choices = c("NA" = "NA", comparison_columns),
-            selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
+            choices = completed_deseq_columns,
+            selected = if ("treatment" %in% completed_deseq_columns) "treatment" else first_or_null(completed_deseq_columns), selectize = FALSE),
           uiOutput("deseq_treatment_ui"),
           uiOutput("deseq_control_ui"),
           uiOutput("deseq_label_mode_ui"),
@@ -1856,8 +1920,8 @@ app_tabs <- list(
         selectInput(
           "deg_compare_col",
           "Comparison column",
-          choices = c("NA" = "NA", comparison_columns),
-          selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
+          choices = completed_deseq_columns,
+          selected = if ("treatment" %in% completed_deseq_columns) "treatment" else first_or_null(completed_deseq_columns), selectize = FALSE),
         uiOutput("deg_treatment_ui"),
         uiOutput("deg_control_ui"),
         selectizeInput("deg_gene_query", "Select gene", choices = NULL, selected = NULL, multiple = FALSE, options = list(dropdownParent = "body")),
@@ -1909,8 +1973,8 @@ app_tabs <- list(
           selectInput(
             "plot_compare_col",
             "Comparison column",
-            choices = c("NA" = "NA", comparison_columns),
-            selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
+            choices = completed_deseq_columns,
+            selected = if ("treatment" %in% completed_deseq_columns) "treatment" else first_or_null(completed_deseq_columns), selectize = FALSE),
           uiOutput("plot_treatment_ui"),
           uiOutput("plot_control_ui"),
           uiOutput("plot_deseq_label_mode_ui")
@@ -2085,8 +2149,8 @@ app_tabs <- list(
             selectInput(
               "gsea_compare_col",
               "Comparison column",
-              choices = c("NA" = "NA", comparison_columns),
-              selected = if ("treatment" %in% comparison_columns) "treatment" else "NA", selectize = FALSE),
+              choices = completed_gsea_columns,
+              selected = if ("treatment" %in% completed_gsea_columns) "treatment" else first_or_null(completed_gsea_columns), selectize = FALSE),
             uiOutput("gsea_treatment_ui"),
             uiOutput("gsea_control_ui"),
             uiOutput("gsea_collection_ui"),
@@ -3410,8 +3474,7 @@ server <- function(input, output, session) {
       if (is.null(input$deseq_compare_col) || identical(input$deseq_compare_col, "NA") || !nzchar(input$deseq_compare_col)) {
         return(character(0))
       }
-      vals <- unique(as.character(design_df[[input$deseq_compare_col]]))
-      vals[!is.na(vals) & nzchar(vals)]
+      completed_treatments(completed_deseq_catalog, input$deseq_compare_col)
     })
 
     output$deseq_treatment_ui <- renderUI({
@@ -3420,8 +3483,8 @@ server <- function(input, output, session) {
     })
 
     output$deseq_control_ui <- renderUI({
-      vals <- get_deseq_values()
-      selectInput("deseq_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
+      vals <- completed_controls(completed_deseq_catalog, input$deseq_compare_col, input$deseq_treatment)
+      selectInput("deseq_control", "Control", choices = vals, selected = first_or_null(vals), selectize = FALSE)
     })
 
     output$deseq_label_mode_ui <- renderUI({
@@ -3576,8 +3639,7 @@ server <- function(input, output, session) {
       if (is.null(input$deg_compare_col) || identical(input$deg_compare_col, "NA") || !nzchar(input$deg_compare_col)) {
         return(character(0))
       }
-      vals <- unique(as.character(design_df[[input$deg_compare_col]]))
-      vals[!is.na(vals) & nzchar(vals)]
+      completed_treatments(completed_deseq_catalog, input$deg_compare_col)
     })
 
     output$deg_treatment_ui <- renderUI({
@@ -3586,8 +3648,8 @@ server <- function(input, output, session) {
     })
 
     output$deg_control_ui <- renderUI({
-      vals <- get_deg_values()
-      selectInput("deg_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
+      vals <- completed_controls(completed_deseq_catalog, input$deg_compare_col, input$deg_treatment)
+      selectInput("deg_control", "Control", choices = vals, selected = first_or_null(vals), selectize = FALSE)
     })
 
     output$deg_label_mode_ui <- renderUI({
@@ -3614,8 +3676,7 @@ server <- function(input, output, session) {
       if (is.null(input$plot_compare_col) || identical(input$plot_compare_col, "NA") || !nzchar(input$plot_compare_col)) {
         return(character(0))
       }
-      vals <- unique(as.character(design_df[[input$plot_compare_col]]))
-      vals[!is.na(vals) & nzchar(vals)]
+      completed_treatments(completed_deseq_catalog, input$plot_compare_col)
     })
 
     output$plot_treatment_ui <- renderUI({
@@ -3624,8 +3685,8 @@ server <- function(input, output, session) {
     })
 
     output$plot_control_ui <- renderUI({
-      vals <- get_plot_values()
-      selectInput("plot_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
+      vals <- completed_controls(completed_deseq_catalog, input$plot_compare_col, input$plot_treatment)
+      selectInput("plot_control", "Control", choices = vals, selected = first_or_null(vals), selectize = FALSE)
     })
 
     output$plot_deseq_label_mode_ui <- renderUI({
@@ -4305,8 +4366,7 @@ server <- function(input, output, session) {
       if (is.null(input$gsea_compare_col) || identical(input$gsea_compare_col, "NA") || !nzchar(input$gsea_compare_col)) {
         return(character(0))
       }
-      vals <- unique(as.character(design_df[[input$gsea_compare_col]]))
-      vals[!is.na(vals) & nzchar(vals)]
+      completed_treatments(completed_gsea_catalog, input$gsea_compare_col)
     })
 
     output$gsea_treatment_ui <- renderUI({
@@ -4315,8 +4375,8 @@ server <- function(input, output, session) {
     })
 
     output$gsea_control_ui <- renderUI({
-      vals <- get_gsea_values()
-      selectInput("gsea_control", "Control", choices = vals, selected = if (length(vals) > 0) vals[1] else vals, selectize = FALSE)
+      vals <- completed_controls(completed_gsea_catalog, input$gsea_compare_col, input$gsea_treatment)
+      selectInput("gsea_control", "Control", choices = vals, selected = first_or_null(vals), selectize = FALSE)
     })
 
     gsea_comp_dir <- reactive({
