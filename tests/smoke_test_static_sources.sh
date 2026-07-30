@@ -19,6 +19,9 @@ PY
 
 Rscript -e 'root <- commandArgs(TRUE)[1]; files <- list.files(file.path(root, "scripts_DoNotTouch"), pattern="[.][Rr]$", recursive=TRUE, full.names=TRUE); for (file in files) parse(file=file)' "$repo_root"
 
+grep -Fq 'pca_differential_peaks.png' "$repo_root/scripts_DoNotTouch/DiffBind/cutrun_diffbind.R"
+grep -Fq 'dba.plotPCA(db, contrast = 1L' "$repo_root/scripts_DoNotTouch/DiffBind/cutrun_diffbind.R"
+
 python3 - "$repo_root" <<'PY'
 import csv
 import pathlib

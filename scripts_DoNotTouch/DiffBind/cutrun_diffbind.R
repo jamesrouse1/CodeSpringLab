@@ -259,6 +259,8 @@ for (group_name in unique(samples$analysis_group)) {
 
       safe_png(file.path(out_dir, "correlation_heatmap.png"), plot(db))
       safe_png(file.path(out_dir, "pca_normalized_counts.png"), dba.plotPCA(db, attributes = DBA_CONDITION, label = DBA_ID))
+      differential_pca <- safe_png(file.path(out_dir, "pca_differential_peaks.png"), dba.plotPCA(db, contrast = 1L, label = DBA_ID))
+      if (inherits(differential_pca, "try-error")) stop("DiffBind could not create the differential-peak PCA: ", as.character(differential_pca))
       safe_png(file.path(out_dir, "volcano_differential_peaks.png"), dba.plotVolcano(db, contrast = 1L, method = DBA_DESEQ2))
       safe_png(file.path(out_dir, "ma_differential_peaks.png"), dba.plotMA(db, contrast = 1L, method = DBA_DESEQ2))
       safe_png(file.path(out_dir, "differential_peak_heatmap.png"), dba.plotHeatmap(db, contrast = 1L, method = DBA_DESEQ2, th = 1, correlations = FALSE))
