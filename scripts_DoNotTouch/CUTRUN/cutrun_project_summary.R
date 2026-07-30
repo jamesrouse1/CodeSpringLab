@@ -117,7 +117,7 @@ make_peak_calling_summary <- function() {
     sample <- basename(dirname(path)); method <- basename(dirname(dirname(path)))
     if (!grepl("^((spikein|cpm)_non|raw_norm|norm|non)_(stringent|relaxed)$", method)) method <- "legacy"
     data.frame(Sample = sample, `Peak caller / setting` = paste("SEACR", method), `Peak count` = kv_value(values, "peak_count", NA_character_),
-      FRiP = kv_value(values, "frip", NA_character_), Normalization = kv_value(values, "normalization"), Stringency = kv_value(values, "stringency"),
+      FRiP = kv_value(values, "frip", NA_character_), Stringency = kv_value(values, "stringency"),
       `Peak file` = kv_value(values, "peak_bed"), stringsAsFactors = FALSE, check.names = FALSE)
   })
   macs_root <- file.path(data_dir, "macs2")
@@ -125,7 +125,7 @@ make_peak_calling_summary <- function() {
   macs_rows <- lapply(macs_files, function(path) {
     values <- read_kv(path); sample <- basename(dirname(path))
     data.frame(Sample = sample, `Peak caller / setting` = paste("MACS2", kv_value(values, "peak_type")), `Peak count` = kv_value(values, "peak_count", NA_character_),
-      FRiP = NA_character_, Normalization = "BAMPE internal depth normalization", Stringency = kv_value(values, "qvalue"),
+      FRiP = NA_character_, Stringency = kv_value(values, "qvalue"),
       `Peak file` = kv_value(values, "peak_file"), stringsAsFactors = FALSE, check.names = FALSE)
   })
   overlap_root <- file.path(data_dir, "peak_overlap")
@@ -135,7 +135,7 @@ make_peak_calling_summary <- function() {
     sample <- kv_value(values, "sample", basename(dirname(path)))
     setting <- kv_value(values, "overlap_name", basename(dirname(dirname(path))))
     data.frame(Sample = sample, `Peak caller / setting` = paste("Shared overlap", setting), `Peak count` = kv_value(values, "overlap_peaks", NA_character_),
-      FRiP = NA_character_, Normalization = "", Stringency = kv_value(values, "minimum_reciprocal_overlap"),
+      FRiP = NA_character_, Stringency = kv_value(values, "minimum_reciprocal_overlap"),
       `Peak file` = kv_value(values, "overlap_bed", sub("_summary\\.txt$", ".bed", path)), stringsAsFactors = FALSE, check.names = FALSE)
   })
   long <- bind_rows_fill(c(seacr_rows, macs_rows, overlap_rows))
