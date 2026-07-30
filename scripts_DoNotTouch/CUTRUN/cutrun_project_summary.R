@@ -26,6 +26,13 @@ read_kv <- function(path) {
   values
 }
 
+# `[[` throws when a legacy summary file does not contain an optional field
+# (for example FRiP).  Treat missing fields as genuinely unavailable so that
+# one older result cannot stop a project-wide summary job.
+kv_value <- function(values, key, default = "") {
+  if (!is.null(values) && key %in% names(values)) values[[key]] else default
+}
+
 line_count <- function(path) {
   if (!file.exists(path)) return(NA_integer_)
   value <- tryCatch(system2("wc", c("-l", "--", path), stdout = TRUE, stderr = FALSE), error = function(e) character(0))
@@ -109,27 +116,27 @@ make_peak_calling_summary <- function() {
     if (!length(values)) return(data.frame())
     sample <- basename(dirname(path)); method <- basename(dirname(dirname(path)))
     if (!grepl("^((spikein|cpm)_non|raw_norm|norm|non)_(stringent|relaxed)$", method)) method <- "legacy"
-    data.frame(Sample = sample, `Peak caller / setting` = paste("SEACR", method), `Peak count` = values[["peak_count"]] %||% NA_character_,
-      FRiP = values[["frip"]] %||% NA_character_, Normalization = values[["normalization"]] %||% "", Stringency = values[["stringency"]] %||% "",
-      `Peak file` = values[["peak_bed"]] %||% "", stringsAsFactors = FALSE, check.names = FALSE)
+    data.frame(Sample = sample, `Peak caller / setting` = paste("SEACR", method), `Peak count` = kv_value(values, "peak_count", NA_character_),
+      FRiP = kv_value(values, "frip", NA_character_), Normalization = kv_value(values, "normalization"), Stringency = kv_value(values, "stringency"),
+      `Peak file` = kv_value(values, "peak_bed"), stringsAsFactors = FALSE, check.names = FALSE)
   })
   macs_root <- file.path(data_dir, "macs2")
   macs_files <- if (dir.exists(macs_root)) list.files(macs_root, pattern = "_macs2_summary\\.txt$", recursive = TRUE, full.names = TRUE) else character(0)
   macs_rows <- lapply(macs_files, function(path) {
     values <- read_kv(path); sample <- basename(dirname(path))
-    data.frame(Sample = sample, `Peak caller / setting` = paste("MACS2", values[["peak_type"]] %||% ""), `Peak count` = values[["peak_count"]] %||% NA_character_,
-      FRiP = NA_character_, Normalization = "BAMPE internal depth normalization", Stringency = values[["qvalue"]] %||% "",
-      `Peak file` = values[["peak_file"]] %||% "", stringsAsFactors = FALSE, check.names = FALSE)
+    data.frame(Sample = sample, `Peak caller / setting` = paste("MACS2", kv_value(values, "peak_type")), `Peak count` = kv_value(values, "peak_count", NA_character_),
+      FRiP = NA_character_, Normalization = "BAMPE internal depth normalization", Stringency = kv_value(values, "qvalue"),
+      `Peak file` = kv_value(values, "peak_file"), stringsAsFactors = FALSE, check.names = FALSE)
   })
   overlap_root <- file.path(data_dir, "peak_overlap")
   overlap_files <- if (dir.exists(overlap_root)) list.files(overlap_root, pattern = "_summary\\.txt$", recursive = TRUE, full.names = TRUE) else character(0)
   overlap_rows <- lapply(overlap_files, function(path) {
     values <- read_kv(path)
-    sample <- values[["sample"]] %||% basename(dirname(path))
-    setting <- values[["overlap_name"]] %||% basename(dirname(dirname(path)))
-    data.frame(Sample = sample, `Peak caller / setting` = paste("Shared overlap", setting), `Peak count` = values[["overlap_peaks"]] %||% NA_character_,
-      FRiP = NA_character_, Normalization = "", Stringency = values[["minimum_reciprocal_overlap"]] %||% "",
-      `Peak file` = values[["overlap_bed"]] %||% sub("_summary\\.txt$", ".bed", path), stringsAsFactors = FALSE, check.names = FALSE)
+    sample <- kv_value(values, "sample", basename(dirname(path)))
+    setting <- kv_value(values, "overlap_name", basename(dirname(dirname(path))))
+    data.frame(Sample = sample, `Peak caller / setting` = paste("Shared overlap", setting), `Peak count` = kv_value(values, "overlap_peaks", NA_character_),
+      FRiP = NA_character_, Normalization = "", Stringency = kv_value(values, "minimum_reciprocal_overlap"),
+      `Peak file` = kv_value(values, "overlap_bed", sub("_summary\\.txt$", ".bed", path)), stringsAsFactors = FALSE, check.names = FALSE)
   })
   long <- bind_rows_fill(c(seacr_rows, macs_rows, overlap_rows))
   if (NROW(meta) && NROW(long)) long <- merge(meta, long, by = "Sample", all.y = TRUE, sort = FALSE)
