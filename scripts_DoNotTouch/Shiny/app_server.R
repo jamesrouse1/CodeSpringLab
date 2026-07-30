@@ -355,35 +355,68 @@ gseapy_results_available <- function() {
 }
 gseapy_available <- gseapy_results_available()
 
-rna_stage_status <- data.frame(
-  stage = c("Design matrix", "Initial QC", "Alignment", "Gene counts", "Differential expression", "Pathway analysis", "RSEM (optional)", "Kallisto (optional)"),
-  status = ifelse(
-    c(nrow(design_df) > 0, fastqc_raw_available || fastqc_trim_available, star_available, count_matrix_available,
-      deseq2_available, gseapy_available, rsem_available, kallisto_available),
-    "Complete", "Not started"
-  ),
-  stringsAsFactors = FALSE
-)
-
-rna_result_file_catalog <- function(root = data_dir) {
-  if (!dir.exists(root)) return(data.frame(category = character(0), file = character(0), size = character(0), modified = character(0), stringsAsFactors = FALSE))
-  paths <- list.files(root, recursive = TRUE, full.names = TRUE, all.files = FALSE)
-  paths <- paths[file.exists(paths) & !dir.exists(paths)]
-  if (!length(paths)) return(data.frame(category = character(0), file = character(0), size = character(0), modified = character(0), stringsAsFactors = FALSE))
-  info <- file.info(paths)
-  relative <- substring(normalizePath(paths, winslash = "/", mustWork = FALSE), nchar(normalizePath(root, winslash = "/", mustWork = FALSE)) + 2L)
-  category <- sub("/.*$", "", relative)
-  category[!grepl("/", relative, fixed = TRUE)] <- "project"
+counts_only_mode <- isTRUE(get0("counts_only", ifnotfound = FALSE, inherits = TRUE))
+rna_stage_status <- if (counts_only_mode) {
   data.frame(
-    category = category,
-    file = relative,
-    size = format(info$size, big.mark = ",", scientific = FALSE),
-    modified = format(info$mtime, "%Y-%m-%d %H:%M"),
+    stage = c("Design matrix", "Uploaded gene counts", "Differential expression", "Pathway analysis"),
+    status = ifelse(c(nrow(design_df) > 0, count_matrix_available, deseq2_available, gseapy_available), "Complete", "Not started"),
+    stringsAsFactors = FALSE
+  )
+} else {
+  data.frame(
+    stage = c("Design matrix", "Initial QC", "Alignment", "Gene counts", "Differential expression", "Pathway analysis", "RSEM (optional)", "Kallisto (optional)"),
+    status = ifelse(
+      c(nrow(design_df) > 0, fastqc_raw_available || fastqc_trim_available, star_available, count_matrix_available,
+        deseq2_available, gseapy_available, rsem_available, kallisto_available),
+      "Complete", "Not started"
+    ),
     stringsAsFactors = FALSE
   )
 }
 
+human_bytes <- function(bytes) {
+  bytes <- suppressWarnings(as.numeric(bytes))
+  if (!length(bytes) || !is.finite(bytes) || bytes <= 0) return("0 B")
+  units <- c("B", "KB", "MB", "GB", "TB")
+  power <- min(floor(log(bytes, 1024)), length(units) - 1L)
+  digits <- if (power == 0) 0 else 1
+  paste0(format(round(bytes / (1024^power), digits), nsmall = digits, trim = TRUE), " ", units[[power + 1L]])
+}
+
+rna_result_file_catalog <- function(root = data_dir) {
+  empty <- data.frame(Category = character(0), File = character(0), Size = character(0), Modified = character(0), `Absolute path` = character(0), `Copy path` = character(0), stringsAsFactors = FALSE, check.names = FALSE)
+  if (!dir.exists(root)) return(empty)
+  paths <- list.files(root, recursive = TRUE, full.names = TRUE, all.files = FALSE)
+  paths <- paths[file.exists(paths) & !dir.exists(paths)]
+  if (!length(paths)) return(empty)
+  info <- file.info(paths)
+  absolute <- normalizePath(paths, winslash = "/", mustWork = FALSE)
+  relative <- substring(absolute, nchar(normalizePath(root, winslash = "/", mustWork = FALSE)) + 2L)
+  category <- sub("/.*$", "", relative)
+  category[!grepl("/", relative, fixed = TRUE)] <- "project"
+  data.frame(
+    Category = category,
+    File = relative,
+    Size = vapply(info$size, human_bytes, character(1)),
+    Modified = format(info$mtime, "%Y-%m-%d %H:%M"),
+    `Absolute path` = absolute,
+    `Copy path` = vapply(absolute, function(path) {
+      sprintf(
+        "<button type=\"button\" class=\"btn btn-default btn-xs copy-result-path\" data-path=\"%s\">Copy path</button>",
+        htmltools::htmlEscape(path, attribute = TRUE)
+      )
+    }, character(1)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
 rna_result_files <- rna_result_file_catalog()
+rna_result_total_size <- if (dir.exists(data_dir)) {
+  paths <- list.files(data_dir, recursive = TRUE, full.names = TRUE, all.files = FALSE)
+  paths <- paths[file.exists(paths) & !dir.exists(paths)]
+  sum(file.info(paths)$size, na.rm = TRUE)
+} else 0
 
 design_samples <- unique(as.character(design_df$sample))
 design_samples <- design_samples[!is.na(design_samples) & nzchar(design_samples)]
@@ -463,6 +496,7 @@ iframe_or_message <- function(path, resource_prefix, height = "calc(100vh - 210p
   tags$iframe(
     class = "qc-report-frame",
     src = file.path(resource_prefix, rel),
+    onload = "window.cslBindFastqcLinks && window.cslBindFastqcLinks(this);",
     style = sprintf("width: 100%%; height: %s; min-height: 680px; border: 1px solid #d7e0ea;", height_css)
   )
 }
@@ -1415,7 +1449,7 @@ heatmap_border_color <- function(style, theme = "publication") {
 
 heatmap_font_family <- function(style) {
   style <- value_or(style, "sans")
-  if (style %in% c("sans", "serif", "mono")) style else "sans"
+  if (style %in% c("sans", "serif")) style else "sans"
 }
 
 volcano_palette_colors <- function(style) {
@@ -1785,7 +1819,8 @@ rna_overview_tab <- tabPanel(
     div(class = "metric-card", span("Samples"), strong(format(length(samples), big.mark = ",")), tags$small("Saved design matrix")),
     div(class = "metric-card", span("Pipeline stages"), strong(paste0(sum(rna_stage_status$status == "Complete"), "/", nrow(rna_stage_status))), tags$small("Completed or available")),
     div(class = "metric-card", span("Counted genes"), strong(format(nrow(count_matrix_nonzero_df), big.mark = ",")), tags$small("Nonzero featureCounts rows")),
-    div(class = "metric-card", span("Result files"), strong(format(nrow(rna_result_files), big.mark = ",")), tags$small("Files under the project data folder"))
+    div(class = "metric-card", span("Result files"), strong(format(nrow(rna_result_files), big.mark = ",")), tags$small("Files under the project data folder")),
+    div(class = "metric-card", span("Disk space"), strong(human_bytes(rna_result_total_size)), tags$small("Total size of result files"))
   ),
   h4("Pipeline status"),
   table_widget("rna_overview_status"),
@@ -1801,10 +1836,10 @@ rna_files_tab <- tabPanel(
   sidebarLayout(
     sidebarPanel(
       width = 3,
-      selectInput("rna_file_category", "Category", choices = c("All files" = "all", stats::setNames(sort(unique(rna_result_files$category)), sort(unique(rna_result_files$category)))), selected = "all", selectize = FALSE),
+      selectInput("rna_file_category", "Category", choices = c("All files" = "all", stats::setNames(sort(unique(rna_result_files$Category)), sort(unique(rna_result_files$Category)))), selected = "all", selectize = FALSE),
       downloadButton("download_rna_file_catalog", "Download file catalog"),
       tags$hr(),
-      helpText("Files are listed relative to this project's data folder, matching the Files tab used by the other analysis types.")
+      helpText("Sizes are human-readable. Every row includes the absolute server path and a copy-path button.")
     ),
     mainPanel(width = 9, table_widget("rna_files_table"))
   )
@@ -1851,16 +1886,16 @@ app_tabs <- list(
         tags$div(
           style = "display: flex; justify-content: space-between; align-items: center;",
           h4("Upregulated Genes For Enrichr"),
-          tags$a(href = "https://maayanlab.cloud/OxEnrichr/", target = "_blank", "Open OxEnrichr")
+          tags$a(href = "https://maayanlab.cloud/Enrichr/", target = "_blank", "Open Enrichr")
         ),
-        tags$p("Copy this list, open OxEnrichr, and paste the genes into a new submission."),
+        tags$p("Copy this list, open Enrichr, and paste the genes into a new submission."),
         textAreaInput("deg_up_genes", NULL, value = "", width = "100%", height = "180px"),
         tags$div(
           style = "display: flex; justify-content: space-between; align-items: center;",
           h4("Downregulated Genes For Enrichr"),
-          tags$a(href = "https://maayanlab.cloud/OxEnrichr/", target = "_blank", "Open OxEnrichr")
+          tags$a(href = "https://maayanlab.cloud/Enrichr/", target = "_blank", "Open Enrichr")
         ),
-        tags$p("Copy this list, open OxEnrichr, and paste the genes into a new submission."),
+        tags$p("Copy this list, open Enrichr, and paste the genes into a new submission."),
         textAreaInput("deg_down_genes", NULL, value = "", width = "100%", height = "180px")
       )
     )
@@ -2007,7 +2042,7 @@ app_tabs <- list(
           selectInput(
             "heatmap_font_family",
             "Font family",
-            choices = c("Sans" = "sans", "Serif" = "serif", "Mono" = "mono"),
+            choices = c("Sans" = "sans", "Serif" = "serif"),
             selected = "sans", selectize = FALSE),
           selectInput("heatmap_row_font_size", "Gene label size", choices = c("Small" = 7, "Medium" = 9, "Large" = 11, "XL" = 13), selected = 9, selectize = FALSE),
           selectInput("heatmap_col_font_size", "Sample label size", choices = c("Small" = 8, "Medium" = 10, "Large" = 12, "XL" = 14), selected = 10, selectize = FALSE),
@@ -2605,6 +2640,29 @@ ui <- fluidPage(
           grid-template-columns: repeat(2, minmax(140px, 1fr));
         }
       }
+    ")),
+    tags$script(HTML("
+      window.cslBindFastqcLinks = function(frame) {
+        try {
+          var doc = frame.contentDocument || frame.contentWindow.document;
+          if (!doc || doc.documentElement.dataset.cslFastqcBound === '1') return;
+          doc.documentElement.dataset.cslFastqcBound = '1';
+          doc.addEventListener('click', function(event) {
+            var link = event.target.closest ? event.target.closest('a[href^=\"#\"]') : null;
+            if (!link) return;
+            var id = decodeURIComponent((link.getAttribute('href') || '').slice(1));
+            if (!id) return;
+            var named = doc.getElementsByName(id);
+            var target = doc.getElementById(id) || (named.length ? named[0] : null);
+            if (!target) return;
+            event.preventDefault();
+            event.stopPropagation();
+            target.scrollIntoView({behavior: 'smooth', block: 'start'});
+          }, true);
+        } catch (error) {
+          console.warn('Could not bind FastQC section links', error);
+        }
+      };
     "))
   ),
   div(
@@ -2637,12 +2695,26 @@ server <- function(input, output, session) {
 
   rna_files_filtered <- reactive({
     category <- value_or(input$rna_file_category, "all")
-    if (identical(category, "all")) rna_result_files else rna_result_files[rna_result_files$category == category, , drop = FALSE]
+    if (identical(category, "all")) rna_result_files else rna_result_files[rna_result_files$Category == category, , drop = FALSE]
   })
   if (DT_AVAILABLE) {
     output$rna_overview_status <- DT::renderDT(DT::datatable(rna_stage_status, rownames = FALSE, options = list(dom = "t", pageLength = nrow(rna_stage_status))))
     output$rna_overview_design <- DT::renderDT(DT::datatable(design_df, rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)))
-    output$rna_files_table <- DT::renderDT(DT::datatable(rna_files_filtered(), rownames = FALSE, options = list(pageLength = 20, scrollX = TRUE)))
+    output$rna_files_table <- DT::renderDT(DT::datatable(
+      rna_files_filtered(),
+      rownames = FALSE,
+      escape = FALSE,
+      options = list(pageLength = 20, scrollX = TRUE),
+      callback = DT::JS(
+        "table.on('click', 'button.copy-result-path', function(){",
+        "  var button = this;",
+        "  var path = button.getAttribute('data-path') || '';",
+        "  var done = function(){ var old = button.textContent; button.textContent = 'Copied'; setTimeout(function(){ button.textContent = old; }, 1200); };",
+        "  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(path).then(done); }",
+        "  else { var box = document.createElement('textarea'); box.value = path; document.body.appendChild(box); box.select(); document.execCommand('copy'); document.body.removeChild(box); done(); }",
+        "});"
+      )
+    ))
   } else {
     output$rna_overview_status <- renderTable(rna_stage_status)
     output$rna_overview_design <- renderTable(design_df)
@@ -2650,7 +2722,7 @@ server <- function(input, output, session) {
   }
   output$download_rna_file_catalog <- downloadHandler(
     filename = function() paste0(project_name, "_file_catalog.csv"),
-    content = function(file) write.csv(rna_files_filtered(), file, row.names = FALSE, quote = TRUE)
+    content = function(file) write.csv(rna_files_filtered()[, setdiff(names(rna_files_filtered()), "Copy path"), drop = FALSE], file, row.names = FALSE, quote = TRUE)
   )
 
   get_gtf_map <- function(species) {

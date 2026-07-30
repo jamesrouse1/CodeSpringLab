@@ -86,8 +86,21 @@ if (ncol(count_all) >= 2 && nrow(design_all) >= 2 && length(colnames(design_all)
     }
 }
 
-design <- design %>% filter_all(any_vars(. %in% c(refcond,compared)))
 design <- design[1:(ncol(design)-1)]
+comparison_candidates <- colnames(design)[vapply(
+    design,
+    function(column) all(c(refcond, compared) %in% as.character(column)),
+    logical(1)
+)]
+if (length(comparison_candidates) != 1) {
+    stop(
+        "Could not uniquely identify the comparison column containing both '",
+        refcond, "' and '", compared, "'. Candidates: ",
+        paste(comparison_candidates, collapse = ", ")
+    )
+}
+pheno_col <- comparison_candidates[[1]]
+design <- design[as.character(design[[pheno_col]]) %in% c(refcond, compared), , drop=FALSE]
 
 overlap<-intersect(row.names(design),colnames(count))
 
@@ -155,12 +168,7 @@ dev.off()
 }
 ##################
 
-for (i in 1:length(colnames(design))){
-    if (refcond %in% design[,colnames(design)[i]]){
-        dds@colData@listData[[i]]<-relevel(dds@colData@listData[[i]], ref = refcond)
-        pheno_col<-colnames(design)[i]
-    }
-}
+dds@colData@listData[[pheno_col]] <- relevel(dds@colData@listData[[pheno_col]], ref = refcond)
 
 dds <- DESeq(dds)
 
