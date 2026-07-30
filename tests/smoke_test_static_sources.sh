@@ -21,6 +21,7 @@ Rscript -e 'root <- commandArgs(TRUE)[1]; files <- list.files(file.path(root, "s
 
 grep -Fq 'pca_differential_peaks.png' "$repo_root/scripts_DoNotTouch/DiffBind/cutrun_diffbind.R"
 grep -Fq 'dba.plotPCA(db, contrast = 1L' "$repo_root/scripts_DoNotTouch/DiffBind/cutrun_diffbind.R"
+grep -Fq 'all_differential_peaks.bed' "$repo_root/scripts_DoNotTouch/DiffBind/cutrun_diffbind.R"
 
 python3 - "$repo_root" <<'PY'
 import csv

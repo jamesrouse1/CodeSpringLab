@@ -244,6 +244,8 @@ for (group_name in unique(samples$analysis_group)) {
       report <- dba.report(db, contrast = 1L, method = DBA_DESEQ2, th = 1, bCounts = TRUE)
       report_df <- as.data.frame(report)
       write_tsv(report_df, file.path(out_dir, "all_differential_peaks.tsv"))
+      all_name <- paste0(seqnames(report), ":", start(report), "-", end(report), "|Fold=", signif(report$Fold, 5), "|FDR=", signif(report$FDR, 5))
+      write_bed(report, file.path(out_dir, "all_differential_peaks.bed"), data.frame(name = all_name, Fold = report$Fold))
       significant <- report_df[!is.na(report_df$FDR) & report_df$FDR <= 0.05, , drop = FALSE]
       write_tsv(significant, file.path(out_dir, "significant_differential_peaks.tsv"))
       if (nrow(significant)) {
