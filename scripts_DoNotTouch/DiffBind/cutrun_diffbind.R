@@ -40,6 +40,10 @@ write_tsv <- function(x, path, row.names = FALSE) {
   write.table(x, path, sep = "\t", quote = FALSE, row.names = row.names, col.names = TRUE)
 }
 
+value_or <- function(x, default) {
+  if (is.null(x) || !length(x) || (length(x) == 1L && is.na(x))) default else x
+}
+
 read_peak_bed <- function(path) {
   x <- read.delim(path, header = FALSE, sep = "\t", comment.char = "", quote = "", stringsAsFactors = FALSE)
   if (ncol(x) < 3L) stop("Peak file has fewer than three columns: ", path)
@@ -80,6 +84,94 @@ safe_png <- function(path, expr, width = 1100, height = 850) {
   invisible(value)
 }
 
+homer_genome <- function(genome) {
+  if (genome %in% c("human", "hg38", "grch38")) return("hg38")
+  if (genome %in% c("mouse", "mm39", "grcm39")) return("mm39")
+  NA_character_
+}
+
+write_annotated_differential_tables <- function(report_df, report_gr, out_dir,
+                                                 cell_type, mark, comparison,
+                                                 reference, peak_source,
+                                                 normalization, genome) {
+  peak_id <- paste0(seqnames(report_gr), ":", start(report_gr), "-", end(report_gr))
+  fold <- suppressWarnings(as.numeric(report_df$Fold))
+  metadata <- data.frame(
+    PeakID = peak_id,
+    CellType = cell_type,
+    Mark = mark,
+    Comparison = comparison,
+    Reference = reference,
+    Direction = ifelse(is.finite(fold) & fold > 0, paste0("Higher in ", comparison),
+      ifelse(is.finite(fold) & fold < 0, paste0("Higher in ", reference), "No direction")),
+    PeakCaller = peak_source,
+    Normalization = normalization,
+    stringsAsFactors = FALSE
+  )
+  combined <- cbind(metadata, report_df)
+  metadata_path <- file.path(out_dir, "differential_peaks_with_metadata.tsv")
+  write_tsv(combined, metadata_path)
+
+  annotation_status <- "HOMER annotation was not run"
+  annotation_bed <- file.path(out_dir, "all_differential_peaks_for_annotation.bed")
+  write.table(
+    data.frame(
+      as.character(seqnames(report_gr)), start(report_gr) - 1L, end(report_gr),
+      peak_id, ifelse(is.finite(fold), fold, 0), stringsAsFactors = FALSE
+    ),
+    annotation_bed, sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE
+  )
+
+  annotated <- combined
+  executable <- Sys.which("annotatePeaks.pl")
+  hg <- homer_genome(genome)
+  raw_annotation <- file.path(out_dir, "all_differential_peaks_homer_annotation.tsv")
+  annotation_stderr <- file.path(out_dir, "homer_annotation.stderr.txt")
+  if (!nzchar(executable)) {
+    annotation_status <- "HOMER annotation skipped: annotatePeaks.pl was not on PATH"
+  } else if (is.na(hg)) {
+    annotation_status <- paste("HOMER annotation skipped: unsupported genome", genome)
+  } else {
+    run_status <- tryCatch(
+      system2(executable, args = c(annotation_bed, hg), stdout = raw_annotation, stderr = annotation_stderr),
+      error = function(e) e
+    )
+    annotation_size <- if (file.exists(raw_annotation)) file.info(raw_annotation)$size else NA_real_
+    if (inherits(run_status, "error") || !identical(as.integer(run_status), 0L) || !is.finite(annotation_size) || annotation_size <= 0) {
+      annotation_status <- paste("HOMER annotation failed:", if (inherits(run_status, "error")) conditionMessage(run_status) else "annotatePeaks.pl returned a non-zero exit status")
+    } else {
+      homer <- tryCatch(read.delim(raw_annotation, header = TRUE, sep = "\t", check.names = FALSE,
+                                   comment.char = "", quote = "", stringsAsFactors = FALSE), error = function(e) e)
+      if (inherits(homer, "error") || !NROW(homer)) {
+        annotation_status <- "HOMER annotation completed but produced no readable annotation rows"
+      } else {
+        annotation_id <- as.character(homer[[1]])
+        annotations <- homer[match(peak_id, annotation_id), -1, drop = FALSE]
+        names(annotations) <- make.unique(paste0("HOMER_", names(annotations)))
+        annotated <- cbind(combined, annotations)
+        annotation_status <- "HOMER annotation complete"
+      }
+    }
+  }
+
+  annotated_path <- file.path(out_dir, "differential_peaks_annotated.tsv")
+  significant_path <- file.path(out_dir, "significant_differential_peaks_annotated.tsv")
+  significant <- !is.na(report_df$FDR) & report_df$FDR <= 0.05
+  write_tsv(annotated, annotated_path)
+  write_tsv(annotated[significant, , drop = FALSE], significant_path)
+  writeLines(annotation_status, file.path(out_dir, "homer_annotation_status.txt"))
+
+  list(
+    significant_peaks = sum(significant),
+    increased_in_comparison = sum(significant & is.finite(fold) & fold > 0),
+    increased_in_reference = sum(significant & is.finite(fold) & fold < 0),
+    metadata_file = metadata_path,
+    annotated_file = annotated_path,
+    significant_annotated_file = significant_path,
+    annotation_status = annotation_status
+  )
+}
+
 samples <- read.delim(sample_file, header = TRUE, sep = "\t", check.names = FALSE, stringsAsFactors = FALSE)
 required <- c("SampleID", "CellType", "Mark", "Condition", "Replicate", "bamReads", "Peaks", "Spikein", "normalization_mode")
 missing_columns <- setdiff(required, names(samples))
@@ -99,7 +191,7 @@ samples$analysis_group <- paste(samples$CellType, samples$Mark, sep = "__")
 run_rows <- list()
 completed <- 0L
 
-record_run <- function(cell_type, mark, comparison, status, samples_n, peaks_n = NA_integer_, normalization = "", message = "", directory = "") {
+record_run <- function(cell_type, mark, comparison, status, samples_n, peaks_n = NA_integer_, normalization = "", message = "", directory = "", result_files = list()) {
   run_rows[[length(run_rows) + 1L]] <<- data.frame(
     cell_type = cell_type,
     mark = mark,
@@ -111,6 +203,13 @@ record_run <- function(cell_type, mark, comparison, status, samples_n, peaks_n =
     peak_source = selected_peak_source,
     minimum_peaks_per_sample = minimum_peaks_per_sample,
     normalization = normalization,
+    significant_peaks = value_or(result_files$significant_peaks, NA_integer_),
+    increased_in_comparison = value_or(result_files$increased_in_comparison, NA_integer_),
+    increased_in_reference = value_or(result_files$increased_in_reference, NA_integer_),
+    differential_peaks_file = value_or(result_files$metadata_file, ""),
+    annotated_differential_peaks_file = value_or(result_files$annotated_file, ""),
+    significant_annotated_peaks_file = value_or(result_files$significant_annotated_file, ""),
+    annotation_status = value_or(result_files$annotation_status, ""),
     directory = directory,
     message = message,
     stringsAsFactors = FALSE
@@ -256,6 +355,11 @@ for (group_name in unique(samples$analysis_group)) {
         file.create(file.path(out_dir, "significant_differential_peaks.bed"))
       }
 
+      annotation <- write_annotated_differential_tables(
+        report_df, report, out_dir, cell_type, mark, comparison,
+        reference_condition, selected_peak_source, normalization_label, genome
+      )
+
       counted <- try(dba.peakset(db, bRetrieve = TRUE), silent = TRUE)
       if (!inherits(counted, "try-error")) write_tsv(as.data.frame(counted), file.path(out_dir, "consensus_peak_counts.tsv"))
 
@@ -268,7 +372,7 @@ for (group_name in unique(samples$analysis_group)) {
       safe_png(file.path(out_dir, "differential_peak_heatmap.png"), dba.plotHeatmap(db, contrast = 1L, method = DBA_DESEQ2, th = 1, correlations = FALSE))
 
       saveRDS(db, file.path(out_dir, "diffbind_object.rds"))
-      list(peaks = length(master), normalization = normalization_label)
+      list(peaks = length(master), normalization = normalization_label, annotation = annotation)
     }, error = function(e) e)
 
     if (inherits(result, "error")) {
@@ -276,7 +380,7 @@ for (group_name in unique(samples$analysis_group)) {
       record_run(cell_type, mark, comparison, "failed", nrow(analysis_samples), message = conditionMessage(result), directory = out_dir)
     } else {
       completed <- completed + 1L
-      record_run(cell_type, mark, comparison, "complete", nrow(analysis_samples), peaks_n = result$peaks, normalization = result$normalization, directory = out_dir)
+      record_run(cell_type, mark, comparison, "complete", nrow(analysis_samples), peaks_n = result$peaks, normalization = result$normalization, directory = out_dir, result_files = result$annotation)
     }
   }
 }
@@ -284,7 +388,9 @@ for (group_name in unique(samples$analysis_group)) {
 summary <- if (length(run_rows)) do.call(rbind, run_rows) else data.frame(
   cell_type = character(), mark = character(), comparison = character(), reference = character(), status = character(),
   samples = integer(), consensus_peaks = integer(), peak_source = character(), minimum_peaks_per_sample = integer(),
-  normalization = character(), directory = character(), message = character()
+  normalization = character(), significant_peaks = integer(), increased_in_comparison = integer(), increased_in_reference = integer(),
+  differential_peaks_file = character(), annotated_differential_peaks_file = character(), significant_annotated_peaks_file = character(), annotation_status = character(),
+  directory = character(), message = character()
 )
 write_tsv(summary, file.path(out_root, "cutrun_diffbind_summary.tsv"))
 
