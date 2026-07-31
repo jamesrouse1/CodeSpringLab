@@ -234,7 +234,7 @@ def save_umap(adata, color, path, title=None):
     plt.close(fig)
 
 
-def save_qc_plots(adata, figures: Path):
+def save_qc_plots(adata, figures: Path, prefix: str = "01_qc"):
     """Write small, portable QC plots without an interactive display."""
     import matplotlib.pyplot as plt
     sc.pl.violin(
@@ -247,12 +247,12 @@ def save_qc_plots(adata, figures: Path):
     )
     plt.gcf().set_size_inches(11, 5)
     plt.gcf().tight_layout()
-    plt.gcf().savefig(figures / "01_qc_violin.png", dpi=160)
+    plt.gcf().savefig(figures / f"{prefix}_violin.png", dpi=160)
     plt.close(plt.gcf())
     fig, ax = plt.subplots(figsize=(7, 5.5))
     sc.pl.scatter(adata, x="total_counts", y="pct_counts_mt", color="sample_id", ax=ax, show=False)
     fig.tight_layout()
-    fig.savefig(figures / "02_qc_counts_vs_mt.png", dpi=160)
+    fig.savefig(figures / f"{prefix}_counts_vs_mt.png", dpi=160)
     plt.close(fig)
 
 
@@ -459,6 +459,15 @@ def main():
         adata = ad.concat([item[0] for item in inputs], join="outer", merge="same", index_unique=None, fill_value=0)
         adata.var_names_make_unique()
         pd.DataFrame([item[1] for item in inputs]).to_csv(tables / "input_processing_detected.tsv", sep="\t", index=False)
+        # Inspect produces an unfiltered QC overview first. Users can then
+        # choose thresholds from the actual per-sample distributions instead
+        # of applying generic defaults blindly.
+        adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
+        sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], inplace=True, percent_top=None, log1p=False)
+        pre_qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt"]].copy()
+        pre_qc.insert(0, "cell", adata.obs_names)
+        pre_qc.to_csv(tables / "qc_pre_filter_cell_metrics.tsv", sep="\t", index=False)
+        save_qc_plots(adata, figures, prefix="00_qc_pre_filter")
         write_h5ad_checkpoint(adata, input_checkpoint)
         mark_complete("inspect")
         if stage == "inspect":

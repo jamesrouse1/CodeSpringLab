@@ -239,6 +239,24 @@ if (stage %in% c("inspect", "qc", "all")) {
   cells_before_qc <- vapply(objects, ncol, numeric(1))
   input_processing_status <- do.call(rbind, lapply(objects, function(obj) obj@misc$codespring_input_status))
   utils::write.table(input_processing_status, file.path(tables_dir, "input_processing_detected.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  # Show raw distributions before a user commits to filtering thresholds.
+  # These metrics are calculated from the retained raw RNA count layers and
+  # become the evidence presented beside the QC controls in the app.
+  objects <- lapply(objects, function(obj) {
+    mt <- grep("^(MT-|mt-)", rownames(obj), value = TRUE)
+    obj[["percent.mt"]] <- if (length(mt)) Seurat::PercentageFeatureSet(obj, features = mt) else rep(0, ncol(obj))
+    obj
+  })
+  pre_qc_cells <- do.call(rbind, lapply(objects, function(obj) data.frame(
+    sample_id = as.character(obj$sample_id), nCount_RNA = obj$nCount_RNA,
+    nFeature_RNA = obj$nFeature_RNA, percent.mt = obj$percent.mt,
+    stringsAsFactors = FALSE
+  )))
+  utils::write.table(pre_qc_cells, file.path(tables_dir, "qc_pre_filter_cell_metrics.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  pre_qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
+  Seurat::DefaultAssay(pre_qc_merged) <- "RNA"
+  save_plot(Seurat::VlnPlot(pre_qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", ncol = 3, pt.size = 0, layer = "counts"), "00_qc_pre_filter_violin.png", 14, 5)
+  save_plot(Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt") + Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"), "00_qc_pre_filter_scatter.png", 12, 5)
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples), checkpoint_path("01_input"))
   stage_marker("inspect")
   if (identical(stage, "inspect")) quit(save = "no", status = 0L)
