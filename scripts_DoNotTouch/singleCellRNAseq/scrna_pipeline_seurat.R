@@ -433,6 +433,12 @@ if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 
 # the selected workflow; the raw RNA assay intentionally has no data layer.
 DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
 if (ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
+  # An SCT-integrated object can retain one model per input sample. Bring
+  # those models to a common sequencing-depth scale before marker testing;
+  # otherwise Seurat may silently return an empty marker table.
+  if (identical(DefaultAssay(obj), "SCT") && length(obj[["SCT"]]@SCTModel.list) > 1L) {
+    obj <- Seurat::PrepSCTFindMarkers(obj, verbose = FALSE)
+  }
   markers <- tryCatch(Seurat::FindAllMarkers(obj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25, verbose = FALSE), error = function(e) data.frame(error = conditionMessage(e)))
   utils::write.table(markers, file.path(tables_dir, "cluster_markers.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   if (!"error" %in% names(markers) && NROW(markers)) {
