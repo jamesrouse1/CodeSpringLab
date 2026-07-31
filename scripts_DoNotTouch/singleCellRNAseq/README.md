@@ -89,7 +89,8 @@ best-scoring label is assigned to each cluster.
 
 - `figures/`: QC and UMAP figures;
 - `tables/`: per-cell QC, per-sample QC, doublet calls, highly-variable genes,
-  PCA variance, metadata, marker, annotation, and `umap_coordinates.tsv` tables;
+  PCA variance, metadata, marker, annotation, exact cell-type composition by
+  sample, and `umap_coordinates.tsv` tables;
 - `objects/`: processed Seurat RDS or AnnData H5AD;
 - `run_summary.txt`: processing choices and cell/cluster counts;
 - `_COMPLETE`: written only after a successful workflow.
@@ -106,3 +107,7 @@ interactive **Explore Cells** view, including metadata colouring and
 lasso/box selection, without reopening the full RDS or H5AD in the web
 process. The processed object and complete metadata table remain available
 for download.
+
+`tables/cell_type_by_sample.tsv` provides exact per-sample cell-type counts
+and within-sample proportions. It powers the Results Explorer composition
+view and is intentionally calculated before the browser-level UMAP sampling.

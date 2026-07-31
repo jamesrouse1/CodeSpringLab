@@ -447,6 +447,13 @@ if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 
 # the selected workflow; the raw RNA assay intentionally has no data layer.
 DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
 if (ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
+  # Seurat v5 keeps a normalized data layer for each merged input. Marker
+  # testing on those unjoined layers can silently skip every cluster; join
+  # them once here without changing the raw-count provenance retained above.
+  if (identical(DefaultAssay(obj), "RNA")) {
+    rna_data_layers <- grep("^data($|\\.)", assay_layers_safe(obj, "RNA"), value = TRUE)
+    if (length(rna_data_layers) > 1L) obj <- SeuratObject::JoinLayers(obj, assay = "RNA", layers = "data", new = "data")
+  }
   # An SCT-integrated object can retain one model per input sample. Bring
   # those models to a common sequencing-depth scale before marker testing;
   # otherwise Seurat may silently return an empty marker table.
@@ -475,6 +482,11 @@ umap_table <- data.frame(cell = rownames(umap_coordinates), umap_coordinates[, c
 utils::write.table(umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 cluster_sizes <- as.data.frame(table(cluster = obj$cluster, cell_type = obj$cell_type), stringsAsFactors = FALSE)
 utils::write.table(cluster_sizes, file.path(tables_dir, "cluster_cell_type_sizes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+cell_type_by_sample <- as.data.frame(table(sample_id = obj$sample_id, cell_type = obj$cell_type), stringsAsFactors = FALSE)
+names(cell_type_by_sample)[names(cell_type_by_sample) == "Freq"] <- "cells"
+cell_type_by_sample <- cell_type_by_sample[cell_type_by_sample$cells > 0, , drop = FALSE]
+cell_type_by_sample$proportion_within_sample <- cell_type_by_sample$cells / ave(cell_type_by_sample$cells, cell_type_by_sample$sample_id, FUN = sum)
+utils::write.table(cell_type_by_sample, file.path(tables_dir, "cell_type_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 
 saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
 summary_lines <- c(

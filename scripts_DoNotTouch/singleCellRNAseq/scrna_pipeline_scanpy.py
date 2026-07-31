@@ -502,6 +502,9 @@ def main():
     umap_table.insert(0, "cell", umap_table.index.astype(str))
     umap_table.to_csv(tables / "umap_coordinates.tsv", sep="\t", index=False)
     adata.obs.groupby(["cluster", "cell_type"], observed=True).size().reset_index(name="cells").to_csv(tables / "cluster_cell_type_sizes.tsv", sep="\t", index=False)
+    cell_type_by_sample = adata.obs.groupby(["sample_id", "cell_type"], observed=True).size().reset_index(name="cells")
+    cell_type_by_sample["proportion_within_sample"] = cell_type_by_sample["cells"] / cell_type_by_sample.groupby("sample_id", observed=True)["cells"].transform("sum")
+    cell_type_by_sample.to_csv(tables / "cell_type_by_sample.tsv", sep="\t", index=False)
     adata.write_h5ad(objects / "processed_scanpy.h5ad", compression="gzip")
     (out_dir / "run_summary.txt").write_text("\n".join([
         "engine: scanpy", "normalization: lognormalize", f"integration: {integration}",
