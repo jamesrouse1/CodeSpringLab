@@ -42,7 +42,7 @@ scanpy_runtime() {
   local python="$environment/bin/python"
   local conda_executable=""
 
-  if [[ -x "$python" ]] && "$python" -c 'import anndata, igraph, leidenalg, numpy, pandas, scanpy, scipy' >/dev/null 2>&1; then
+  if [[ -x "$python" ]] && "$python" -c 'import anndata, harmonypy, igraph, leidenalg, numpy, pandas, scanpy, scipy, scrublet' >/dev/null 2>&1; then
     printf '%s\n' "$python"
     return 0
   fi
@@ -66,10 +66,19 @@ scanpy_runtime() {
   echo "INFO: Creating the one-time managed Scanpy runtime at $environment" >&2
   echo "INFO: This first H5AD job can take several minutes; later Scanpy jobs reuse it." >&2
   mkdir -p "$runtime_root"
-  "$conda_executable" create -y -p "$environment" -c conda-forge \
-    python=3.11 scanpy anndata python-igraph leidenalg scrublet harmonypy >&2
+  # This cluster's Conda mirror provides Scanpy and its compiled scientific
+  # stack, but not Scrublet/HarmonyPy. Install the core reproducibly with
+  # Conda, then use the environment's own pip for only those pure-Python
+  # extensions. --force also repairs a partial environment left by a failed
+  # first setup attempt at this dedicated CodeSpring-owned location.
+  "$conda_executable" create -y --force -p "$environment" -c conda-forge \
+    python=3.11 pip scanpy anndata python-igraph leidenalg >&2
   python="$environment/bin/python"
-  if [[ ! -x "$python" ]] || ! "$python" -c 'import anndata, igraph, leidenalg, numpy, pandas, scanpy, scipy' >/dev/null 2>&1; then
+  if [[ -x "$python" ]]; then
+    echo "INFO: Installing Scrublet and HarmonyPy with the managed environment's pip." >&2
+    "$python" -m pip install --no-cache-dir scrublet harmonypy >&2
+  fi
+  if [[ ! -x "$python" ]] || ! "$python" -c 'import anndata, harmonypy, igraph, leidenalg, numpy, pandas, scanpy, scipy, scrublet' >/dev/null 2>&1; then
     echo "ERROR: The managed Scanpy runtime could not be initialized at $environment." >&2
     echo "Check the job log for the Conda error, then rerun this stage; no input data were modified." >&2
     return 2
