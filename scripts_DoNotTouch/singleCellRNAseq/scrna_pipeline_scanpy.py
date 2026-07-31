@@ -492,6 +492,15 @@ def main():
     except Exception as exc:
         pd.DataFrame({"warning": [str(exc)]}).to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
     adata.obs.to_csv(tables / "cell_metadata.tsv", sep="\t")
+    # Store a lightweight, engine-neutral embedding table so the web Results
+    # Explorer can remain fast and interactive without opening the full H5AD.
+    umap_table = pd.DataFrame(adata.obsm["X_umap"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])
+    umap_metadata = adata.obs.copy()
+    if "cell" in umap_metadata.columns:
+        umap_metadata = umap_metadata.rename(columns={"cell": "input_cell"})
+    umap_table = pd.concat([umap_table, umap_metadata], axis=1)
+    umap_table.insert(0, "cell", umap_table.index.astype(str))
+    umap_table.to_csv(tables / "umap_coordinates.tsv", sep="\t", index=False)
     adata.obs.groupby(["cluster", "cell_type"], observed=True).size().reset_index(name="cells").to_csv(tables / "cluster_cell_type_sizes.tsv", sep="\t", index=False)
     adata.write_h5ad(objects / "processed_scanpy.h5ad", compression="gzip")
     (out_dir / "run_summary.txt").write_text("\n".join([

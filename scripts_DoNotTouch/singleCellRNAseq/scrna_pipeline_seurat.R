@@ -459,6 +459,13 @@ if (ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
 
 cell_metadata <- data.frame(cell = colnames(obj), obj@meta.data, check.names = FALSE)
 utils::write.table(cell_metadata, file.path(tables_dir, "cell_metadata.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+umap_coordinates <- as.data.frame(Seurat::Embeddings(obj, reduction = "umap"), check.names = FALSE)
+colnames(umap_coordinates)[seq_len(min(2L, NCOL(umap_coordinates)))] <- c("UMAP_1", "UMAP_2")[seq_len(min(2L, NCOL(umap_coordinates)))]
+if (!all(c("UMAP_1", "UMAP_2") %in% names(umap_coordinates))) stop("The final UMAP does not contain two coordinates.")
+umap_metadata <- obj@meta.data
+if ("cell" %in% names(umap_metadata)) names(umap_metadata)[names(umap_metadata) == "cell"] <- "input_cell"
+umap_table <- data.frame(cell = rownames(umap_coordinates), umap_coordinates[, c("UMAP_1", "UMAP_2"), drop = FALSE], umap_metadata, check.names = FALSE)
+utils::write.table(umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 cluster_sizes <- as.data.frame(table(cluster = obj$cluster, cell_type = obj$cell_type), stringsAsFactors = FALSE)
 utils::write.table(cluster_sizes, file.path(tables_dir, "cluster_cell_type_sizes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 
