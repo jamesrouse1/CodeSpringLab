@@ -17,9 +17,16 @@ Additional columns such as `condition`, `batch`, and `donor` become cell
 metadata. `sample_id` must be unique. Do not mix Seurat `.rds` and AnnData
 `.h5ad` inputs in a single run; start from filtered 10x matrices instead.
 
-The Scanpy engine requires raw counts in `X`, `layers['counts']`, or `raw`.
+The Scanpy engine requires raw counts in `X`, `layers['counts']`/`layers['raw']`, or `raw`.
 It stops with an explanatory error when only normalized expression is present,
 because repeating QC and normalization on processed values is not valid.
+
+For an AnnData `.h5ad`, CodeSpring records whether raw counts came from `X`, a
+`counts` layer, or `.raw`, along with existing embeddings, cluster fields, and
+annotation metadata. This is written to `tables/input_processing_detected.tsv`.
+If a UMAP is present it is rendered as an input-reference figure before a new
+embedding is computed. Existing cell-type metadata is retained unless a new
+marker list or cell-level mapping is supplied.
 
 For a Seurat RDS, CodeSpring inspects the RNA count layers, SCT/integrated
 assays, reductions, cluster metadata, and existing annotation columns. The

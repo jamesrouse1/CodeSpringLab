@@ -111,24 +111,96 @@ def counts_like(matrix) -> bool:
     return bool(np.nanmin(values) >= 0 and np.allclose(values, np.rint(values), rtol=0, atol=1e-8))
 
 
-def read_one(row):
+def categorical_plot_column(adata):
+    preferred = [
+        "cell_type", "celltype", "CellType", "annotation", "annotated_cell_type", "predicted.celltype",
+        "major_celltype", "consolidated", "subtype", "condition", "Condition", "treatment", "Treatment",
+        "group", "Group", "sample", "sample_id", "batch",
+    ]
+    for column in list(dict.fromkeys(preferred + list(adata.obs.columns))):
+        if column not in adata.obs:
+            continue
+        values = adata.obs[column]
+        if pd.api.types.is_numeric_dtype(values):
+            continue
+        n_values = values.astype(str).replace("", np.nan).dropna().nunique()
+        if 1 < n_values <= 40:
+            return column
+    return None
+
+
+def input_status_one(adata, sample_id: str, kind: str, raw_count_source: str):
+    layer_names = [str(name) for name in adata.layers.keys()]
+    embedding_names = [str(name) for name in adata.obsm.keys()]
+    annotation_columns = [name for name in [
+        "cell_type", "celltype", "CellType", "annotation", "annotated_cell_type", "predicted.celltype",
+        "major_celltype", "consolidated", "subtype",
+    ] if name in adata.obs.columns]
+    return {
+        "sample_id": sample_id,
+        "input_kind": kind,
+        "cells_input": adata.n_obs,
+        "features_input": adata.n_vars,
+        "raw_count_source": raw_count_source,
+        "layers_detected": "; ".join(layer_names),
+        "raw_slot_detected": adata.raw is not None,
+        "embeddings_detected": "; ".join(embedding_names),
+        "pca_detected": any(name.lower() in {"x_pca", "pca"} for name in embedding_names),
+        "umap_detected": any(name.lower() in {"x_umap", "umap"} for name in embedding_names),
+        "clusters_detected": any(name in adata.obs.columns for name in ["leiden", "louvain", "cluster", "seurat_clusters"]),
+        "annotation_columns_detected": "; ".join(annotation_columns),
+        "workflow_action": "Raw counts retained; CodeSpring reruns selected QC and downstream processing reproducibly.",
+    }
+
+
+def save_input_umap(adata, sample_id: str, figures: Path):
+    if not any(name.lower() in {"x_umap", "umap"} for name in adata.obsm.keys()):
+        return
+    import matplotlib.pyplot as plt
+    color = categorical_plot_column(adata)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sc.pl.umap(adata, color=color, ax=ax, show=False, title="UMAP supplied with input object", frameon=False)
+    fig.tight_layout()
+    safe_sample = "".join(char if char.isalnum() or char in "._-" else "_" for char in sample_id)
+    fig.savefig(figures / f"00_input_umap_{safe_sample}.png", dpi=160)
+    plt.close(fig)
+
+
+def read_one(row, figures: Path):
     path = Path(row.input_path).expanduser()
     if not path.exists():
         raise SystemExit(f"Input path does not exist: {path}")
     kind = input_kind(path)
     if kind == "scanpy_h5ad":
         x = sc.read_h5ad(path)
-        if "counts" in x.layers:
-            x.X = x.layers["counts"].copy()
+        raw_layer = next((name for name in ("counts", "raw") if name in x.layers and counts_like(x.layers[name])), None)
+        if raw_layer is not None:
+            raw_count_source = f"layers['{raw_layer}']"
+            status = input_status_one(x, str(row.sample_id), kind, raw_count_source)
+            save_input_umap(x, str(row.sample_id), figures)
+            x.X = x.layers[raw_layer].copy()
         elif x.raw is not None:
+            raw_count_source = "raw"
+            status = input_status_one(x, str(row.sample_id), kind, raw_count_source)
+            save_input_umap(x, str(row.sample_id), figures)
             x = x.raw.to_adata()
+        elif counts_like(x.X):
+            raw_count_source = "X"
+            status = input_status_one(x, str(row.sample_id), kind, raw_count_source)
+            save_input_umap(x, str(row.sample_id), figures)
+        else:
+            raw_count_source = "unavailable"
+            status = input_status_one(x, str(row.sample_id), kind, raw_count_source)
+            save_input_umap(x, str(row.sample_id), figures)
         if not counts_like(x.X):
             raise SystemExit(
-                f"{path} does not expose raw integer-like counts in X, layers['counts'], or raw. "
+                f"{path} does not expose raw integer-like counts in X, layers['counts'/'raw'], or raw. "
                 "A full QC/normalization workflow must start from raw counts; export a raw-count AnnData object or use a filtered 10x matrix."
             )
     else:
         x = read_10x_matrix(path)
+        raw_count_source = "X"
+        status = input_status_one(x, str(row.sample_id), kind, raw_count_source)
     x.var_names_make_unique()
     x.obs_names_make_unique()
     x.obs["source_barcode"] = x.obs_names.astype(str)
@@ -136,7 +208,7 @@ def read_one(row):
     for key, value in row._asdict().items():
         x.obs[key] = str(value)
     x.obs["input_kind"] = kind
-    return x
+    return x, status
 
 
 def save_umap(adata, color, path, title=None):
@@ -279,6 +351,22 @@ def apply_marker_annotation(adata, path: Path, tables_dir: Path):
     means.to_csv(tables_dir / "marker_annotation_cluster_scores.tsv", sep="\t")
 
 
+def apply_existing_annotation(adata):
+    candidates = [
+        "cell_type", "celltype", "CellType", "annotation", "annotated_cell_type", "predicted.celltype",
+        "major_celltype", "consolidated", "subtype",
+    ]
+    for column in candidates:
+        if column not in adata.obs:
+            continue
+        values = adata.obs[column].astype(str)
+        if values.replace("", np.nan).notna().any():
+            adata.obs["cell_type"] = pd.Categorical(values.where(values != "", "Unassigned"))
+            adata.obs["annotation_source"] = f"existing input metadata: {column}"
+            return True
+    return False
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit("Usage: scrna_pipeline_scanpy.py <samples.tsv> <out_dir> <params.tsv>")
@@ -303,7 +391,10 @@ def main():
         duplicates = ", ".join(samples.loc[samples["sample_id"].duplicated(), "sample_id"].unique())
         raise SystemExit(f"sample_id values must be unique in the input manifest: {duplicates}")
     samples.to_csv(tables / "sample_manifest_used.tsv", sep="\t", index=False)
-    obs = [read_one(row) for row in samples.itertuples(index=False)]
+    inputs = [read_one(row, figures) for row in samples.itertuples(index=False)]
+    obs = [item[0] for item in inputs]
+    input_status = pd.DataFrame([item[1] for item in inputs])
+    input_status.to_csv(tables / "input_processing_detected.tsv", sep="\t", index=False)
     adata = ad.concat(obs, join="outer", merge="same", index_unique=None, fill_value=0)
     adata.var_names_make_unique()
     adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
@@ -382,7 +473,7 @@ def main():
         apply_celltype_mapping(adata, Path(p["celltype_file"]).expanduser())
     elif p["marker_file"] and p["marker_file"].lower() != "none":
         apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables)
-    else:
+    elif not apply_existing_annotation(adata):
         adata.obs["cell_type"] = adata.obs["cluster"].astype("category")
         adata.obs["annotation_source"] = "cluster ID (no annotation supplied)"
     for col, name in [("sample_id", "03_umap_sample.png"), ("cluster", "04_umap_clusters.png"), ("cell_type", "05_umap_cell_types.png")]:
@@ -402,6 +493,7 @@ def main():
     (out_dir / "run_summary.txt").write_text("\n".join([
         "engine: scanpy", "normalization: lognormalize", f"integration: {integration}",
         f"doublet_method: {p['doublet_method']}", f"doublets_removed: {int(adata.uns.get('codespring_doublets_removed', 0))}",
+        "input_processing_inventory: tables/input_processing_detected.tsv",
         f"input_samples: {samples.shape[0]}", f"cells_after_qc: {adata.n_obs}",
         f"clusters: {adata.obs['cluster'].nunique()}", f"annotation_source: {adata.obs['annotation_source'].iloc[0]}",
     ]) + "\n")
