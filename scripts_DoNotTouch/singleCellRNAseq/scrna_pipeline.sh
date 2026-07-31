@@ -8,6 +8,20 @@ out_dir="$3"
 params="$4"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# This script is executed as a new shell by the SLURM wrapper. Shell functions
+# such as `module` are not guaranteed to cross that boundary, even when the
+# wrapper already initialized modules. Initialize them again here so a normal
+# server run cannot fail with `module: command not found`.
+if ! command -v module >/dev/null 2>&1; then
+  for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash; do
+    if [[ -r "$module_init" ]]; then
+      # shellcheck disable=SC1090
+      source "$module_init"
+      break
+    fi
+  done
+fi
+
 runtime_executable="$(awk -F $'\t' '$1 == "runtime_executable" { print $2; exit }' "$params" 2>/dev/null | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
 
 require_executable() {
