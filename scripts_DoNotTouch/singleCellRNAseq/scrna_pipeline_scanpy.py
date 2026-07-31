@@ -491,7 +491,14 @@ def main():
         markers.groupby("group", observed=True).head(10).to_csv(tables / "top10_markers_per_cluster.tsv", sep="\t", index=False)
     except Exception as exc:
         pd.DataFrame({"warning": [str(exc)]}).to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
-    adata.obs.to_csv(tables / "cell_metadata.tsv", sep="\t")
+    # Match the Seurat output schema: a named cell column followed by metadata.
+    # Avoid an anonymous CSV index that renders as a blank, confusing column in
+    # results tables, and preserve an input metadata field called `cell`.
+    cell_metadata = adata.obs.copy()
+    if "cell" in cell_metadata.columns:
+        cell_metadata = cell_metadata.rename(columns={"cell": "input_cell"})
+    cell_metadata.insert(0, "cell", cell_metadata.index.astype(str))
+    cell_metadata.to_csv(tables / "cell_metadata.tsv", sep="\t", index=False)
     # Store a lightweight, engine-neutral embedding table so the web Results
     # Explorer can remain fast and interactive without opening the full H5AD.
     umap_table = pd.DataFrame(adata.obsm["X_umap"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])

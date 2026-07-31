@@ -298,7 +298,7 @@ utils::write.table(qc_by_sample, file.path(tables_dir, "qc_summary_by_sample.tsv
 save_plot <- function(plot, file, width = 9, height = 6) ggplot2::ggsave(file.path(figures_dir, file), plot = plot, width = width, height = height, dpi = 160)
 qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
 DefaultAssay(qc_merged) <- "RNA"
-save_plot(Seurat::VlnPlot(qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", ncol = 3, pt.size = 0), "01_qc_violin.png", 14, 5)
+save_plot(Seurat::VlnPlot(qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", ncol = 3, pt.size = 0, layer = "counts"), "01_qc_violin.png", 14, 5)
 save_plot(Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt") + Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"), "02_qc_scatter.png", 12, 5)
 if (any(is.finite(doublet_calls$doublet_score))) {
   doublet_plot <- ggplot2::ggplot(doublet_calls[is.finite(doublet_calls$doublet_score), , drop = FALSE], ggplot2::aes(x = doublet_score)) +
@@ -481,6 +481,7 @@ if ("cell" %in% names(umap_metadata)) names(umap_metadata)[names(umap_metadata) 
 umap_table <- data.frame(cell = rownames(umap_coordinates), umap_coordinates[, c("UMAP_1", "UMAP_2"), drop = FALSE], umap_metadata, check.names = FALSE)
 utils::write.table(umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 cluster_sizes <- as.data.frame(table(cluster = obj$cluster, cell_type = obj$cell_type), stringsAsFactors = FALSE)
+names(cluster_sizes)[names(cluster_sizes) == "Freq"] <- "cells"
 utils::write.table(cluster_sizes, file.path(tables_dir, "cluster_cell_type_sizes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 cell_type_by_sample <- as.data.frame(table(sample_id = obj$sample_id, cell_type = obj$cell_type), stringsAsFactors = FALSE)
 names(cell_type_by_sample)[names(cell_type_by_sample) == "Freq"] <- "cells"
