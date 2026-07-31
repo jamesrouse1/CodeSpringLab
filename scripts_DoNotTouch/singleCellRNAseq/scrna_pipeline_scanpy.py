@@ -141,6 +141,20 @@ def input_status_one(adata, sample_id: str, kind: str, raw_count_source: str):
         "input_kind": kind,
         "cells_input": adata.n_obs,
         "features_input": adata.n_vars,
+        # Keep this inspection inventory schema aligned with the Seurat
+        # runner.  The app intentionally renders one engine-independent
+        # yes/no source report, so different names here silently made H5AD
+        # results look as if their raw counts were absent.
+        "assays_detected": "AnnData",
+        "rna_count_layers_detected": raw_count_source,
+        "rna_normalized_layers_detected": "; ".join(
+            name for name in layer_names if name.lower() not in {"counts", "raw"}
+        ),
+        "sct_detected": False,
+        "integrated_detected": any(
+            name.lower() in {"x_harmony", "x_scvi", "x_scanvi"} for name in embedding_names
+        ),
+        "reductions_detected": "; ".join(embedding_names),
         "raw_count_source": raw_count_source,
         "layers_detected": "; ".join(layer_names),
         "raw_slot_detected": adata.raw is not None,
