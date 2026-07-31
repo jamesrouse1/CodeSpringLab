@@ -235,15 +235,47 @@ qc_one <- function(obj) {
 }
 objects <- lapply(objects, qc_one)
 
+filter_genes_one <- function(obj) {
+  counts <- Seurat::GetAssayData(obj, assay = "RNA", layer = "counts")
+  detected_cells <- Matrix::rowSums(counts > 0)
+  keep <- detected_cells >= params$min_cells_per_gene
+  if (!any(keep)) stop("Minimum cells per retained gene removed every gene in sample ", unique(obj$sample_id)[1], ".")
+  summary <- data.frame(
+    sample_id = unique(as.character(obj$sample_id))[[1]],
+    genes_before_filtering = nrow(obj),
+    min_cells_per_gene = params$min_cells_per_gene,
+    genes_retained = sum(keep),
+    stringsAsFactors = FALSE
+  )
+  list(object = subset(obj, features = rownames(obj)[keep]), summary = summary)
+}
+
+feature_filter_runs <- lapply(objects, filter_genes_one)
+objects <- lapply(feature_filter_runs, `[[`, "object")
+feature_filter_summary <- do.call(rbind, lapply(feature_filter_runs, `[[`, "summary"))
+utils::write.table(feature_filter_summary, file.path(tables_dir, "feature_filtering_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+
+sample_doublet_rate <- function(obj) {
+  if (!"expected_doublet_rate" %in% colnames(obj@meta.data)) return(params$doublet_rate)
+  raw <- unique(trimws(as.character(obj$expected_doublet_rate)))
+  raw <- raw[nzchar(raw) & !is.na(raw)]
+  if (!length(raw)) return(params$doublet_rate)
+  if (length(raw) != 1L) stop("expected_doublet_rate must have one value per sample.")
+  value <- suppressWarnings(as.numeric(raw[[1]]))
+  if (!is.finite(value) || value <= 0 || value >= 1) stop("expected_doublet_rate must be greater than 0 and less than 1 for each sample.")
+  value
+}
+
 run_doublet_one <- function(obj) {
   sample_id <- unique(as.character(obj$sample_id))[[1]]
+  expected_rate <- if (identical(params$doublet_method, "none")) params$doublet_rate else sample_doublet_rate(obj)
   obj$doublet_score <- NA_real_
   obj$predicted_doublet <- FALSE
   if (identical(params$doublet_method, "none")) {
     return(list(
       object = obj,
       calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
-      summary = data.frame(sample_id = sample_id, method = "none", cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Doublet removal disabled")
+      summary = data.frame(sample_id = sample_id, method = "none", expected_doublet_rate = expected_rate, cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Doublet removal disabled")
     ))
   }
   if (!requireNamespace("scDblFinder", quietly = TRUE)) {
@@ -253,25 +285,25 @@ run_doublet_one <- function(obj) {
     return(list(
       object = obj,
       calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
-      summary = data.frame(sample_id = sample_id, method = "scDblFinder", cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Automatic scDblFinder skipped: package unavailable")
+      summary = data.frame(sample_id = sample_id, method = "scDblFinder", expected_doublet_rate = expected_rate, cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Automatic scDblFinder skipped: package unavailable")
     ))
   }
   if (ncol(obj) < 100L || nrow(obj) < 20L) {
     return(list(
       object = obj,
       calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
-      summary = data.frame(sample_id = sample_id, method = "scDblFinder", cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Skipped: fewer than 100 cells or 20 genes")
+      summary = data.frame(sample_id = sample_id, method = "scDblFinder", expected_doublet_rate = expected_rate, cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Skipped: fewer than 100 cells or 20 genes")
     ))
   }
   sce <- Seurat::as.SingleCellExperiment(obj, assay = "RNA")
-  sce <- scDblFinder::scDblFinder(sce, dbr = params$doublet_rate)
+  sce <- scDblFinder::scDblFinder(sce, dbr = expected_rate)
   score <- as.numeric(SummarizedExperiment::colData(sce)[["scDblFinder.score"]])
   call <- as.character(SummarizedExperiment::colData(sce)[["scDblFinder.class"]]) == "doublet"
   obj$doublet_score <- score
   obj$predicted_doublet <- call
   calls <- data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = score, predicted_doublet = call,
                       removed_as_doublet = call & params$remove_doublets, stringsAsFactors = FALSE)
-  summary <- data.frame(sample_id = sample_id, method = "scDblFinder", cells_before = ncol(obj),
+  summary <- data.frame(sample_id = sample_id, method = "scDblFinder", expected_doublet_rate = expected_rate, cells_before = ncol(obj),
                         predicted_doublets = sum(call), removed_doublets = if (params$remove_doublets) sum(call) else 0L, note = "", stringsAsFactors = FALSE)
   if (params$remove_doublets) obj <- subset(obj, cells = colnames(obj)[!call])
   if (!ncol(obj)) stop("Doublet removal removed every cell in sample ", sample_id, ".")

@@ -267,7 +267,7 @@ def run_scrublet(adata, p, tables: Path, figures: Path):
     adata.obs["predicted_doublet"] = False
     report = []
     if method == "none":
-        report.append({"sample_id": "all", "method": "none", "cells_before": adata.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Doublet removal disabled"})
+        report.append({"sample_id": "all", "method": "none", "expected_doublet_rate": p["doublet_rate"], "cells_before": adata.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Doublet removal disabled"})
         pd.DataFrame(report).to_csv(tables / "doublet_summary_by_sample.tsv", sep="\t", index=False)
         calls = adata.obs[["sample_id", "doublet_score", "predicted_doublet"]].copy()
         calls.insert(0, "cell", adata.obs_names)
@@ -279,25 +279,34 @@ def run_scrublet(adata, p, tables: Path, figures: Path):
     groups = [(str(name), list(idx)) for name, idx in adata.obs.groupby(sample_col, observed=True).groups.items()] if sample_col else [("all", list(adata.obs_names))]
     for sample_id, cells in groups:
         sub = adata[cells].copy()
+        expected_rate = p["doublet_rate"]
+        if "expected_doublet_rate" in sub.obs.columns:
+            rates = pd.to_numeric(sub.obs["expected_doublet_rate"], errors="coerce").dropna().unique()
+            if len(rates) > 1:
+                raise SystemExit(f"expected_doublet_rate must have one value per sample ({sample_id}).")
+            if len(rates) == 1:
+                expected_rate = float(rates[0])
+                if not 0 < expected_rate < 1:
+                    raise SystemExit(f"expected_doublet_rate must be greater than 0 and less than 1 for {sample_id}.")
         # Scrublet is not informative on very small partitions. Do not invent
         # calls; retain these cells and record why in the summary.
         if sub.n_obs < 100 or sub.n_vars < 20:
-            report.append({"sample_id": sample_id, "method": "scrublet", "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Skipped: fewer than 100 cells or 20 genes"})
+            report.append({"sample_id": sample_id, "method": "scrublet", "expected_doublet_rate": expected_rate, "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Skipped: fewer than 100 cells or 20 genes"})
             continue
         try:
             # The internal Scrublet feature filter can leave fewer than 30
             # dimensions, so choose a conservative PC count for small runs.
             scrublet_pcs = min(20, max(2, min(sub.n_obs, sub.n_vars) - 2))
-            sc.pp.scrublet(sub, expected_doublet_rate=p["doublet_rate"], n_prin_comps=scrublet_pcs, random_state=p["seed"], verbose=False)
+            sc.pp.scrublet(sub, expected_doublet_rate=expected_rate, n_prin_comps=scrublet_pcs, random_state=p["seed"], verbose=False)
             adata.obs.loc[sub.obs_names, "doublet_score"] = pd.to_numeric(sub.obs["doublet_score"], errors="coerce").values
             predicted = sub.obs["predicted_doublet"].astype(bool)
             adata.obs.loc[sub.obs_names, "predicted_doublet"] = predicted.values
             predicted_n = int(predicted.sum())
-            report.append({"sample_id": sample_id, "method": "scrublet", "cells_before": sub.n_obs, "predicted_doublets": predicted_n, "removed_doublets": predicted_n if p["remove_doublets"] else 0, "note": ""})
+            report.append({"sample_id": sample_id, "method": "scrublet", "expected_doublet_rate": expected_rate, "cells_before": sub.n_obs, "predicted_doublets": predicted_n, "removed_doublets": predicted_n if p["remove_doublets"] else 0, "note": ""})
         except Exception as exc:
             if method == "scrublet":
                 raise SystemExit(f"Scrublet failed for {sample_id}: {exc}") from exc
-            report.append({"sample_id": sample_id, "method": "scrublet", "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": f"Automatic Scrublet skipped after error: {exc}"})
+            report.append({"sample_id": sample_id, "method": "scrublet", "expected_doublet_rate": expected_rate, "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": f"Automatic Scrublet skipped after error: {exc}"})
     adata.obs["predicted_doublet"] = adata.obs["predicted_doublet"].astype(bool)
     save_doublet_plot(adata, figures)
     pd.DataFrame(report).to_csv(tables / "doublet_summary_by_sample.tsv", sep="\t", index=False)
@@ -409,7 +418,27 @@ def main():
     # Run doublet detection on raw counts after initial QC and before every
     # expression transformation or integration step.
     adata = run_scrublet(adata, p, tables, figures)
-    sc.pp.filter_genes(adata, min_cells=p["min_cells_per_gene"])
+    # Filter low-detection genes within each input sample, retaining the union
+    # across samples. This avoids a deeply sequenced library rescuing a gene
+    # that is effectively absent from every other library while retaining
+    # legitimate sample-specific biology for later integration.
+    gene_keep = np.zeros(adata.n_vars, dtype=bool)
+    feature_reports = []
+    for sample_id, cells in adata.obs.groupby("sample_id", observed=True).groups.items():
+        sub = adata[list(cells)]
+        detected_cells = np.asarray((sub.X > 0).sum(axis=0)).ravel()
+        keep_here = detected_cells >= p["min_cells_per_gene"]
+        gene_keep |= keep_here
+        feature_reports.append({
+            "sample_id": str(sample_id),
+            "genes_before_filtering": int(adata.n_vars),
+            "min_cells_per_gene": p["min_cells_per_gene"],
+            "genes_retained": int(keep_here.sum()),
+        })
+    if not gene_keep.any():
+        raise SystemExit("Minimum cells per retained gene removed every gene.")
+    adata = adata[:, gene_keep].copy()
+    pd.DataFrame(feature_reports).to_csv(tables / "feature_filtering_by_sample.tsv", sep="\t", index=False)
     adata.layers["counts"] = adata.X.copy()
     qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt", "doublet_score", "predicted_doublet"]].copy()
     qc.insert(0, "cell", adata.obs_names)
@@ -422,10 +451,20 @@ def main():
     sc.pp.normalize_total(adata, target_sum=1e4)
     sc.pp.log1p(adata)
     adata.raw = adata
+    # When a true technical batch is selected, choose HVGs across batches so
+    # the feature set is not dominated by a single library before integration.
+    # This follows Scanpy's batch-aware Seurat-v3 implementation; with no
+    # technical batch, retain the ordinary pooled-HVG workflow.
+    hvg_batch_key = p["batch_column"] if p["batch_column"] in adata.obs.columns and adata.obs[p["batch_column"]].astype(str).nunique() > 1 else None
+    hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars), "layer": "counts"}
+    fallback_hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars)}
+    if hvg_batch_key is not None:
+        hvg_kwargs["batch_key"] = hvg_batch_key
+        fallback_hvg_kwargs["batch_key"] = hvg_batch_key
     try:
-        sc.pp.highly_variable_genes(adata, n_top_genes=min(3000, adata.n_vars), flavor="seurat_v3", layer="counts")
+        sc.pp.highly_variable_genes(adata, flavor="seurat_v3", **hvg_kwargs)
     except Exception:
-        sc.pp.highly_variable_genes(adata, n_top_genes=min(3000, adata.n_vars), flavor="cell_ranger")
+        sc.pp.highly_variable_genes(adata, flavor="cell_ranger", **fallback_hvg_kwargs)
     hvg_table = adata.var.copy()
     hvg_table.insert(0, "gene", hvg_table.index.astype(str))
     hvg_columns = [c for c in ["gene", "highly_variable", "means", "variances", "variances_norm"] if c in hvg_table.columns]
