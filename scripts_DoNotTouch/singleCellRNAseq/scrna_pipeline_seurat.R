@@ -87,9 +87,12 @@ set.seed(params$seed)
 samples <- read_delim_safe(samples_path)
 required <- c("sample_id", "input_path")
 if (!all(required %in% names(samples))) stop("Sample manifest requires columns: ", paste(required, collapse = ", "))
-samples <- samples[nzchar(trimws(as.character(samples$sample_id))) & nzchar(trimws(as.character(samples$input_path))), , drop = FALSE]
-if (!NROW(samples)) stop("No valid sample rows were supplied.")
-samples$sample_id <- make.unique(make.names(as.character(samples$sample_id)))
+samples$sample_id <- trimws(as.character(samples$sample_id))
+samples$input_path <- trimws(as.character(samples$input_path))
+if (!NROW(samples)) stop("No sample rows were supplied.")
+if (any(!nzchar(samples$sample_id))) stop("Every sample manifest row needs a sample_id.")
+if (any(!nzchar(samples$input_path))) stop("Every sample manifest row needs an input_path.")
+if (anyDuplicated(samples$sample_id)) stop("sample_id values must be unique in the input manifest.")
 samples$input_path <- normalizePath(path.expand(as.character(samples$input_path)), winslash = "/", mustWork = FALSE)
 missing <- samples$input_path[!file.exists(samples$input_path)]
 if (length(missing)) stop("Missing unreadable input path(s): ", paste(missing, collapse = ", "))
@@ -198,6 +201,10 @@ read_one <- function(row) {
   # in the source object and are recorded in the provenance table.
   if (length(rna_count_layers) > 1L) obj <- SeuratObject::JoinLayers(obj, assay = "RNA", layers = "counts", new = "counts")
   DefaultAssay(obj) <- "RNA"
+  # Preserve the unmodified barcode for cell-level annotation files. This is
+  # safer than trying to strip a sample prefix later (sample IDs can contain
+  # underscores themselves).
+  obj$source_barcode <- colnames(obj)
   obj <- Seurat::RenameCells(obj, add.cell.id = sample_id)
   # Add all manifest fields as cell-level metadata.
   for (field in names(row)) obj[[field]] <- rep(as.character(row[[field]]), ncol(obj))
@@ -364,7 +371,7 @@ apply_celltype_mapping <- function(obj, path) {
   if (!length(cell_col) || !length(type_col)) stop("Cell-type mapping needs a cell/barcode column and a cell_type column.")
   labels <- setNames(as.character(map[[type_col[[1]]]]), as.character(map[[cell_col[[1]]]]))
   direct <- unname(labels[colnames(obj)])
-  raw_barcode <- sub("^[^_]+_", "", colnames(obj))
+  raw_barcode <- as.character(obj$source_barcode)
   direct[is.na(direct)] <- unname(labels[raw_barcode[is.na(direct)]])
   obj$cell_type <- ifelse(is.na(direct) | !nzchar(direct), "Unassigned", direct)
   obj$annotation_source <- "provided cell metadata"

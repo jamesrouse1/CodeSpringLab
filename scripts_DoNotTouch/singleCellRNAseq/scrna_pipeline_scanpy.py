@@ -449,7 +449,11 @@ def main():
     if integration in {"scvi", "harmony"} and batch_count < 2:
         raise SystemExit(f"{integration} integration requires at least two values in the selected batch column ({batch_key}). Choose none or supply the appropriate technical batch column.")
     representation = "X_pca"
-    if integration == "scvi" and samples.shape[0] > 1:
+    # A single AnnData object can still contain multiple technical batches.
+    # Integrate based on the selected metadata values, not merely the number
+    # of manifest rows, so imported atlas objects behave like multi-folder
+    # inputs.
+    if integration == "scvi" and batch_count > 1:
         try:
             import scvi
         except ImportError as exc:
@@ -459,7 +463,7 @@ def main():
         model.train(max_epochs=p["scvi_max_epochs"], early_stopping=True)
         adata.obsm["X_scVI"] = model.get_latent_representation()
         representation = "X_scVI"
-    elif integration == "harmony" and samples.shape[0] > 1:
+    elif integration == "harmony" and batch_count > 1:
         try:
             import scanpy.external as sce
             sce.pp.harmony_integrate(adata, key=batch_key, basis="X_pca", adjusted_basis="X_harmony")
