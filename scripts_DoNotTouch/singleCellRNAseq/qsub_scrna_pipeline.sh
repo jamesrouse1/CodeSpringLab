@@ -35,7 +35,7 @@ export TMP="$TMPDIR"
 export TEMP="$TMPDIR"
 mkdir -p "$TMPDIR"
 rm -f "$out_dir/_COMPLETE"
-date -Is > "$out_dir/_RUN_STARTED"
+date '+%Y-%m-%dT%H:%M:%S%z' > "$out_dir/_RUN_STARTED"
 trap 'rm -f "$out_dir/_RUN_STARTED"' EXIT
 
 if [[ ! -x "$runner" ]]; then
