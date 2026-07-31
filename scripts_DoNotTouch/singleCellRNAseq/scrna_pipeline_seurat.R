@@ -185,6 +185,10 @@ read_one <- function(row) {
     }
   )
   if (!inherits(obj, "Seurat")) stop("Input for ", sample_id, " did not yield a Seurat object.")
+  # `cell` is reserved for the final processed barcode in CodeSpring output.
+  # Preserve a same-named input metadata field before Seurat merge/QC steps,
+  # which otherwise may silently drop it when objects are combined.
+  if ("cell" %in% colnames(obj@meta.data)) names(obj@meta.data)[names(obj@meta.data) == "cell"] <- "input_cell"
   if (!"RNA" %in% names(obj@assays)) {
     assay <- DefaultAssay(obj)
     if (!nzchar(assay)) stop("No usable expression assay was found for ", sample_id)
@@ -471,7 +475,13 @@ if (ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
   }
 }
 
-cell_metadata <- data.frame(cell = colnames(obj), obj@meta.data, check.names = FALSE)
+# Match the Scanpy output schema: retain an input metadata column named
+# `cell` as `input_cell`, while always reserving `cell` for the exact final
+# barcode/cell identifier.  This prevents duplicate column names in tables
+# consumed by the interactive results explorer.
+cell_metadata <- obj@meta.data
+if ("cell" %in% names(cell_metadata)) names(cell_metadata)[names(cell_metadata) == "cell"] <- "input_cell"
+cell_metadata <- data.frame(cell = colnames(obj), cell_metadata, check.names = FALSE)
 utils::write.table(cell_metadata, file.path(tables_dir, "cell_metadata.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 umap_coordinates <- as.data.frame(Seurat::Embeddings(obj, reduction = "umap"), check.names = FALSE)
 colnames(umap_coordinates)[seq_len(min(2L, NCOL(umap_coordinates)))] <- c("UMAP_1", "UMAP_2")[seq_len(min(2L, NCOL(umap_coordinates)))]
@@ -482,6 +492,7 @@ umap_table <- data.frame(cell = rownames(umap_coordinates), umap_coordinates[, c
 utils::write.table(umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 cluster_sizes <- as.data.frame(table(cluster = obj$cluster, cell_type = obj$cell_type), stringsAsFactors = FALSE)
 names(cluster_sizes)[names(cluster_sizes) == "Freq"] <- "cells"
+cluster_sizes <- cluster_sizes[cluster_sizes$cells > 0, , drop = FALSE]
 utils::write.table(cluster_sizes, file.path(tables_dir, "cluster_cell_type_sizes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 cell_type_by_sample <- as.data.frame(table(sample_id = obj$sample_id, cell_type = obj$cell_type), stringsAsFactors = FALSE)
 names(cell_type_by_sample)[names(cell_type_by_sample) == "Freq"] <- "cells"
