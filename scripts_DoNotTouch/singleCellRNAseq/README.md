@@ -67,7 +67,8 @@ gene filtering, normalization, highly-variable-gene selection, scaling,
 integration when a genuine technical batch column is supplied, PCA,
 neighbors/UMAP, clustering, annotation, and cluster markers. It retains raw
 counts in the processed output. Seurat defaults to SCTransform v2 and Scanpy
-to log-normalization. In automatic mode, integration is used only when the
+to log-normalization. In automatic mode, Seurat uses RPCA and Scanpy uses
+Harmony only when the
 selected batch column contains more than one value; sample count alone does
 not trigger batch correction.
 

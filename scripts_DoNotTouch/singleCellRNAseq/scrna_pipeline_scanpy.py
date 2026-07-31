@@ -5,7 +5,7 @@ Usage: python scrna_pipeline_scanpy.py <samples.tsv> <out_dir> <params.tsv>
 
 The manifest and parameter files are shared with the Seurat engine.  This
 script intentionally preserves raw counts in ``layers['counts']`` and uses a
-scVI latent representation for multi-sample integration when requested.
+portable Harmony representation for automatic multi-sample integration.
 """
 from __future__ import annotations
 
@@ -242,6 +242,28 @@ def save_qc_plots(adata, figures: Path):
     plt.close(fig)
 
 
+def write_h5ad_checkpoint(adata, path: Path):
+    """Write checkpoints across AnnData/Pandas versions without altering values.
+
+    Some source H5AD files use Pandas' nullable ``StringArray`` for an axis
+    index or metadata column. Older widely deployed AnnData releases reject
+    that representation when writing a new H5AD. Converting it to ordinary
+    Python strings is lossless and keeps an imported processed object usable.
+    """
+    def normalize_frame(frame):
+        if isinstance(frame.index.dtype, pd.StringDtype):
+            frame.index = pd.Index(frame.index.astype(str).to_numpy(dtype=object), dtype=object)
+        for column in frame.columns:
+            if isinstance(frame[column].dtype, pd.StringDtype):
+                frame[column] = frame[column].astype(object)
+
+    normalize_frame(adata.obs)
+    normalize_frame(adata.var)
+    if adata.raw is not None:
+        normalize_frame(adata.raw.var)
+    adata.write_h5ad(path, compression="gzip")
+
+
 def save_doublet_plot(adata, figures: Path):
     """Show the score distribution used for a transparent doublet call."""
     import matplotlib.pyplot as plt
@@ -423,7 +445,7 @@ def main():
         adata = ad.concat([item[0] for item in inputs], join="outer", merge="same", index_unique=None, fill_value=0)
         adata.var_names_make_unique()
         pd.DataFrame([item[1] for item in inputs]).to_csv(tables / "input_processing_detected.tsv", sep="\t", index=False)
-        adata.write_h5ad(input_checkpoint, compression="gzip")
+        write_h5ad_checkpoint(adata, input_checkpoint)
         mark_complete("inspect")
         if stage == "inspect":
             return
@@ -463,7 +485,7 @@ def main():
         qc_summary.insert(1, "cells_input", qc_summary["sample_id"].map(cells_before_qc).astype(int))
         qc_summary.to_csv(tables / "qc_summary_by_sample.tsv", sep="\t", index=False)
         save_qc_plots(adata, figures)
-        adata.write_h5ad(qc_checkpoint, compression="gzip")
+        write_h5ad_checkpoint(adata, qc_checkpoint)
         mark_complete("qc")
         if stage == "qc":
             return
@@ -497,7 +519,7 @@ def main():
         sc.tl.pca(adata, n_comps=n_pcs, svd_solver="arpack", use_highly_variable=use_hvg, zero_center=False)
         pca_ratio = np.asarray(adata.uns["pca"]["variance_ratio"]).ravel()
         pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
-        adata.write_h5ad(preprocess_checkpoint, compression="gzip")
+        write_h5ad_checkpoint(adata, preprocess_checkpoint)
         mark_complete("preprocess")
         if stage == "preprocess":
             return
@@ -511,7 +533,10 @@ def main():
         batch_key = p["batch_column"] if p["batch_column"] in adata.obs.columns else "sample_id"
         batch_count = int(adata.obs[batch_key].astype(str).nunique())
         if integration == "auto":
-            integration = "scvi" if p["batch_column"] in adata.obs.columns and batch_count > 1 else "none"
+            # Harmony is the automatic choice because it is available in the
+            # standard Scanpy runtime. scVI remains an explicit option when a
+            # dedicated scvi-tools environment has been installed.
+            integration = "harmony" if p["batch_column"] in adata.obs.columns and batch_count > 1 else "none"
         if integration in {"scvi", "harmony"} and batch_count < 2:
             raise SystemExit(f"{integration} integration requires at least two values in the selected batch column ({batch_key}). Choose none or supply the appropriate technical batch column.")
         representation = "X_pca"
@@ -535,7 +560,7 @@ def main():
         sc.tl.umap(adata, random_state=p["seed"])
         sc.tl.leiden(adata, resolution=p["cluster_resolution"], key_added="cluster", random_state=p["seed"])
         adata.uns["codespring_integration"] = integration
-        adata.write_h5ad(cluster_checkpoint, compression="gzip")
+        write_h5ad_checkpoint(adata, cluster_checkpoint)
         mark_complete("cluster")
         if stage == "cluster":
             return
@@ -576,7 +601,7 @@ def main():
         cell_type_by_sample = adata.obs.groupby(["sample_id", "cell_type"], observed=True).size().reset_index(name="cells")
         cell_type_by_sample["proportion_within_sample"] = cell_type_by_sample["cells"] / cell_type_by_sample.groupby("sample_id", observed=True)["cells"].transform("sum")
         cell_type_by_sample.to_csv(tables / "cell_type_by_sample.tsv", sep="\t", index=False)
-        adata.write_h5ad(objects / "processed_scanpy.h5ad", compression="gzip")
+        write_h5ad_checkpoint(adata, objects / "processed_scanpy.h5ad")
         (out_dir / "run_summary.txt").write_text("\n".join([
             "engine: scanpy", "normalization: lognormalize", f"integration: {integration}", f"doublet_method: {p['doublet_method']}",
             f"doublets_removed: {int(adata.uns.get('codespring_doublets_removed', 0))}", "input_processing_inventory: tables/input_processing_detected.tsv",
