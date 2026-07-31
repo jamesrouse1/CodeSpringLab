@@ -32,6 +32,44 @@ require_executable() {
   fi
 }
 
+scanpy_runtime() {
+  # Scanpy is not part of many cluster-wide Anaconda modules. Keep one
+  # managed, per-user environment outside either repository so every H5AD run
+  # has the same complete runtime and no username is hard-coded.
+  local runtime_root="${CSL_WEB_HOME:-$HOME/.codespringweb}/runtimes"
+  local environment="${CSL_SCANPY_ENV:-$runtime_root/scanpy}"
+  local python="$environment/bin/python"
+  local conda_executable=""
+
+  if [[ -x "$python" ]] && "$python" -c 'import anndata, igraph, leidenalg, numpy, pandas, scanpy, scipy' >/dev/null 2>&1; then
+    printf '%s\n' "$python"
+    return 0
+  fi
+
+  conda_executable="$(command -v conda || true)"
+  if [[ -z "$conda_executable" && -n "${CONDA_EXE:-}" && -x "${CONDA_EXE}" ]]; then
+    conda_executable="$CONDA_EXE"
+  fi
+  if [[ -z "$conda_executable" ]]; then
+    echo "ERROR: Scanpy is not available and Conda could not be found to create the managed runtime." >&2
+    echo "Load a supported Anaconda module, then rerun this stage." >&2
+    return 2
+  fi
+
+  echo "INFO: Creating the one-time managed Scanpy runtime at $environment" >&2
+  echo "INFO: This first H5AD job can take several minutes; later Scanpy jobs reuse it." >&2
+  mkdir -p "$runtime_root"
+  "$conda_executable" create -y -p "$environment" -c conda-forge \
+    python=3.11 scanpy anndata python-igraph leidenalg scrublet harmonypy >&2
+  python="$environment/bin/python"
+  if [[ ! -x "$python" ]] || ! "$python" -c 'import anndata, igraph, leidenalg, numpy, pandas, scanpy, scipy' >/dev/null 2>&1; then
+    echo "ERROR: The managed Scanpy runtime could not be initialized at $environment." >&2
+    echo "Check the job log for the Conda error, then rerun this stage; no input data were modified." >&2
+    return 2
+  fi
+  printf '%s\n' "$python"
+}
+
 engine="$(printf '%s' "$engine" | tr '[:upper:]' '[:lower:]')"
 case "$engine" in
   seurat)
@@ -46,9 +84,9 @@ case "$engine" in
   scanpy)
     module load EBModules 2>/dev/null || true
     module load Anaconda3/2021.05 2>/dev/null || true
-    runtime_executable="$(command -v python3 || true)"
-    require_executable "$runtime_executable" "Scanpy Python"
-    "$runtime_executable" -c 'import anndata, igraph, leidenalg, numpy, pandas, scanpy, scipy; print("Scanpy runtime ready")'
+    runtime_executable="$(scanpy_runtime)"
+    require_executable "$runtime_executable" "managed Scanpy Python"
+    echo "Scanpy runtime ready: $runtime_executable"
     "$runtime_executable" "$script_dir/scrna_pipeline_scanpy.py" "$samples" "$out_dir" "$params" "$stage"
     ;;
   *)
