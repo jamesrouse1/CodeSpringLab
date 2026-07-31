@@ -48,6 +48,8 @@ def params_from(path: Path):
     d = dict(zip(tab["key"], tab["value"]))
     def get(key, default=""):
         return str(d.get(key, default)).strip()
+    def get_bool(key, default=False):
+        return get(key, "true" if default else "false").lower() in {"1", "true", "t", "yes", "y"}
     return {
         "normalization": get("normalization", "lognormalize").lower(),
         "integration": get("integration", "auto").lower(),
@@ -55,9 +57,13 @@ def params_from(path: Path):
         "cluster_resolution": float(get("cluster_resolution", "0.6") or 0.6),
         "n_pcs": int(float(get("n_pcs", "30") or 30)),
         "min_features": int(float(get("min_features", "200") or 200)),
+        "min_counts": int(float(get("min_counts", "0") or 0)),
         "max_features": int(float(get("max_features", "0") or 0)),
         "max_percent_mt": float(get("max_percent_mt", "20") or 20),
         "min_cells_per_gene": int(float(get("min_cells_per_gene", "3") or 3)),
+        "doublet_method": get("doublet_method", "auto").lower(),
+        "doublet_rate": float(get("doublet_rate", "0.05") or 0.05),
+        "remove_doublets": get_bool("remove_doublets", True),
         "marker_file": get("marker_file", ""),
         "celltype_file": get("celltype_file", ""),
         "scvi_max_epochs": int(float(get("scvi_max_epochs", "400") or 400)),
@@ -164,6 +170,77 @@ def save_qc_plots(adata, figures: Path):
     plt.close(fig)
 
 
+def save_doublet_plot(adata, figures: Path):
+    """Show the score distribution used for a transparent doublet call."""
+    import matplotlib.pyplot as plt
+    if "doublet_score" not in adata.obs:
+        return
+    score = pd.to_numeric(adata.obs["doublet_score"], errors="coerce").dropna()
+    if score.empty:
+        return
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.hist(score, bins=min(50, max(10, int(np.sqrt(len(score))))), color="#5b7db1", edgecolor="white")
+    ax.set(xlabel="Doublet score", ylabel="Cells", title="Doublet-score distribution before removal")
+    fig.tight_layout()
+    fig.savefig(figures / "02b_doublet_scores.png", dpi=160)
+    plt.close(fig)
+
+
+def run_scrublet(adata, p, tables: Path, figures: Path):
+    """Run Scrublet on raw counts, separately by sample when available."""
+    method = p["doublet_method"]
+    if method not in {"auto", "none", "scrublet"}:
+        raise SystemExit("Scanpy doublet_method must be auto, none, or scrublet.")
+    adata.obs["doublet_score"] = np.nan
+    adata.obs["predicted_doublet"] = False
+    report = []
+    if method == "none":
+        report.append({"sample_id": "all", "method": "none", "cells_before": adata.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Doublet removal disabled"})
+        pd.DataFrame(report).to_csv(tables / "doublet_summary_by_sample.tsv", sep="\t", index=False)
+        calls = adata.obs[["sample_id", "doublet_score", "predicted_doublet"]].copy()
+        calls.insert(0, "cell", adata.obs_names)
+        calls["removed_as_doublet"] = False
+        calls.to_csv(tables / "doublet_calls.tsv", sep="\t", index=False)
+        adata.uns["codespring_doublets_removed"] = 0
+        return adata
+    sample_col = "sample_id" if "sample_id" in adata.obs else None
+    groups = [(str(name), list(idx)) for name, idx in adata.obs.groupby(sample_col, observed=True).groups.items()] if sample_col else [("all", list(adata.obs_names))]
+    for sample_id, cells in groups:
+        sub = adata[cells].copy()
+        # Scrublet is not informative on very small partitions. Do not invent
+        # calls; retain these cells and record why in the summary.
+        if sub.n_obs < 100 or sub.n_vars < 20:
+            report.append({"sample_id": sample_id, "method": "scrublet", "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Skipped: fewer than 100 cells or 20 genes"})
+            continue
+        try:
+            # The internal Scrublet feature filter can leave fewer than 30
+            # dimensions, so choose a conservative PC count for small runs.
+            scrublet_pcs = min(20, max(2, min(sub.n_obs, sub.n_vars) - 2))
+            sc.pp.scrublet(sub, expected_doublet_rate=p["doublet_rate"], n_prin_comps=scrublet_pcs, random_state=p["seed"], verbose=False)
+            adata.obs.loc[sub.obs_names, "doublet_score"] = pd.to_numeric(sub.obs["doublet_score"], errors="coerce").values
+            predicted = sub.obs["predicted_doublet"].astype(bool)
+            adata.obs.loc[sub.obs_names, "predicted_doublet"] = predicted.values
+            predicted_n = int(predicted.sum())
+            report.append({"sample_id": sample_id, "method": "scrublet", "cells_before": sub.n_obs, "predicted_doublets": predicted_n, "removed_doublets": predicted_n if p["remove_doublets"] else 0, "note": ""})
+        except Exception as exc:
+            if method == "scrublet":
+                raise SystemExit(f"Scrublet failed for {sample_id}: {exc}") from exc
+            report.append({"sample_id": sample_id, "method": "scrublet", "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": f"Automatic Scrublet skipped after error: {exc}"})
+    adata.obs["predicted_doublet"] = adata.obs["predicted_doublet"].astype(bool)
+    save_doublet_plot(adata, figures)
+    pd.DataFrame(report).to_csv(tables / "doublet_summary_by_sample.tsv", sep="\t", index=False)
+    calls = adata.obs[["sample_id", "doublet_score", "predicted_doublet"]].copy()
+    calls.insert(0, "cell", adata.obs_names)
+    calls["removed_as_doublet"] = calls["predicted_doublet"] & p["remove_doublets"]
+    calls.to_csv(tables / "doublet_calls.tsv", sep="\t", index=False)
+    adata.uns["codespring_doublets_removed"] = int(calls["removed_as_doublet"].sum())
+    if p["remove_doublets"]:
+        adata = adata[~adata.obs["predicted_doublet"]].copy()
+    if adata.n_obs == 0:
+        raise SystemExit("Doublet removal removed every cell; use a lower expected doublet rate or review the input data.")
+    return adata
+
+
 def apply_celltype_mapping(adata, path: Path):
     tab = read_table(path)
     cell_col = next((x for x in ["cell", "cell_id", "barcode", "Cell", "CellID"] if x in tab.columns), None)
@@ -231,18 +308,24 @@ def main():
     adata.var_names_make_unique()
     adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
     sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], inplace=True, percent_top=None, log1p=False)
-    keep = (adata.obs["n_genes_by_counts"] >= p["min_features"]) & (adata.obs["pct_counts_mt"] <= p["max_percent_mt"])
+    cells_before_qc = adata.obs.groupby("sample_id", observed=True).size().rename("cells_input")
+    keep = (adata.obs["n_genes_by_counts"] >= p["min_features"]) & (adata.obs["total_counts"] >= p["min_counts"]) & (adata.obs["pct_counts_mt"] <= p["max_percent_mt"])
     if p["max_features"] > 0:
         keep &= adata.obs["n_genes_by_counts"] <= p["max_features"]
     adata = adata[keep].copy()
     if adata.n_obs == 0:
         raise SystemExit("QC thresholds removed every cell.")
+    # Run doublet detection on raw counts after initial QC and before every
+    # expression transformation or integration step.
+    adata = run_scrublet(adata, p, tables, figures)
     sc.pp.filter_genes(adata, min_cells=p["min_cells_per_gene"])
     adata.layers["counts"] = adata.X.copy()
-    qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt"]].copy()
+    qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt", "doublet_score", "predicted_doublet"]].copy()
     qc.insert(0, "cell", adata.obs_names)
     qc.to_csv(tables / "qc_cell_metrics.tsv", sep="\t")
-    qc.groupby("sample_id", observed=True).agg(cells_after_qc=("total_counts", "size"), median_umis=("total_counts", "median"), median_genes=("n_genes_by_counts", "median"), median_percent_mt=("pct_counts_mt", "median")).reset_index().to_csv(tables / "qc_summary_by_sample.tsv", sep="\t", index=False)
+    qc_summary = qc.groupby("sample_id", observed=True).agg(cells_after_qc_and_doublets=("total_counts", "size"), median_umis=("total_counts", "median"), median_genes=("n_genes_by_counts", "median"), median_percent_mt=("pct_counts_mt", "median")).reset_index()
+    qc_summary.insert(1, "cells_input", qc_summary["sample_id"].map(cells_before_qc).astype(int))
+    qc_summary.to_csv(tables / "qc_summary_by_sample.tsv", sep="\t", index=False)
     save_qc_plots(adata, figures)
 
     sc.pp.normalize_total(adata, target_sum=1e4)
@@ -252,6 +335,10 @@ def main():
         sc.pp.highly_variable_genes(adata, n_top_genes=min(3000, adata.n_vars), flavor="seurat_v3", layer="counts")
     except Exception:
         sc.pp.highly_variable_genes(adata, n_top_genes=min(3000, adata.n_vars), flavor="cell_ranger")
+    hvg_table = adata.var.copy()
+    hvg_table.insert(0, "gene", hvg_table.index.astype(str))
+    hvg_columns = [c for c in ["gene", "highly_variable", "means", "variances", "variances_norm"] if c in hvg_table.columns]
+    hvg_table.loc[:, hvg_columns].to_csv(tables / "highly_variable_genes.tsv", sep="\t", index=False)
     # Do not densify a real sparse count matrix: preserving sparsity is vital
     # for practical single-cell jobs with tens of thousands of genes.
     sc.pp.scale(adata, zero_center=False, max_value=10)
@@ -261,11 +348,16 @@ def main():
     max_pcs = max(1, min(adata.n_obs - 1, pca_features - 1))
     n_pcs = min(p["n_pcs"], max_pcs)
     sc.tl.pca(adata, n_comps=n_pcs, svd_solver="arpack", use_highly_variable=use_hvg, zero_center=False)
+    pca_ratio = np.asarray(adata.uns["pca"]["variance_ratio"]).ravel()
+    pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
     integration = p["integration"]
-    if integration == "auto":
-        integration = "scvi" if samples.shape[0] > 1 else "none"
-    representation = "X_pca"
     batch_key = p["batch_column"] if p["batch_column"] in adata.obs.columns else "sample_id"
+    batch_count = int(adata.obs[batch_key].astype(str).nunique())
+    if integration == "auto":
+        integration = "scvi" if p["batch_column"] in adata.obs.columns and batch_count > 1 else "none"
+    if integration in {"scvi", "harmony"} and batch_count < 2:
+        raise SystemExit(f"{integration} integration requires at least two values in the selected batch column ({batch_key}). Choose none or supply the appropriate technical batch column.")
+    representation = "X_pca"
     if integration == "scvi" and samples.shape[0] > 1:
         try:
             import scvi
@@ -309,6 +401,7 @@ def main():
     adata.write_h5ad(objects / "processed_scanpy.h5ad", compression="gzip")
     (out_dir / "run_summary.txt").write_text("\n".join([
         "engine: scanpy", "normalization: lognormalize", f"integration: {integration}",
+        f"doublet_method: {p['doublet_method']}", f"doublets_removed: {int(adata.uns.get('codespring_doublets_removed', 0))}",
         f"input_samples: {samples.shape[0]}", f"cells_after_qc: {adata.n_obs}",
         f"clusters: {adata.obs['cluster'].nunique()}", f"annotation_source: {adata.obs['annotation_source'].iloc[0]}",
     ]) + "\n")

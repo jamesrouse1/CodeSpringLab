@@ -23,11 +23,21 @@ because repeating QC and normalization on processed values is not valid.
 
 ## Processing
 
-The workflow writes raw-count-preserving processed objects plus QC metrics,
-UMAPs, clusters, annotations, and cluster-marker tables. Seurat defaults to
-SCTransform v2 with RPCA integration for multiple samples. Scanpy defaults to
-log-normalization with scVI integration for multiple samples. Both defaults can
-be changed in CodeSpringApp when the study design justifies it.
+The workflow performs initial per-sample QC, optional doublet detection,
+gene filtering, normalization, highly-variable-gene selection, scaling,
+integration when a genuine technical batch column is supplied, PCA,
+neighbors/UMAP, clustering, annotation, and cluster markers. It retains raw
+counts in the processed output. Seurat defaults to SCTransform v2 and Scanpy
+to log-normalization. In automatic mode, integration is used only when the
+selected batch column contains more than one value; sample count alone does
+not trigger batch correction.
+
+Doublets are detected after initial cell QC and before normalization or
+integration. Scanpy uses per-sample Scrublet and requires the Scanpy Scrublet
+dependencies (including `scikit-image`). Seurat uses `scDblFinder`, which must
+be installed in the R environment (for example, with
+`BiocManager::install("scDblFinder")`). Every run writes a per-cell call table,
+a per-sample summary, and a score distribution when scores are available.
 
 For annotation, use either:
 
@@ -41,8 +51,8 @@ best-scoring label is assigned to each cluster.
 ## Output layout
 
 - `figures/`: QC and UMAP figures;
-- `tables/`: per-cell QC, per-sample QC, metadata, marker, and annotation
-  tables;
+- `tables/`: per-cell QC, per-sample QC, doublet calls, highly-variable genes,
+  PCA variance, metadata, marker, and annotation tables;
 - `objects/`: processed Seurat RDS or AnnData H5AD;
 - `run_summary.txt`: processing choices and cell/cluster counts;
 - `_COMPLETE`: written only after a successful workflow.

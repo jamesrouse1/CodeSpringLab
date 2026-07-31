@@ -37,6 +37,7 @@ read_params <- function(path) {
   if (!all(c("key", "value") %in% names(x))) stop("Parameter file must contain key and value columns.")
   values <- as.list(as.character(x$value)); names(values) <- as.character(x$key)
   get <- function(key, default = "") trimws(as.character(values[[key]] %||% default))
+  get_bool <- function(key, default = FALSE) tolower(get(key, if (default) "true" else "false")) %in% c("1", "true", "t", "yes", "y")
   list(
     normalization = tolower(get("normalization", "sct")),
     integration = tolower(get("integration", "auto")),
@@ -44,9 +45,13 @@ read_params <- function(path) {
     cluster_resolution = suppressWarnings(as.numeric(get("cluster_resolution", "0.6"))),
     n_pcs = suppressWarnings(as.integer(get("n_pcs", "30"))),
     min_features = suppressWarnings(as.integer(get("min_features", "200"))),
+    min_counts = suppressWarnings(as.integer(get("min_counts", "0"))),
     max_features = suppressWarnings(as.integer(get("max_features", "0"))),
     max_percent_mt = suppressWarnings(as.numeric(get("max_percent_mt", "20"))),
     min_cells_per_gene = suppressWarnings(as.integer(get("min_cells_per_gene", "3"))),
+    doublet_method = tolower(get("doublet_method", "none")),
+    doublet_rate = suppressWarnings(as.numeric(get("doublet_rate", "0.05"))),
+    remove_doublets = get_bool("remove_doublets", TRUE),
     marker_file = get("marker_file", ""),
     celltype_file = get("celltype_file", ""),
     seed = suppressWarnings(as.integer(get("seed", "1234")))
@@ -59,9 +64,12 @@ if (!params$integration %in% c("auto", "none", "rpca", "cca")) stop("integration
 if (!is.finite(params$cluster_resolution) || params$cluster_resolution <= 0) params$cluster_resolution <- 0.6
 if (!is.finite(params$n_pcs) || params$n_pcs < 5) params$n_pcs <- 30L
 if (!is.finite(params$min_features) || params$min_features < 0) params$min_features <- 200L
+if (!is.finite(params$min_counts) || params$min_counts < 0) params$min_counts <- 0L
 if (!is.finite(params$max_features) || params$max_features < 0) params$max_features <- 0L
 if (!is.finite(params$max_percent_mt) || params$max_percent_mt < 0) params$max_percent_mt <- 20
 if (!is.finite(params$min_cells_per_gene) || params$min_cells_per_gene < 1) params$min_cells_per_gene <- 3L
+if (!params$doublet_method %in% c("auto", "none", "scdblfinder")) stop("doublet_method must be auto, none, or scDblFinder")
+if (!is.finite(params$doublet_rate) || params$doublet_rate < 0 || params$doublet_rate >= 1) params$doublet_rate <- 0.05
 if (!is.finite(params$seed)) params$seed <- 1234L
 set.seed(params$seed)
 
@@ -131,25 +139,72 @@ read_one <- function(row) {
 
 objects <- lapply(seq_len(NROW(samples)), function(i) read_one(as.list(samples[i, , drop = FALSE])))
 names(objects) <- samples$sample_id
+cells_before_qc <- vapply(objects, ncol, numeric(1))
 
 qc_one <- function(obj) {
   genes <- rownames(obj)
   mt <- grep("^(MT-|mt-)", genes, value = TRUE)
   obj[["percent.mt"]] <- if (length(mt)) Seurat::PercentageFeatureSet(obj, features = mt) else rep(0, ncol(obj))
-  keep <- obj$nFeature_RNA >= params$min_features & obj$percent.mt <= params$max_percent_mt
+  keep <- obj$nFeature_RNA >= params$min_features & obj$nCount_RNA >= params$min_counts & obj$percent.mt <= params$max_percent_mt
   if (params$max_features > 0) keep <- keep & obj$nFeature_RNA <= params$max_features
   if (!any(keep)) stop("QC thresholds removed every cell in sample ", unique(obj$sample_id)[1], ".")
   subset(obj, cells = colnames(obj)[keep])
 }
 objects <- lapply(objects, qc_one)
 
+run_doublet_one <- function(obj) {
+  sample_id <- unique(as.character(obj$sample_id))[[1]]
+  obj$doublet_score <- NA_real_
+  obj$predicted_doublet <- FALSE
+  if (identical(params$doublet_method, "none")) {
+    return(list(
+      object = obj,
+      calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
+      summary = data.frame(sample_id = sample_id, method = "none", cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Doublet removal disabled")
+    ))
+  }
+  if (!requireNamespace("scDblFinder", quietly = TRUE)) {
+    stop("Doublet removal with the Seurat engine requires the Bioconductor package scDblFinder. Install it, choose the Scanpy/Scrublet engine, or explicitly select no doublet removal.")
+  }
+  if (ncol(obj) < 100L || nrow(obj) < 20L) {
+    return(list(
+      object = obj,
+      calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
+      summary = data.frame(sample_id = sample_id, method = "scDblFinder", cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Skipped: fewer than 100 cells or 20 genes")
+    ))
+  }
+  sce <- Seurat::as.SingleCellExperiment(obj, assay = "RNA")
+  sce <- scDblFinder::scDblFinder(sce, dbr = params$doublet_rate)
+  score <- as.numeric(SummarizedExperiment::colData(sce)[["scDblFinder.score"]])
+  call <- as.character(SummarizedExperiment::colData(sce)[["scDblFinder.class"]]) == "doublet"
+  obj$doublet_score <- score
+  obj$predicted_doublet <- call
+  calls <- data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = score, predicted_doublet = call,
+                      removed_as_doublet = call & params$remove_doublets, stringsAsFactors = FALSE)
+  summary <- data.frame(sample_id = sample_id, method = "scDblFinder", cells_before = ncol(obj),
+                        predicted_doublets = sum(call), removed_doublets = if (params$remove_doublets) sum(call) else 0L, note = "", stringsAsFactors = FALSE)
+  if (params$remove_doublets) obj <- subset(obj, cells = colnames(obj)[!call])
+  if (!ncol(obj)) stop("Doublet removal removed every cell in sample ", sample_id, ".")
+  list(object = obj, calls = calls, summary = summary)
+}
+
+# Doublet detection is deliberately placed after initial per-sample QC and
+# before normalization, feature selection, integration, and clustering.
+doublet_runs <- lapply(objects, run_doublet_one)
+objects <- lapply(doublet_runs, `[[`, "object")
+doublet_calls <- do.call(rbind, lapply(doublet_runs, `[[`, "calls"))
+doublet_summary <- do.call(rbind, lapply(doublet_runs, `[[`, "summary"))
+utils::write.table(doublet_calls, file.path(tables_dir, "doublet_calls.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+utils::write.table(doublet_summary, file.path(tables_dir, "doublet_summary_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+
 qc_cells <- do.call(rbind, lapply(objects, function(obj) {
   data.frame(cell = colnames(obj), sample_id = as.character(obj$sample_id), condition = as.character(obj$condition %||% ""),
-             nCount_RNA = obj$nCount_RNA, nFeature_RNA = obj$nFeature_RNA, percent.mt = obj$percent.mt, stringsAsFactors = FALSE)
+             nCount_RNA = obj$nCount_RNA, nFeature_RNA = obj$nFeature_RNA, percent.mt = obj$percent.mt,
+             doublet_score = obj$doublet_score, predicted_doublet = obj$predicted_doublet, stringsAsFactors = FALSE)
 }))
 utils::write.table(qc_cells, file.path(tables_dir, "qc_cell_metrics.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 qc_by_sample <- do.call(rbind, lapply(split(qc_cells, qc_cells$sample_id), function(x) data.frame(
-  sample_id = x$sample_id[1], cells_after_qc = NROW(x), median_umis = stats::median(x$nCount_RNA),
+  sample_id = x$sample_id[1], cells_input = unname(cells_before_qc[x$sample_id[1]]), cells_after_qc_and_doublets = NROW(x), median_umis = stats::median(x$nCount_RNA),
   median_genes = stats::median(x$nFeature_RNA), median_percent_mt = stats::median(x$percent.mt), stringsAsFactors = FALSE
 )))
 utils::write.table(qc_by_sample, file.path(tables_dir, "qc_summary_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
@@ -159,9 +214,22 @@ qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
 DefaultAssay(qc_merged) <- "RNA"
 save_plot(Seurat::VlnPlot(qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", ncol = 3, pt.size = 0), "01_qc_violin.png", 14, 5)
 save_plot(Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt") + Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"), "02_qc_scatter.png", 12, 5)
+if (any(is.finite(doublet_calls$doublet_score))) {
+  doublet_plot <- ggplot2::ggplot(doublet_calls[is.finite(doublet_calls$doublet_score), , drop = FALSE], ggplot2::aes(x = doublet_score)) +
+    ggplot2::geom_histogram(bins = 40, fill = "#5b7db1", color = "white") +
+    ggplot2::labs(title = "Doublet-score distribution before removal", x = "Doublet score", y = "Cells") +
+    ggplot2::theme_classic()
+  save_plot(doublet_plot, "02b_doublet_scores.png", 7, 4.5)
+}
 
 integration <- params$integration
-if (identical(integration, "auto")) integration <- if (length(objects) > 1L) "rpca" else "none"
+batch_values <- unlist(lapply(objects, function(obj) {
+  if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
+}), use.names = FALSE)
+if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "rpca" else "none"
+if (integration %in% c("rpca", "cca") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
+  stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
+}
 used_reduction <- "pca"
 integration_k_weight <- max(5L, min(50L, floor(min(vapply(objects, ncol, numeric(1))) / 2)))
 if (identical(params$normalization, "sct")) {
@@ -203,6 +271,14 @@ if (identical(params$normalization, "sct")) {
 }
 
 n_available <- ncol(Seurat::Embeddings(obj, "pca")); dims <- seq_len(min(params$n_pcs, n_available))
+pca_stdev <- Seurat::Stdev(obj, reduction = "pca")
+pca_variance <- (pca_stdev ^ 2) / sum(pca_stdev ^ 2)
+utils::write.table(data.frame(PC = seq_along(pca_variance), variance_explained = pca_variance,
+                              percent_variance_explained = 100 * pca_variance),
+                   file.path(tables_dir, "pca_variance_explained.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+variable_genes <- Seurat::VariableFeatures(obj)
+utils::write.table(data.frame(gene = variable_genes, highly_variable = TRUE), file.path(tables_dir, "highly_variable_genes.tsv"),
+                   sep = "\t", row.names = FALSE, quote = FALSE)
 obj <- Seurat::FindNeighbors(obj, reduction = "pca", dims = dims, verbose = FALSE)
 obj <- Seurat::FindClusters(obj, resolution = params$cluster_resolution, verbose = FALSE)
 obj <- Seurat::RunUMAP(obj, reduction = "pca", dims = dims, seed.use = params$seed, verbose = FALSE)
@@ -282,6 +358,7 @@ utils::write.table(cluster_sizes, file.path(tables_dir, "cluster_cell_type_sizes
 saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
 summary_lines <- c(
   paste("engine: seurat"), paste("normalization:", params$normalization), paste("integration:", integration),
+  paste("doublet_method:", params$doublet_method), paste("doublets_removed:", sum(doublet_summary$removed_doublets)),
   paste("input_samples:", NROW(samples)), paste("cells_after_qc:", ncol(obj)), paste("clusters:", length(unique(obj$cluster))),
   paste("annotation_source:", unique(obj$annotation_source)[1]), paste("generated:", as.character(Sys.time()))
 )
