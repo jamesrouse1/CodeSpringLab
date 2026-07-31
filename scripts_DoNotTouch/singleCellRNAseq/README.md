@@ -7,7 +7,8 @@ keeps source inputs read-only and writes every result below the project's
 ## Inputs
 
 In CodeSpringApp, a manifest is optional: start by selecting one raw-count
-input and sample ID, then add or edit further rows in the project-local
+input, and CodeSpring derives an editable sample ID from its file or folder
+name. You can then add or edit further rows in the project-local
 manifest. You can instead provide a tab-delimited manifest with `sample_id`
 and `input_path` columns when it already exists. Each row can point to one of
 the following raw-count inputs:
@@ -28,15 +29,8 @@ submitted as one SLURM job and the selected engine is passed explicitly to its
 job wrapper. The wrapper loads the standard cluster R module for Seurat or the
 standard Anaconda module for Scanpy only inside that compute job.
 
-If your HPC Scanpy or Seurat installation is in a different environment,
-enter its executable in **Optional custom runtime executable** in the app:
-
-- Seurat: the full path to the appropriate `Rscript` executable.
-- Scanpy: the full path to the environment's `python` executable.
-
-The app verifies that path before submission and records it with the run
-parameters. The job checks essential packages before loading a large object,
-so a missing runtime is reported promptly in the job log.
+The job checks essential packages before loading a large object, so a missing
+cluster dependency is reported promptly in the job log.
 
 The Scanpy engine requires raw counts in `X`, `layers['counts']`/`layers['raw']`, or `raw`.
 It stops with an explanatory error when only normalized expression is present,
