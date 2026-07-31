@@ -377,189 +377,213 @@ def apply_existing_annotation(adata):
 
 
 def main():
-    if len(sys.argv) != 4:
-        raise SystemExit("Usage: scrna_pipeline_scanpy.py <samples.tsv> <out_dir> <params.tsv>")
-    samples_path, out_dir, params_path = map(Path, sys.argv[1:])
+    if len(sys.argv) not in {4, 5}:
+        raise SystemExit("Usage: scrna_pipeline_scanpy.py <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|all]")
+    samples_path, out_dir, params_path = map(Path, sys.argv[1:4])
+    stage = sys.argv[4].lower() if len(sys.argv) == 5 else "all"
+    stages = {"inspect", "qc", "preprocess", "cluster", "annotate", "all"}
+    if stage not in stages:
+        raise SystemExit("Unknown scRNA stage: " + stage)
     out_dir.mkdir(parents=True, exist_ok=True)
-    tables = out_dir / "tables"; figures = out_dir / "figures"; objects = out_dir / "objects"
-    for d in (tables, figures, objects): d.mkdir(parents=True, exist_ok=True)
+    tables = out_dir / "tables"; figures = out_dir / "figures"; objects = out_dir / "objects"; checkpoints = out_dir / "checkpoints"
+    for d in (tables, figures, objects, checkpoints): d.mkdir(parents=True, exist_ok=True)
     p = params_from(params_path)
     if p["normalization"] not in {"lognormalize", "log1p"}:
         raise SystemExit("The Scanpy engine supports LogNormalize/log1p normalization. Use the Seurat engine for SCTransform.")
     if p["integration"] not in {"auto", "none", "scvi", "harmony"}:
         raise SystemExit("Scanpy integration must be auto, none, scvi, or harmony.")
     np.random.seed(p["seed"])
-    samples = read_table(samples_path)
-    if not {"sample_id", "input_path"}.issubset(samples.columns):
-        raise SystemExit("Sample manifest requires sample_id and input_path columns.")
-    samples = samples[(samples.sample_id.str.strip() != "") & (samples.input_path.str.strip() != "")].copy()
-    if samples.empty:
-        raise SystemExit("No valid sample rows were supplied.")
-    samples["sample_id"] = samples["sample_id"].astype(str).str.strip()
-    if samples["sample_id"].duplicated().any():
-        duplicates = ", ".join(samples.loc[samples["sample_id"].duplicated(), "sample_id"].unique())
-        raise SystemExit(f"sample_id values must be unique in the input manifest: {duplicates}")
-    samples.to_csv(tables / "sample_manifest_used.tsv", sep="\t", index=False)
-    inputs = [read_one(row, figures) for row in samples.itertuples(index=False)]
-    obs = [item[0] for item in inputs]
-    input_status = pd.DataFrame([item[1] for item in inputs])
-    input_status.to_csv(tables / "input_processing_detected.tsv", sep="\t", index=False)
-    adata = ad.concat(obs, join="outer", merge="same", index_unique=None, fill_value=0)
-    adata.var_names_make_unique()
-    adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
-    sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], inplace=True, percent_top=None, log1p=False)
-    cells_before_qc = adata.obs.groupby("sample_id", observed=True).size().rename("cells_input")
-    keep = (adata.obs["n_genes_by_counts"] >= p["min_features"]) & (adata.obs["total_counts"] >= p["min_counts"]) & (adata.obs["pct_counts_mt"] <= p["max_percent_mt"])
-    if p["max_features"] > 0:
-        keep &= adata.obs["n_genes_by_counts"] <= p["max_features"]
-    adata = adata[keep].copy()
-    if adata.n_obs == 0:
-        raise SystemExit("QC thresholds removed every cell.")
-    # Run doublet detection on raw counts after initial QC and before every
-    # expression transformation or integration step.
-    adata = run_scrublet(adata, p, tables, figures)
-    # Filter low-detection genes within each input sample, retaining the union
-    # across samples. This avoids a deeply sequenced library rescuing a gene
-    # that is effectively absent from every other library while retaining
-    # legitimate sample-specific biology for later integration.
-    gene_keep = np.zeros(adata.n_vars, dtype=bool)
-    feature_reports = []
-    for sample_id, cells in adata.obs.groupby("sample_id", observed=True).groups.items():
-        sub = adata[list(cells)]
-        detected_cells = np.asarray((sub.X > 0).sum(axis=0)).ravel()
-        keep_here = detected_cells >= p["min_cells_per_gene"]
-        gene_keep |= keep_here
-        feature_reports.append({
-            "sample_id": str(sample_id),
-            "genes_before_filtering": int(adata.n_vars),
-            "min_cells_per_gene": p["min_cells_per_gene"],
-            "genes_retained": int(keep_here.sum()),
-        })
-    if not gene_keep.any():
-        raise SystemExit("Minimum cells per retained gene removed every gene.")
-    adata = adata[:, gene_keep].copy()
-    pd.DataFrame(feature_reports).to_csv(tables / "feature_filtering_by_sample.tsv", sep="\t", index=False)
-    adata.layers["counts"] = adata.X.copy()
-    qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt", "doublet_score", "predicted_doublet"]].copy()
-    qc.insert(0, "cell", adata.obs_names)
-    qc.to_csv(tables / "qc_cell_metrics.tsv", sep="\t")
-    qc_summary = qc.groupby("sample_id", observed=True).agg(cells_after_qc_and_doublets=("total_counts", "size"), median_umis=("total_counts", "median"), median_genes=("n_genes_by_counts", "median"), median_percent_mt=("pct_counts_mt", "median")).reset_index()
-    qc_summary.insert(1, "cells_input", qc_summary["sample_id"].map(cells_before_qc).astype(int))
-    qc_summary.to_csv(tables / "qc_summary_by_sample.tsv", sep="\t", index=False)
-    save_qc_plots(adata, figures)
+    input_checkpoint = checkpoints / "01_input_scanpy.h5ad"
+    qc_checkpoint = checkpoints / "02_qc_scanpy.h5ad"
+    preprocess_checkpoint = checkpoints / "03_preprocessed_scanpy.h5ad"
+    cluster_checkpoint = checkpoints / "04_clustered_scanpy.h5ad"
 
-    sc.pp.normalize_total(adata, target_sum=1e4)
-    sc.pp.log1p(adata)
-    adata.raw = adata
-    # When a true technical batch is selected, choose HVGs across batches so
-    # the feature set is not dominated by a single library before integration.
-    # This follows Scanpy's batch-aware Seurat-v3 implementation; with no
-    # technical batch, retain the ordinary pooled-HVG workflow.
-    hvg_batch_key = p["batch_column"] if p["batch_column"] in adata.obs.columns and adata.obs[p["batch_column"]].astype(str).nunique() > 1 else None
-    hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars), "layer": "counts"}
-    fallback_hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars)}
-    if hvg_batch_key is not None:
-        hvg_kwargs["batch_key"] = hvg_batch_key
-        fallback_hvg_kwargs["batch_key"] = hvg_batch_key
-    try:
-        sc.pp.highly_variable_genes(adata, flavor="seurat_v3", **hvg_kwargs)
-    except Exception:
-        sc.pp.highly_variable_genes(adata, flavor="cell_ranger", **fallback_hvg_kwargs)
-    hvg_table = adata.var.copy()
-    hvg_table.insert(0, "gene", hvg_table.index.astype(str))
-    hvg_columns = [c for c in ["gene", "highly_variable", "means", "variances", "variances_norm"] if c in hvg_table.columns]
-    hvg_table.loc[:, hvg_columns].to_csv(tables / "highly_variable_genes.tsv", sep="\t", index=False)
-    # Do not densify a real sparse count matrix: preserving sparsity is vital
-    # for practical single-cell jobs with tens of thousands of genes.
-    sc.pp.scale(adata, zero_center=False, max_value=10)
-    hvg_count = int(adata.var["highly_variable"].sum()) if "highly_variable" in adata.var else 0
-    use_hvg = hvg_count >= 2
-    pca_features = hvg_count if use_hvg else adata.n_vars
-    max_pcs = max(1, min(adata.n_obs - 1, pca_features - 1))
-    n_pcs = min(p["n_pcs"], max_pcs)
-    sc.tl.pca(adata, n_comps=n_pcs, svd_solver="arpack", use_highly_variable=use_hvg, zero_center=False)
-    pca_ratio = np.asarray(adata.uns["pca"]["variance_ratio"]).ravel()
-    pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
-    integration = p["integration"]
-    batch_key = p["batch_column"] if p["batch_column"] in adata.obs.columns else "sample_id"
-    batch_count = int(adata.obs[batch_key].astype(str).nunique())
-    if integration == "auto":
-        integration = "scvi" if p["batch_column"] in adata.obs.columns and batch_count > 1 else "none"
-    if integration in {"scvi", "harmony"} and batch_count < 2:
-        raise SystemExit(f"{integration} integration requires at least two values in the selected batch column ({batch_key}). Choose none or supply the appropriate technical batch column.")
-    representation = "X_pca"
-    # A single AnnData object can still contain multiple technical batches.
-    # Integrate based on the selected metadata values, not merely the number
-    # of manifest rows, so imported atlas objects behave like multi-folder
-    # inputs.
-    if integration == "scvi" and batch_count > 1:
+    def mark_complete(name):
+        (out_dir / f"_STAGE_{name.upper()}_COMPLETE").write_text("complete\n")
+
+    def require_checkpoint(path: Path, prior: str):
+        if not path.exists():
+            raise SystemExit(f"The {prior} stage has not completed. Run {prior} before this stage.")
+        return sc.read_h5ad(path)
+
+    # Stage 1: inspect each source object and preserve a raw-count checkpoint.
+    if stage in {"inspect", "all"}:
+        samples = read_table(samples_path)
+        if not {"sample_id", "input_path"}.issubset(samples.columns):
+            raise SystemExit("Sample manifest requires sample_id and input_path columns.")
+        samples = samples[(samples.sample_id.str.strip() != "") & (samples.input_path.str.strip() != "")].copy()
+        if samples.empty:
+            raise SystemExit("No valid sample rows were supplied.")
+        samples["sample_id"] = samples["sample_id"].astype(str).str.strip()
+        if samples["sample_id"].duplicated().any():
+            duplicates = ", ".join(samples.loc[samples["sample_id"].duplicated(), "sample_id"].unique())
+            raise SystemExit(f"sample_id values must be unique in the input manifest: {duplicates}")
+        samples.to_csv(tables / "sample_manifest_used.tsv", sep="\t", index=False)
+        inputs = [read_one(row, figures) for row in samples.itertuples(index=False)]
+        adata = ad.concat([item[0] for item in inputs], join="outer", merge="same", index_unique=None, fill_value=0)
+        adata.var_names_make_unique()
+        pd.DataFrame([item[1] for item in inputs]).to_csv(tables / "input_processing_detected.tsv", sep="\t", index=False)
+        adata.write_h5ad(input_checkpoint, compression="gzip")
+        mark_complete("inspect")
+        if stage == "inspect":
+            return
+    else:
+        adata = require_checkpoint(input_checkpoint, "input inspection")
+        samples = read_table(samples_path)
+
+    # Stage 2: filter cells/genes and handle doublets while the data is raw.
+    if stage in {"qc", "all"}:
+        adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
+        sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], inplace=True, percent_top=None, log1p=False)
+        cells_before_qc = adata.obs.groupby("sample_id", observed=True).size().rename("cells_input")
+        keep = (adata.obs["n_genes_by_counts"] >= p["min_features"]) & (adata.obs["total_counts"] >= p["min_counts"]) & (adata.obs["pct_counts_mt"] <= p["max_percent_mt"])
+        if p["max_features"] > 0:
+            keep &= adata.obs["n_genes_by_counts"] <= p["max_features"]
+        adata = adata[keep].copy()
+        if adata.n_obs == 0:
+            raise SystemExit("QC thresholds removed every cell.")
+        adata = run_scrublet(adata, p, tables, figures)
+        gene_keep = np.zeros(adata.n_vars, dtype=bool)
+        feature_reports = []
+        for sample_id, cells in adata.obs.groupby("sample_id", observed=True).groups.items():
+            sub = adata[list(cells)]
+            detected_cells = np.asarray((sub.X > 0).sum(axis=0)).ravel()
+            keep_here = detected_cells >= p["min_cells_per_gene"]
+            gene_keep |= keep_here
+            feature_reports.append({"sample_id": str(sample_id), "genes_before_filtering": int(adata.n_vars), "min_cells_per_gene": p["min_cells_per_gene"], "genes_retained": int(keep_here.sum())})
+        if not gene_keep.any():
+            raise SystemExit("Minimum cells per retained gene removed every gene.")
+        adata = adata[:, gene_keep].copy()
+        pd.DataFrame(feature_reports).to_csv(tables / "feature_filtering_by_sample.tsv", sep="\t", index=False)
+        adata.layers["counts"] = adata.X.copy()
+        qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt", "doublet_score", "predicted_doublet"]].copy()
+        qc.insert(0, "cell", adata.obs_names)
+        qc.to_csv(tables / "qc_cell_metrics.tsv", sep="\t", index=False)
+        qc_summary = qc.groupby("sample_id", observed=True).agg(cells_after_qc_and_doublets=("total_counts", "size"), median_umis=("total_counts", "median"), median_genes=("n_genes_by_counts", "median"), median_percent_mt=("pct_counts_mt", "median")).reset_index()
+        qc_summary.insert(1, "cells_input", qc_summary["sample_id"].map(cells_before_qc).astype(int))
+        qc_summary.to_csv(tables / "qc_summary_by_sample.tsv", sep="\t", index=False)
+        save_qc_plots(adata, figures)
+        adata.write_h5ad(qc_checkpoint, compression="gzip")
+        mark_complete("qc")
+        if stage == "qc":
+            return
+    elif stage not in {"inspect"}:
+        adata = require_checkpoint(qc_checkpoint, "QC and doublet handling")
+
+    # Stage 3: normalization, highly variable features, scaling, and PCA.
+    if stage in {"preprocess", "all"}:
+        sc.pp.normalize_total(adata, target_sum=1e4)
+        sc.pp.log1p(adata)
+        adata.raw = adata
+        hvg_batch_key = p["batch_column"] if p["batch_column"] in adata.obs.columns and adata.obs[p["batch_column"]].astype(str).nunique() > 1 else None
+        hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars), "layer": "counts"}
+        fallback_hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars)}
+        if hvg_batch_key is not None:
+            hvg_kwargs["batch_key"] = hvg_batch_key
+            fallback_hvg_kwargs["batch_key"] = hvg_batch_key
         try:
-            import scvi
-        except ImportError as exc:
-            raise SystemExit("scVI integration was requested but scvi-tools is unavailable. Install scvi-tools or choose Harmony/none.") from exc
-        scvi.model.SCVI.setup_anndata(adata, layer="counts", batch_key=batch_key)
-        model = scvi.model.SCVI(adata, n_latent=min(30, p["n_pcs"]))
-        model.train(max_epochs=p["scvi_max_epochs"], early_stopping=True)
-        adata.obsm["X_scVI"] = model.get_latent_representation()
-        representation = "X_scVI"
-    elif integration == "harmony" and batch_count > 1:
+            sc.pp.highly_variable_genes(adata, flavor="seurat_v3", **hvg_kwargs)
+        except Exception:
+            sc.pp.highly_variable_genes(adata, flavor="cell_ranger", **fallback_hvg_kwargs)
+        hvg_table = adata.var.copy(); hvg_table.insert(0, "gene", hvg_table.index.astype(str))
+        hvg_columns = [c for c in ["gene", "highly_variable", "means", "variances", "variances_norm"] if c in hvg_table.columns]
+        hvg_table.loc[:, hvg_columns].to_csv(tables / "highly_variable_genes.tsv", sep="\t", index=False)
+        sc.pp.scale(adata, zero_center=False, max_value=10)
+        hvg_count = int(adata.var["highly_variable"].sum()) if "highly_variable" in adata.var else 0
+        use_hvg = hvg_count >= 2
+        pca_features = hvg_count if use_hvg else adata.n_vars
+        max_pcs = max(1, min(adata.n_obs - 1, pca_features - 1))
+        n_pcs = min(p["n_pcs"], max_pcs)
+        sc.tl.pca(adata, n_comps=n_pcs, svd_solver="arpack", use_highly_variable=use_hvg, zero_center=False)
+        pca_ratio = np.asarray(adata.uns["pca"]["variance_ratio"]).ravel()
+        pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
+        adata.write_h5ad(preprocess_checkpoint, compression="gzip")
+        mark_complete("preprocess")
+        if stage == "preprocess":
+            return
+    elif stage not in {"inspect", "qc"}:
+        adata = require_checkpoint(preprocess_checkpoint, "normalization and PCA")
+
+    # Stage 4: optional technical-batch integration followed by neighbours, UMAP, and clusters.
+    if stage in {"cluster", "all"}:
+        n_pcs = min(p["n_pcs"], adata.obsm["X_pca"].shape[1])
+        integration = p["integration"]
+        batch_key = p["batch_column"] if p["batch_column"] in adata.obs.columns else "sample_id"
+        batch_count = int(adata.obs[batch_key].astype(str).nunique())
+        if integration == "auto":
+            integration = "scvi" if p["batch_column"] in adata.obs.columns and batch_count > 1 else "none"
+        if integration in {"scvi", "harmony"} and batch_count < 2:
+            raise SystemExit(f"{integration} integration requires at least two values in the selected batch column ({batch_key}). Choose none or supply the appropriate technical batch column.")
+        representation = "X_pca"
+        if integration == "scvi" and batch_count > 1:
+            try:
+                import scvi
+            except ImportError as exc:
+                raise SystemExit("scVI integration was requested but scvi-tools is unavailable. Install scvi-tools or choose Harmony/none.") from exc
+            scvi.model.SCVI.setup_anndata(adata, layer="counts", batch_key=batch_key)
+            model = scvi.model.SCVI(adata, n_latent=min(30, p["n_pcs"]))
+            model.train(max_epochs=p["scvi_max_epochs"], early_stopping=True)
+            adata.obsm["X_scVI"] = model.get_latent_representation(); representation = "X_scVI"
+        elif integration == "harmony" and batch_count > 1:
+            try:
+                import scanpy.external as sce
+                sce.pp.harmony_integrate(adata, key=batch_key, basis="X_pca", adjusted_basis="X_harmony")
+            except Exception as exc:
+                raise SystemExit("Harmony integration was requested but harmonypy was unavailable or failed: " + str(exc)) from exc
+            representation = "X_harmony"
+        sc.pp.neighbors(adata, n_neighbors=min(15, max(2, adata.n_obs - 1)), n_pcs=min(n_pcs, adata.obsm[representation].shape[1]), use_rep=representation)
+        sc.tl.umap(adata, random_state=p["seed"])
+        sc.tl.leiden(adata, resolution=p["cluster_resolution"], key_added="cluster", random_state=p["seed"])
+        adata.uns["codespring_integration"] = integration
+        adata.write_h5ad(cluster_checkpoint, compression="gzip")
+        mark_complete("cluster")
+        if stage == "cluster":
+            return
+    elif stage == "annotate":
+        adata = require_checkpoint(cluster_checkpoint, "integration and clustering")
+
+    # Stage 5: annotation, markers, and the final portable results set.
+    if stage in {"annotate", "all"}:
+        integration = str(adata.uns.get("codespring_integration", p["integration"]))
+        if p["celltype_file"] and p["celltype_file"].lower() != "none":
+            apply_celltype_mapping(adata, Path(p["celltype_file"]).expanduser())
+        elif p["marker_file"] and p["marker_file"].lower() != "none":
+            apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables)
+        elif not apply_existing_annotation(adata):
+            adata.obs["cell_type"] = adata.obs["cluster"].astype("category")
+            adata.obs["annotation_source"] = "cluster ID (no annotation supplied)"
+        for col, name in [("sample_id", "03_umap_sample.png"), ("cluster", "04_umap_clusters.png"), ("cell_type", "05_umap_cell_types.png")]:
+            save_umap(adata, col, figures / name)
+        if "condition" in adata.obs.columns and adata.obs.condition.nunique() > 1:
+            save_umap(adata, "condition", figures / "06_umap_condition.png")
         try:
-            import scanpy.external as sce
-            sce.pp.harmony_integrate(adata, key=batch_key, basis="X_pca", adjusted_basis="X_harmony")
+            sc.tl.rank_genes_groups(adata, groupby="cluster", method="wilcoxon", use_raw=True)
+            markers = sc.get.rank_genes_groups_df(adata, group=None)
+            markers.to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
+            markers.groupby("group", observed=True).head(10).to_csv(tables / "top10_markers_per_cluster.tsv", sep="\t", index=False)
         except Exception as exc:
-            raise SystemExit("Harmony integration was requested but harmonypy was unavailable or failed: " + str(exc)) from exc
-        representation = "X_harmony"
-    sc.pp.neighbors(adata, n_neighbors=min(15, max(2, adata.n_obs - 1)), n_pcs=min(n_pcs, adata.obsm[representation].shape[1]), use_rep=representation)
-    sc.tl.umap(adata, random_state=p["seed"])
-    sc.tl.leiden(adata, resolution=p["cluster_resolution"], key_added="cluster", random_state=p["seed"])
-    if p["celltype_file"] and p["celltype_file"].lower() != "none":
-        apply_celltype_mapping(adata, Path(p["celltype_file"]).expanduser())
-    elif p["marker_file"] and p["marker_file"].lower() != "none":
-        apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables)
-    elif not apply_existing_annotation(adata):
-        adata.obs["cell_type"] = adata.obs["cluster"].astype("category")
-        adata.obs["annotation_source"] = "cluster ID (no annotation supplied)"
-    for col, name in [("sample_id", "03_umap_sample.png"), ("cluster", "04_umap_clusters.png"), ("cell_type", "05_umap_cell_types.png")]:
-        save_umap(adata, col, figures / name)
-    if "condition" in adata.obs.columns and adata.obs.condition.nunique() > 1:
-        save_umap(adata, "condition", figures / "06_umap_condition.png")
-    try:
-        sc.tl.rank_genes_groups(adata, groupby="cluster", method="wilcoxon", use_raw=True)
-        markers = sc.get.rank_genes_groups_df(adata, group=None)
-        markers.to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
-        markers.groupby("group", observed=True).head(10).to_csv(tables / "top10_markers_per_cluster.tsv", sep="\t", index=False)
-    except Exception as exc:
-        pd.DataFrame({"warning": [str(exc)]}).to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
-    # Match the Seurat output schema: a named cell column followed by metadata.
-    # Avoid an anonymous CSV index that renders as a blank, confusing column in
-    # results tables, and preserve an input metadata field called `cell`.
-    cell_metadata = adata.obs.copy()
-    if "cell" in cell_metadata.columns:
-        cell_metadata = cell_metadata.rename(columns={"cell": "input_cell"})
-    cell_metadata.insert(0, "cell", cell_metadata.index.astype(str))
-    cell_metadata.to_csv(tables / "cell_metadata.tsv", sep="\t", index=False)
-    # Store a lightweight, engine-neutral embedding table so the web Results
-    # Explorer can remain fast and interactive without opening the full H5AD.
-    umap_table = pd.DataFrame(adata.obsm["X_umap"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])
-    umap_metadata = adata.obs.copy()
-    if "cell" in umap_metadata.columns:
-        umap_metadata = umap_metadata.rename(columns={"cell": "input_cell"})
-    umap_table = pd.concat([umap_table, umap_metadata], axis=1)
-    umap_table.insert(0, "cell", umap_table.index.astype(str))
-    umap_table.to_csv(tables / "umap_coordinates.tsv", sep="\t", index=False)
-    adata.obs.groupby(["cluster", "cell_type"], observed=True).size().reset_index(name="cells").to_csv(tables / "cluster_cell_type_sizes.tsv", sep="\t", index=False)
-    cell_type_by_sample = adata.obs.groupby(["sample_id", "cell_type"], observed=True).size().reset_index(name="cells")
-    cell_type_by_sample["proportion_within_sample"] = cell_type_by_sample["cells"] / cell_type_by_sample.groupby("sample_id", observed=True)["cells"].transform("sum")
-    cell_type_by_sample.to_csv(tables / "cell_type_by_sample.tsv", sep="\t", index=False)
-    adata.write_h5ad(objects / "processed_scanpy.h5ad", compression="gzip")
-    (out_dir / "run_summary.txt").write_text("\n".join([
-        "engine: scanpy", "normalization: lognormalize", f"integration: {integration}",
-        f"doublet_method: {p['doublet_method']}", f"doublets_removed: {int(adata.uns.get('codespring_doublets_removed', 0))}",
-        "input_processing_inventory: tables/input_processing_detected.tsv",
-        f"input_samples: {samples.shape[0]}", f"cells_after_qc: {adata.n_obs}",
-        f"clusters: {adata.obs['cluster'].nunique()}", f"annotation_source: {adata.obs['annotation_source'].iloc[0]}",
-    ]) + "\n")
-    (out_dir / "_COMPLETE").write_text("complete\n")
+            pd.DataFrame({"warning": [str(exc)]}).to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
+        cell_metadata = adata.obs.copy()
+        if "cell" in cell_metadata.columns: cell_metadata = cell_metadata.rename(columns={"cell": "input_cell"})
+        cell_metadata.insert(0, "cell", cell_metadata.index.astype(str))
+        cell_metadata.to_csv(tables / "cell_metadata.tsv", sep="\t", index=False)
+        umap_table = pd.DataFrame(adata.obsm["X_umap"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])
+        umap_metadata = adata.obs.copy()
+        if "cell" in umap_metadata.columns: umap_metadata = umap_metadata.rename(columns={"cell": "input_cell"})
+        umap_table = pd.concat([umap_table, umap_metadata], axis=1); umap_table.insert(0, "cell", umap_table.index.astype(str))
+        umap_table.to_csv(tables / "umap_coordinates.tsv", sep="\t", index=False)
+        adata.obs.groupby(["cluster", "cell_type"], observed=True).size().reset_index(name="cells").to_csv(tables / "cluster_cell_type_sizes.tsv", sep="\t", index=False)
+        cell_type_by_sample = adata.obs.groupby(["sample_id", "cell_type"], observed=True).size().reset_index(name="cells")
+        cell_type_by_sample["proportion_within_sample"] = cell_type_by_sample["cells"] / cell_type_by_sample.groupby("sample_id", observed=True)["cells"].transform("sum")
+        cell_type_by_sample.to_csv(tables / "cell_type_by_sample.tsv", sep="\t", index=False)
+        adata.write_h5ad(objects / "processed_scanpy.h5ad", compression="gzip")
+        (out_dir / "run_summary.txt").write_text("\n".join([
+            "engine: scanpy", "normalization: lognormalize", f"integration: {integration}", f"doublet_method: {p['doublet_method']}",
+            f"doublets_removed: {int(adata.uns.get('codespring_doublets_removed', 0))}", "input_processing_inventory: tables/input_processing_detected.tsv",
+            f"input_samples: {samples.shape[0]}", f"cells_after_qc: {adata.n_obs}", f"clusters: {adata.obs['cluster'].nunique()}", f"annotation_source: {adata.obs['annotation_source'].iloc[0]}",
+        ]) + "\n")
+        mark_complete("annotate")
+        (out_dir / "_COMPLETE").write_text("complete\n")
 
 
 if __name__ == "__main__":

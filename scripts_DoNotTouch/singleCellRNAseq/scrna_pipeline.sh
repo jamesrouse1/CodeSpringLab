@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Arguments: engine samples.tsv output_dir params.tsv
+# Arguments: engine samples.tsv output_dir params.tsv [stage]
 engine="$1"
 samples="$2"
 out_dir="$3"
 params="$4"
+stage="${5:-all}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # This script is executed as a new shell by the SLURM wrapper. Shell functions
@@ -40,7 +41,7 @@ case "$engine" in
     runtime_executable="$(command -v Rscript || true)"
     require_executable "$runtime_executable" "Seurat Rscript"
     "$runtime_executable" -e 'for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
-    "$runtime_executable" "$script_dir/scrna_pipeline_seurat.R" "$samples" "$out_dir" "$params"
+    "$runtime_executable" "$script_dir/scrna_pipeline_seurat.R" "$samples" "$out_dir" "$params" "$stage"
     ;;
   scanpy)
     module load EBModules 2>/dev/null || true
@@ -48,7 +49,7 @@ case "$engine" in
     runtime_executable="$(command -v python3 || true)"
     require_executable "$runtime_executable" "Scanpy Python"
     "$runtime_executable" -c 'import anndata, igraph, leidenalg, numpy, pandas, scanpy, scipy; print("Scanpy runtime ready")'
-    "$runtime_executable" "$script_dir/scrna_pipeline_scanpy.py" "$samples" "$out_dir" "$params"
+    "$runtime_executable" "$script_dir/scrna_pipeline_scanpy.py" "$samples" "$out_dir" "$params" "$stage"
     ;;
   *)
     echo "ERROR: engine must be seurat or scanpy" >&2

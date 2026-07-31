@@ -26,6 +26,7 @@ engine="$2"
 samples="$3"
 out_dir="$4"
 params="$5"
+stage="${6:-all}"
 
 mkdir -p "$out_dir"
 # Keep large R/Python temporary files in project storage, not a shared node
@@ -33,16 +34,22 @@ mkdir -p "$out_dir"
 export TMPDIR="$out_dir/tmp"
 export TMP="$TMPDIR"
 export TEMP="$TMPDIR"
+export MPLCONFIGDIR="$TMPDIR/matplotlib"
+export NUMBA_CACHE_DIR="$TMPDIR/numba"
+export XDG_CACHE_HOME="$TMPDIR/cache"
 mkdir -p "$TMPDIR"
-rm -f "$out_dir/_COMPLETE"
-date '+%Y-%m-%dT%H:%M:%S%z' > "$out_dir/_RUN_STARTED"
-trap 'rm -f "$out_dir/_RUN_STARTED"' EXIT
+mkdir -p "$MPLCONFIGDIR" "$NUMBA_CACHE_DIR" "$XDG_CACHE_HOME"
+if [[ "$stage" == "all" || "$stage" == "annotate" ]]; then
+  rm -f "$out_dir/_COMPLETE"
+fi
+date '+%Y-%m-%dT%H:%M:%S%z' > "$out_dir/_RUN_STARTED_${stage}"
+trap 'rm -f "$out_dir/_RUN_STARTED_${stage}"' EXIT
 
 if [[ ! -x "$runner" ]]; then
   echo "ERROR: scRNA-seq runner is missing or not executable: $runner" >&2
   exit 2
 fi
-"$runner" "$engine" "$samples" "$out_dir" "$params"
+"$runner" "$engine" "$samples" "$out_dir" "$params" "$stage"
 # Preserve job-local temporary files on failure for diagnosis, but remove them
 # after a successful run so a completed large analysis does not leave a second
 # copy of its intermediate data in the project results directory.

@@ -1,16 +1,16 @@
 # CodeSpringLab scRNA-seq workflow
 
-The CodeSpringApp single-cell section runs this workflow as one SLURM job. It
-keeps source inputs read-only and writes every result below the project's
+The CodeSpringApp single-cell section runs this workflow as checkpointed SLURM
+stages. It keeps source inputs read-only and writes every result below the project's
 `data/scrna/` directory.
 
 ## Inputs
 
-In CodeSpringApp, a manifest is optional: start by selecting one raw-count
-input, and CodeSpring derives an editable sample ID from its file or folder
-name. You can then add or edit further rows in the project-local
-manifest. You can instead provide a tab-delimited manifest with `sample_id`
-and `input_path` columns when it already exists. Each row can point to one of
+In CodeSpringApp, one input needs no manifest: select one raw-count input and
+CodeSpring derives its sample ID from the file or folder name. Choose the
+multiple-input/integration setup only when combining inputs from different
+locations; it reveals a project-local manifest. A multi-input manifest must
+have `sample_id` and `input_path` columns. Each row can point to one of
 the following raw-count inputs:
 
 - a Seurat `.rds` object (processed with the Seurat engine);
@@ -25,7 +25,7 @@ metadata. `sample_id` must be unique. Do not mix Seurat `.rds` and AnnData
 
 Starting `./run_codespringweb.sh` only starts the lightweight web interface;
 it does **not** load Scanpy or Seurat into the app process. Each scRNA run is
-submitted as one SLURM job and the selected engine is passed explicitly to its
+submitted as a SLURM job and the selected engine is passed explicitly to its
 job wrapper. The wrapper loads the standard cluster R module for Seurat or the
 standard Anaconda module for Scanpy only inside that compute job.
 
@@ -53,6 +53,14 @@ cell-type metadata is retained unless a new marker list or cell-level mapping
 is supplied.
 
 ## Processing
+
+The app exposes five ordered stages: **Input inspection**, **QC & doublets**,
+**Normalize & PCA**, **Integrate & cluster**, and **Annotate & markers**. Each
+stage writes an explicit completion marker plus a checkpoint under
+`checkpoints/`; a later stage will not run until its prerequisite checkpoint
+exists. Input inspection records pre-existing normalization, reductions,
+clusters, and annotations in `tables/input_processing_detected.tsv`, while
+the downstream reproducible workflow starts from raw counts.
 
 The workflow performs initial per-sample QC, optional doublet detection,
 gene filtering, normalization, highly-variable-gene selection, scaling,
@@ -86,6 +94,7 @@ best-scoring label is assigned to each cluster.
   PCA variance, metadata, marker, annotation, exact cell-type composition by
   sample, and `umap_coordinates.tsv` tables;
 - `objects/`: processed Seurat RDS or AnnData H5AD;
+- `checkpoints/`: internal stage checkpoints used to resume the workflow;
 - `run_summary.txt`: processing choices and cell/cluster counts;
 - `_COMPLETE`: written only after a successful workflow.
 

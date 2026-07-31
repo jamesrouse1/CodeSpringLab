@@ -3,7 +3,7 @@
 # CodeSpringLab single-cell RNA-seq workflow (Seurat engine)
 #
 # Usage:
-#   Rscript scrna_pipeline_seurat.R <samples.tsv> <out_dir> <params.tsv>
+#   Rscript scrna_pipeline_seurat.R <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|all]
 #
 # samples.tsv (required columns): sample_id, input_path
 # Optional sample columns (for example condition and batch) are retained as
@@ -12,11 +12,13 @@
 # params.tsv contains key/value pairs; comments and unknown keys are allowed.
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 3L) stop("Usage: scrna_pipeline_seurat.R <samples.tsv> <out_dir> <params.tsv>")
+if (!length(args) %in% c(3L, 4L)) stop("Usage: scrna_pipeline_seurat.R <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|all]")
 
 samples_path <- normalizePath(args[[1]], mustWork = TRUE)
 out_dir <- normalizePath(args[[2]], mustWork = FALSE)
 params_path <- normalizePath(args[[3]], mustWork = TRUE)
+stage <- tolower(if (length(args) >= 4L) args[[4]] else "all")
+if (!stage %in% c("inspect", "qc", "preprocess", "cluster", "annotate", "all")) stop("Unknown scRNA stage: ", stage)
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 need_pkg <- function(pkg) {
@@ -97,9 +99,16 @@ samples$input_path <- normalizePath(path.expand(as.character(samples$input_path)
 missing <- samples$input_path[!file.exists(samples$input_path)]
 if (length(missing)) stop("Missing unreadable input path(s): ", paste(missing, collapse = ", "))
 
-tables_dir <- file.path(out_dir, "tables"); figures_dir <- file.path(out_dir, "figures"); objects_dir <- file.path(out_dir, "objects")
-for (d in c(tables_dir, figures_dir, objects_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+tables_dir <- file.path(out_dir, "tables"); figures_dir <- file.path(out_dir, "figures"); objects_dir <- file.path(out_dir, "objects"); checkpoints_dir <- file.path(out_dir, "checkpoints")
+for (d in c(tables_dir, figures_dir, objects_dir, checkpoints_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
 utils::write.table(samples, file.path(tables_dir, "sample_manifest_used.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+stage_marker <- function(name) writeLines("complete", file.path(out_dir, paste0("_STAGE_", toupper(name), "_COMPLETE")))
+checkpoint_path <- function(name) file.path(checkpoints_dir, paste0(name, "_seurat.rds"))
+require_checkpoint <- function(name, prior) {
+  path <- checkpoint_path(name)
+  if (!file.exists(path)) stop("The ", prior, " stage has not completed. Run ", prior, " before this stage.")
+  readRDS(path)
+}
 
 input_kind <- function(path) {
   lower <- tolower(path)
@@ -218,12 +227,29 @@ read_one <- function(row) {
   obj
 }
 
-objects <- lapply(seq_len(NROW(samples)), function(i) read_one(as.list(samples[i, , drop = FALSE])))
-names(objects) <- samples$sample_id
-cells_before_qc <- vapply(objects, ncol, numeric(1))
-input_processing_status <- do.call(rbind, lapply(objects, function(obj) obj@misc$codespring_input_status))
-utils::write.table(input_processing_status, file.path(tables_dir, "input_processing_detected.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+# Used both when QC figures are created and when a later annotation stage is
+# resumed from the clustered checkpoint in a new SLURM process.
+save_plot <- function(plot, file, width = 9, height = 6) {
+  ggplot2::ggsave(file.path(figures_dir, file), plot = plot, width = width, height = height, dpi = 160)
+}
 
+if (stage %in% c("inspect", "qc", "all")) {
+  objects <- lapply(seq_len(NROW(samples)), function(i) read_one(as.list(samples[i, , drop = FALSE])))
+  names(objects) <- samples$sample_id
+  cells_before_qc <- vapply(objects, ncol, numeric(1))
+  input_processing_status <- do.call(rbind, lapply(objects, function(obj) obj@misc$codespring_input_status))
+  utils::write.table(input_processing_status, file.path(tables_dir, "input_processing_detected.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples), checkpoint_path("01_input"))
+  stage_marker("inspect")
+  if (identical(stage, "inspect")) quit(save = "no", status = 0L)
+} else {
+  input_state <- require_checkpoint("01_input", "input inspection")
+  objects <- input_state$objects
+  cells_before_qc <- input_state$cells_before_qc
+  samples <- input_state$samples
+}
+
+if (stage %in% c("qc", "all")) {
 qc_one <- function(obj) {
   genes <- rownames(obj)
   mt <- grep("^(MT-|mt-)", genes, value = TRUE)
@@ -320,7 +346,8 @@ utils::write.table(doublet_calls, file.path(tables_dir, "doublet_calls.tsv"), se
 utils::write.table(doublet_summary, file.path(tables_dir, "doublet_summary_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 
 qc_cells <- do.call(rbind, lapply(objects, function(obj) {
-  data.frame(cell = colnames(obj), sample_id = as.character(obj$sample_id), condition = as.character(obj$condition %||% ""),
+  condition_value <- if ("condition" %in% colnames(obj@meta.data)) as.character(obj[["condition"]][, 1]) else rep("", ncol(obj))
+  data.frame(cell = colnames(obj), sample_id = as.character(obj$sample_id), condition = condition_value,
              nCount_RNA = obj$nCount_RNA, nFeature_RNA = obj$nFeature_RNA, percent.mt = obj$percent.mt,
              doublet_score = obj$doublet_score, predicted_doublet = obj$predicted_doublet, stringsAsFactors = FALSE)
 }))
@@ -344,6 +371,17 @@ if (any(is.finite(doublet_calls$doublet_score))) {
   save_plot(doublet_plot, "02b_doublet_scores.png", 7, 4.5)
 }
 
+saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("02_qc"))
+stage_marker("qc")
+if (identical(stage, "qc")) quit(save = "no", status = 0L)
+} else {
+  qc_state <- require_checkpoint("02_qc", "QC and doublet handling")
+  objects <- qc_state$objects
+  cells_before_qc <- qc_state$cells_before_qc
+  samples <- qc_state$samples
+  doublet_summary <- qc_state$doublet_summary
+}
+
 integration <- params$integration
 batch_values <- unlist(lapply(objects, function(obj) {
   if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
@@ -352,59 +390,84 @@ if (identical(integration, "auto")) integration <- if (length(unique(batch_value
 if (integration %in% c("rpca", "cca") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
   stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
 }
-used_reduction <- "pca"
-integration_k_weight <- max(5L, min(50L, floor(min(vapply(objects, ncol, numeric(1))) / 2)))
-if (identical(params$normalization, "sct")) {
-  objects <- lapply(objects, function(obj) Seurat::SCTransform(obj, assay = "RNA", vst.flavor = "v2", verbose = FALSE))
-  if (integration %in% c("rpca", "cca") && length(objects) > 1L) {
-    features <- Seurat::SelectIntegrationFeatures(objects, nfeatures = 3000)
-    objects <- Seurat::PrepSCTIntegration(objects, anchor.features = features, verbose = FALSE)
-    if (identical(integration, "rpca")) objects <- lapply(objects, function(obj) Seurat::RunPCA(obj, features = features, npcs = params$n_pcs, verbose = FALSE))
-    anchors <- Seurat::FindIntegrationAnchors(object.list = objects, normalization.method = "SCT", anchor.features = features,
-                                               reduction = integration, dims = seq_len(params$n_pcs), verbose = FALSE)
-    obj <- Seurat::IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = seq_len(params$n_pcs), k.weight = integration_k_weight, verbose = FALSE)
-    DefaultAssay(obj) <- "integrated"
-    obj <- Seurat::RunPCA(obj, npcs = params$n_pcs, verbose = FALSE)
+if (stage %in% c("preprocess", "all")) {
+  if (identical(params$normalization, "sct")) {
+    objects <- lapply(objects, function(obj) Seurat::SCTransform(obj, assay = "RNA", vst.flavor = "v2", verbose = FALSE))
   } else {
-    obj <- Reduce(function(a, b) merge(a, y = b), objects)
-    DefaultAssay(obj) <- "SCT"
-    obj <- Seurat::RunPCA(obj, npcs = params$n_pcs, verbose = FALSE)
+    objects <- lapply(objects, function(obj) {
+      obj <- Seurat::NormalizeData(obj, verbose = FALSE)
+      obj <- Seurat::FindVariableFeatures(obj, selection.method = "vst", nfeatures = 3000, verbose = FALSE)
+      Seurat::ScaleData(obj, verbose = FALSE)
+    })
   }
+  saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("03_preprocessed"))
+  stage_marker("preprocess")
+  if (identical(stage, "preprocess")) quit(save = "no", status = 0L)
 } else {
-  objects <- lapply(objects, function(obj) {
-    obj <- Seurat::NormalizeData(obj, verbose = FALSE)
-    obj <- Seurat::FindVariableFeatures(obj, selection.method = "vst", nfeatures = 3000, verbose = FALSE)
-    Seurat::ScaleData(obj, verbose = FALSE)
-  })
-  if (integration %in% c("rpca", "cca") && length(objects) > 1L) {
+  pre_state <- require_checkpoint("03_preprocessed", "normalization and PCA")
+  objects <- pre_state$objects
+  cells_before_qc <- pre_state$cells_before_qc
+  samples <- pre_state$samples
+  doublet_summary <- pre_state$doublet_summary
+}
+
+# Determine integration only after loading the preprocessed checkpoint, so a
+# resumed stage uses the exact same retained cells and technical metadata.
+integration <- params$integration
+batch_values <- unlist(lapply(objects, function(obj) {
+  if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
+}), use.names = FALSE)
+if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "rpca" else "none"
+if (integration %in% c("rpca", "cca") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
+  stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
+}
+
+if (stage %in% c("cluster", "all")) {
+  integration_k_weight <- max(5L, min(50L, floor(min(vapply(objects, ncol, numeric(1))) / 2)))
+  if (identical(params$normalization, "sct")) {
+    if (integration %in% c("rpca", "cca") && length(objects) > 1L) {
+      features <- Seurat::SelectIntegrationFeatures(objects, nfeatures = 3000)
+      objects <- Seurat::PrepSCTIntegration(objects, anchor.features = features, verbose = FALSE)
+      if (identical(integration, "rpca")) objects <- lapply(objects, function(obj) Seurat::RunPCA(obj, features = features, npcs = params$n_pcs, verbose = FALSE))
+      anchors <- Seurat::FindIntegrationAnchors(object.list = objects, normalization.method = "SCT", anchor.features = features,
+                                                 reduction = integration, dims = seq_len(params$n_pcs), verbose = FALSE)
+      obj <- Seurat::IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = seq_len(params$n_pcs), k.weight = integration_k_weight, verbose = FALSE)
+      DefaultAssay(obj) <- "integrated"; obj <- Seurat::RunPCA(obj, npcs = params$n_pcs, verbose = FALSE)
+    } else {
+      obj <- Reduce(function(a, b) merge(a, y = b), objects)
+      DefaultAssay(obj) <- "SCT"; obj <- Seurat::RunPCA(obj, npcs = params$n_pcs, verbose = FALSE)
+    }
+  } else if (integration %in% c("rpca", "cca") && length(objects) > 1L) {
     features <- Seurat::SelectIntegrationFeatures(objects, nfeatures = 3000)
     if (identical(integration, "rpca")) objects <- lapply(objects, function(obj) Seurat::RunPCA(obj, features = features, npcs = params$n_pcs, verbose = FALSE))
     anchors <- Seurat::FindIntegrationAnchors(object.list = objects, anchor.features = features, reduction = integration,
                                                dims = seq_len(params$n_pcs), verbose = FALSE)
     obj <- Seurat::IntegrateData(anchorset = anchors, dims = seq_len(params$n_pcs), k.weight = integration_k_weight, verbose = FALSE)
-    DefaultAssay(obj) <- "integrated"; obj <- Seurat::ScaleData(obj, verbose = FALSE)
-    obj <- Seurat::RunPCA(obj, npcs = params$n_pcs, verbose = FALSE)
+    DefaultAssay(obj) <- "integrated"; obj <- Seurat::ScaleData(obj, verbose = FALSE); obj <- Seurat::RunPCA(obj, npcs = params$n_pcs, verbose = FALSE)
   } else {
     obj <- Reduce(function(a, b) merge(a, y = b), objects)
-    DefaultAssay(obj) <- "RNA"
-    obj <- Seurat::NormalizeData(obj, verbose = FALSE); obj <- Seurat::FindVariableFeatures(obj, nfeatures = 3000, verbose = FALSE)
+    DefaultAssay(obj) <- "RNA"; obj <- Seurat::NormalizeData(obj, verbose = FALSE); obj <- Seurat::FindVariableFeatures(obj, nfeatures = 3000, verbose = FALSE)
     obj <- Seurat::ScaleData(obj, verbose = FALSE); obj <- Seurat::RunPCA(obj, npcs = params$n_pcs, verbose = FALSE)
   }
+  n_available <- ncol(Seurat::Embeddings(obj, "pca")); dims <- seq_len(min(params$n_pcs, n_available))
+  pca_stdev <- Seurat::Stdev(obj, reduction = "pca"); pca_variance <- (pca_stdev ^ 2) / sum(pca_stdev ^ 2)
+  utils::write.table(data.frame(PC = seq_along(pca_variance), variance_explained = pca_variance, percent_variance_explained = 100 * pca_variance), file.path(tables_dir, "pca_variance_explained.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  variable_genes <- Seurat::VariableFeatures(obj)
+  utils::write.table(data.frame(gene = variable_genes, highly_variable = TRUE), file.path(tables_dir, "highly_variable_genes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  obj <- Seurat::FindNeighbors(obj, reduction = "pca", dims = dims, verbose = FALSE)
+  obj <- Seurat::FindClusters(obj, resolution = params$cluster_resolution, verbose = FALSE)
+  obj <- Seurat::RunUMAP(obj, reduction = "pca", dims = dims, seed.use = params$seed, verbose = FALSE)
+  obj$cluster <- as.character(Seurat::Idents(obj))
+  saveRDS(list(object = obj, integration = integration, samples = samples, doublet_summary = doublet_summary), checkpoint_path("04_clustered"))
+  stage_marker("cluster")
+  if (identical(stage, "cluster")) quit(save = "no", status = 0L)
+} else {
+  cluster_state <- require_checkpoint("04_clustered", "integration and clustering")
+  obj <- cluster_state$object
+  integration <- cluster_state$integration
+  samples <- cluster_state$samples
+  doublet_summary <- cluster_state$doublet_summary
 }
-
-n_available <- ncol(Seurat::Embeddings(obj, "pca")); dims <- seq_len(min(params$n_pcs, n_available))
-pca_stdev <- Seurat::Stdev(obj, reduction = "pca")
-pca_variance <- (pca_stdev ^ 2) / sum(pca_stdev ^ 2)
-utils::write.table(data.frame(PC = seq_along(pca_variance), variance_explained = pca_variance,
-                              percent_variance_explained = 100 * pca_variance),
-                   file.path(tables_dir, "pca_variance_explained.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-variable_genes <- Seurat::VariableFeatures(obj)
-utils::write.table(data.frame(gene = variable_genes, highly_variable = TRUE), file.path(tables_dir, "highly_variable_genes.tsv"),
-                   sep = "\t", row.names = FALSE, quote = FALSE)
-obj <- Seurat::FindNeighbors(obj, reduction = "pca", dims = dims, verbose = FALSE)
-obj <- Seurat::FindClusters(obj, resolution = params$cluster_resolution, verbose = FALSE)
-obj <- Seurat::RunUMAP(obj, reduction = "pca", dims = dims, seed.use = params$seed, verbose = FALSE)
-obj$cluster <- as.character(Seurat::Idents(obj))
 
 apply_celltype_mapping <- function(obj, path) {
   if (!nzchar(path) || identical(tolower(path), "none")) return(obj)
@@ -541,4 +604,5 @@ summary_lines <- c(
   paste("annotation_source:", unique(obj$annotation_source)[1]), paste("generated:", as.character(Sys.time()))
 )
 writeLines(summary_lines, file.path(out_dir, "run_summary.txt"))
+stage_marker("annotate")
 writeLines(as.character(Sys.time()), file.path(out_dir, "_COMPLETE"))
