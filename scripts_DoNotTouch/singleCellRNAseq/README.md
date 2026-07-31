@@ -6,8 +6,11 @@ keeps source inputs read-only and writes every result below the project's
 
 ## Inputs
 
-Provide a tab-delimited manifest with `sample_id` and `input_path` columns.
-Each row can point to one of the following raw-count inputs:
+In CodeSpringApp, a manifest is optional: start by selecting one raw-count
+input and sample ID, then add or edit further rows in the project-local
+manifest. You can instead provide a tab-delimited manifest with `sample_id`
+and `input_path` columns when it already exists. Each row can point to one of
+the following raw-count inputs:
 
 - a Seurat `.rds` object (processed with the Seurat engine);
 - an AnnData `.h5ad` object (processed with the Scanpy engine); or
@@ -16,6 +19,24 @@ Each row can point to one of the following raw-count inputs:
 Additional columns such as `condition`, `batch`, and `donor` become cell
 metadata. `sample_id` must be unique. Do not mix Seurat `.rds` and AnnData
 `.h5ad` inputs in a single run; start from filtered 10x matrices instead.
+
+## Runtime on the HPC
+
+Starting `./run_codespringweb.sh` only starts the lightweight web interface;
+it does **not** load Scanpy or Seurat into the app process. Each scRNA run is
+submitted as one SLURM job and the selected engine is passed explicitly to its
+job wrapper. The wrapper loads the standard cluster R module for Seurat or the
+standard Anaconda module for Scanpy only inside that compute job.
+
+If your HPC Scanpy or Seurat installation is in a different environment,
+enter its executable in **Optional custom runtime executable** in the app:
+
+- Seurat: the full path to the appropriate `Rscript` executable.
+- Scanpy: the full path to the environment's `python` executable.
+
+The app verifies that path before submission and records it with the run
+parameters. The job checks essential packages before loading a large object,
+so a missing runtime is reported promptly in the job log.
 
 The Scanpy engine requires raw counts in `X`, `layers['counts']`/`layers['raw']`, or `raw`.
 It stops with an explanatory error when only normalized expression is present,
@@ -72,3 +93,9 @@ best-scoring label is assigned to each cluster.
 - `objects/`: processed Seurat RDS or AnnData H5AD;
 - `run_summary.txt`: processing choices and cell/cluster counts;
 - `_COMPLETE`: written only after a successful workflow.
+
+The project output location is selected as **Results root** during project
+creation. CodeSpring writes this project beneath that folder as
+`<results_root>/<project_name>/data/scrna/`, keeping the processed object,
+tables, figures, logs, and temporary job storage together without modifying
+the source matrix or source object.
