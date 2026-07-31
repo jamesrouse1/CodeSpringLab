@@ -243,7 +243,14 @@ run_doublet_one <- function(obj) {
     ))
   }
   if (!requireNamespace("scDblFinder", quietly = TRUE)) {
-    stop("Doublet removal with the Seurat engine requires the Bioconductor package scDblFinder. Install it, choose the Scanpy/Scrublet engine, or explicitly select no doublet removal.")
+    if (identical(params$doublet_method, "scdblfinder")) {
+      stop("Doublet removal with the Seurat engine requires the Bioconductor package scDblFinder. Install it, choose the Scanpy/Scrublet engine, or explicitly select no doublet removal.")
+    }
+    return(list(
+      object = obj,
+      calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
+      summary = data.frame(sample_id = sample_id, method = "scDblFinder", cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Automatic scDblFinder skipped: package unavailable")
+    ))
   }
   if (ncol(obj) < 100L || nrow(obj) < 20L) {
     return(list(

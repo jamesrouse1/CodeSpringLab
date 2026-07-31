@@ -89,7 +89,7 @@ best-scoring label is assigned to each cluster.
 
 - `figures/`: QC and UMAP figures;
 - `tables/`: per-cell QC, per-sample QC, doublet calls, highly-variable genes,
-  PCA variance, metadata, marker, and annotation tables;
+  PCA variance, metadata, marker, annotation, and `umap_coordinates.tsv` tables;
 - `objects/`: processed Seurat RDS or AnnData H5AD;
 - `run_summary.txt`: processing choices and cell/cluster counts;
 - `_COMPLETE`: written only after a successful workflow.
@@ -99,3 +99,10 @@ creation. CodeSpring writes this project beneath that folder as
 `<results_root>/<project_name>/data/scrna/`, keeping the processed object,
 tables, figures, logs, and temporary job storage together without modifying
 the source matrix or source object.
+
+`tables/umap_coordinates.tsv` is intentionally a small, engine-neutral view
+of the final embedding plus cell metadata. CodeSpringApp uses it for the
+interactive **Explore Cells** view, including metadata colouring and
+lasso/box selection, without reopening the full RDS or H5AD in the web
+process. The processed object and complete metadata table remain available
+for download.

@@ -43,3 +43,7 @@ if [[ ! -x "$runner" ]]; then
   exit 2
 fi
 "$runner" "$engine" "$samples" "$out_dir" "$params"
+# Preserve job-local temporary files on failure for diagnosis, but remove them
+# after a successful run so a completed large analysis does not leave a second
+# copy of its intermediate data in the project results directory.
+rm -rf "$TMPDIR" || echo "WARNING: completed scRNA workflow could not remove temporary directory: $TMPDIR" >&2

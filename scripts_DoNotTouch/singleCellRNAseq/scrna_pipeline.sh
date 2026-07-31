@@ -39,7 +39,7 @@ case "$engine" in
       runtime_executable="$(command -v python3 || true)"
     fi
     require_executable "$runtime_executable" "Scanpy Python"
-    "$runtime_executable" -c 'import anndata, numpy, pandas, scanpy, scipy; print("Scanpy runtime ready")'
+    "$runtime_executable" -c 'import anndata, igraph, leidenalg, numpy, pandas, scanpy, scipy; print("Scanpy runtime ready")'
     "$runtime_executable" "$script_dir/scrna_pipeline_scanpy.py" "$samples" "$out_dir" "$params"
     ;;
   *)
