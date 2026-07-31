@@ -24,6 +24,17 @@ need_pkg <- function(pkg) {
 }
 for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork")) need_pkg(pkg)
 suppressPackageStartupMessages(library(Seurat))
+# A submitted job already has the requested resources. Keeping Seurat's future
+# plan sequential here prevents large pre-existing RDS objects from being
+# serialized to nested workers, which otherwise triggers future.globals.maxSize
+# failures and can duplicate the full expression matrix in memory.
+if (requireNamespace("future", quietly = TRUE)) {
+  future::plan("sequential")
+  # SCTransform still validates globals under a sequential plan. Large RDS
+  # inputs can legitimately exceed the interactive 500 MiB default without
+  # transferring data to another worker, so raise only this job-local ceiling.
+  options(future.globals.maxSize = 8 * 1024^3)
+}
 
 `%||%` <- function(x, y) if (is.null(x) || !length(x) || (length(x) == 1L && is.na(x))) y else x
 
@@ -111,6 +122,53 @@ read_10x_matrix <- function(path) {
   Seurat::ReadMtx(mtx = matrix_file, features = feature_file, cells = barcode_file, feature.column = 2)
 }
 
+assay_layers_safe <- function(obj, assay) {
+  if (!assay %in% names(obj@assays)) return(character(0))
+  tryCatch(SeuratObject::Layers(obj[[assay]]), error = function(e) character(0))
+}
+
+input_status_one <- function(obj, sample_id, kind) {
+  rna_layers <- assay_layers_safe(obj, "RNA")
+  annotation_columns <- c("cell_type", "celltype", "CellType", "annotation", "annotated_cell_type", "predicted.celltype")
+  annotation_columns <- annotation_columns[annotation_columns %in% colnames(obj@meta.data)]
+  data.frame(
+    sample_id = sample_id,
+    input_kind = kind,
+    cells_input = ncol(obj),
+    features_input = nrow(obj),
+    assays_detected = paste(names(obj@assays), collapse = "; "),
+    rna_count_layers_detected = paste(grep("^counts($|\\.)", rna_layers, value = TRUE), collapse = "; "),
+    rna_normalized_layers_detected = paste(grep("^data($|\\.)", rna_layers, value = TRUE), collapse = "; "),
+    sct_detected = "SCT" %in% names(obj@assays),
+    integrated_detected = "integrated" %in% names(obj@assays),
+    reductions_detected = paste(names(obj@reductions), collapse = "; "),
+    pca_detected = any(tolower(names(obj@reductions)) == "pca"),
+    umap_detected = any(tolower(names(obj@reductions)) == "umap"),
+    clusters_detected = any(c("seurat_clusters", "cluster") %in% colnames(obj@meta.data)),
+    annotation_columns_detected = paste(annotation_columns, collapse = "; "),
+    workflow_action = "Raw RNA counts retained; CodeSpring reruns selected QC and downstream processing reproducibly.",
+    stringsAsFactors = FALSE
+  )
+}
+
+save_input_umap <- function(obj, sample_id) {
+  umap_name <- names(obj@reductions)[tolower(names(obj@reductions)) == "umap"]
+  if (!length(umap_name)) return(invisible(NULL))
+  preferred <- c("cell_type", "celltype", "CellType", "annotation", "annotated_cell_type", "predicted.celltype", "condition", "Condition", "treatment", "Treatment", "group", "Group", "orig.ident", "batch", "sample_id")
+  candidates <- unique(c(intersect(preferred, colnames(obj@meta.data)), colnames(obj@meta.data)))
+  candidates <- candidates[vapply(candidates, function(col) {
+    raw_values <- obj[[col]][, 1]
+    if (is.numeric(raw_values) || is.integer(raw_values)) return(FALSE)
+    values <- unique(as.character(raw_values))
+    length(values[nzchar(values)]) > 1L && length(values[nzchar(values)]) <= 40L
+  }, logical(1))]
+  group_by <- if (length(candidates)) candidates[[1]] else NULL
+  plot <- Seurat::DimPlot(obj, reduction = umap_name[[1]], group.by = group_by, shuffle = TRUE) + ggplot2::ggtitle("UMAP supplied with input object")
+  file_name <- paste0("00_input_umap_", gsub("[^A-Za-z0-9_.-]", "_", sample_id), ".png")
+  ggplot2::ggsave(file.path(figures_dir, file_name), plot = plot, width = 8, height = 6, dpi = 160)
+  invisible(file_name)
+}
+
 read_one <- function(row) {
   path <- row[["input_path"]]; sample_id <- row[["sample_id"]]
   kind <- input_kind(path)
@@ -127,19 +185,33 @@ read_one <- function(row) {
   if (!"RNA" %in% names(obj@assays)) {
     assay <- DefaultAssay(obj)
     if (!nzchar(assay)) stop("No usable expression assay was found for ", sample_id)
+    if (!length(grep("^counts($|\\.)", assay_layers_safe(obj, assay), value = TRUE))) {
+      stop("Seurat input ", sample_id, " has no RNA assay with raw count layers. A full QC/normalization workflow must start from raw counts.")
+    }
     obj[["RNA"]] <- obj[[assay]]
   }
+  input_status <- input_status_one(obj, sample_id, kind)
+  rna_count_layers <- grep("^counts($|\\.)", assay_layers_safe(obj, "RNA"), value = TRUE)
+  if (!length(rna_count_layers)) stop("Seurat input ", sample_id, " has no raw RNA count layer. A full QC/normalization workflow must start from raw counts.")
+  # Existing Seurat v5 objects may keep one count layer per sample. Join only
+  # those raw layers before QC; normalized/integrated layers remain preserved
+  # in the source object and are recorded in the provenance table.
+  if (length(rna_count_layers) > 1L) obj <- SeuratObject::JoinLayers(obj, assay = "RNA", layers = "counts", new = "counts")
   DefaultAssay(obj) <- "RNA"
   obj <- Seurat::RenameCells(obj, add.cell.id = sample_id)
   # Add all manifest fields as cell-level metadata.
   for (field in names(row)) obj[[field]] <- rep(as.character(row[[field]]), ncol(obj))
   obj[["input_kind"]] <- rep(kind, ncol(obj))
+  obj@misc$codespring_input_status <- input_status
+  if (identical(kind, "seurat_rds")) save_input_umap(obj, sample_id)
   obj
 }
 
 objects <- lapply(seq_len(NROW(samples)), function(i) read_one(as.list(samples[i, , drop = FALSE])))
 names(objects) <- samples$sample_id
 cells_before_qc <- vapply(objects, ncol, numeric(1))
+input_processing_status <- do.call(rbind, lapply(objects, function(obj) obj@misc$codespring_input_status))
+utils::write.table(input_processing_status, file.path(tables_dir, "input_processing_detected.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 
 qc_one <- function(obj) {
   genes <- rownames(obj)
@@ -323,13 +395,33 @@ apply_marker_annotation <- function(obj, path) {
   obj
 }
 
+apply_existing_annotation <- function(obj) {
+  candidates <- c("cell_type", "celltype", "CellType", "annotation", "annotated_cell_type", "predicted.celltype")
+  candidates <- candidates[candidates %in% colnames(obj@meta.data)]
+  if (!length(candidates)) return(NULL)
+  for (column in candidates) {
+    values <- as.character(obj[[column]][, 1])
+    if (any(nzchar(values) & !is.na(values))) {
+      obj$cell_type <- ifelse(is.na(values) | !nzchar(values), "Unassigned", values)
+      obj$annotation_source <- paste0("existing input metadata: ", column)
+      return(obj)
+    }
+  }
+  NULL
+}
+
 if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "none")) {
   obj <- apply_celltype_mapping(obj, params$celltype_file)
 } else if (nzchar(params$marker_file) && !identical(tolower(params$marker_file), "none")) {
   obj <- apply_marker_annotation(obj, params$marker_file)
 } else {
-  obj$cell_type <- obj$cluster
-  obj$annotation_source <- "cluster ID (no annotation supplied)"
+  existing_annotation <- apply_existing_annotation(obj)
+  if (is.null(existing_annotation)) {
+    obj$cell_type <- obj$cluster
+    obj$annotation_source <- "cluster ID (no annotation supplied)"
+  } else {
+    obj <- existing_annotation
+  }
 }
 
 save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "sample_id", shuffle = TRUE), "03_umap_sample.png", 8, 6)
@@ -337,7 +429,9 @@ save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "cluster", label =
 save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "cell_type", label = TRUE, repel = TRUE), "05_umap_cell_types.png", 9, 6)
 if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 1L) save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "condition", shuffle = TRUE), "06_umap_condition.png", 8, 6)
 
-DefaultAssay(obj) <- "RNA"
+# Cluster markers should use the normalized SCT representation when that is
+# the selected workflow; the raw RNA assay intentionally has no data layer.
+DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
 if (ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
   markers <- tryCatch(Seurat::FindAllMarkers(obj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25, verbose = FALSE), error = function(e) data.frame(error = conditionMessage(e)))
   utils::write.table(markers, file.path(tables_dir, "cluster_markers.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
@@ -359,6 +453,7 @@ saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
 summary_lines <- c(
   paste("engine: seurat"), paste("normalization:", params$normalization), paste("integration:", integration),
   paste("doublet_method:", params$doublet_method), paste("doublets_removed:", sum(doublet_summary$removed_doublets)),
+  paste("input_processing_inventory:", file.path("tables", "input_processing_detected.tsv")),
   paste("input_samples:", NROW(samples)), paste("cells_after_qc:", ncol(obj)), paste("clusters:", length(unique(obj$cluster))),
   paste("annotation_source:", unique(obj$annotation_source)[1]), paste("generated:", as.character(Sys.time()))
 )

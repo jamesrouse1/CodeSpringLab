@@ -21,6 +21,15 @@ The Scanpy engine requires raw counts in `X`, `layers['counts']`, or `raw`.
 It stops with an explanatory error when only normalized expression is present,
 because repeating QC and normalization on processed values is not valid.
 
+For a Seurat RDS, CodeSpring inspects the RNA count layers, SCT/integrated
+assays, reductions, cluster metadata, and existing annotation columns. The
+detected state is saved in `tables/input_processing_detected.tsv`. Raw RNA
+count layers are used for a reproducible rerun of the selected QC and
+downstream workflow; if the input already contains a UMAP, it is also rendered
+as an input-reference figure before the new embedding is made. Existing
+cell-type metadata is retained unless a new marker list or cell-level mapping
+is supplied.
+
 ## Processing
 
 The workflow performs initial per-sample QC, optional doublet detection,
