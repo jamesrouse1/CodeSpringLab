@@ -36,6 +36,7 @@ scanpy_runtime() {
   # Scanpy is not part of many cluster-wide Anaconda modules. Keep one
   # managed, per-user environment outside either repository so every H5AD run
   # has the same complete runtime and no username is hard-coded.
+  local allow_setup="${1:-false}"
   local runtime_root="${CSL_WEB_HOME:-$HOME/.codespringweb}/runtimes"
   local environment="${CSL_SCANPY_ENV:-$runtime_root/scanpy}"
   local python="$environment/bin/python"
@@ -44,6 +45,12 @@ scanpy_runtime() {
   if [[ -x "$python" ]] && "$python" -c 'import anndata, igraph, leidenalg, numpy, pandas, scanpy, scipy' >/dev/null 2>&1; then
     printf '%s\n' "$python"
     return 0
+  fi
+
+  if [[ "$allow_setup" != "true" ]]; then
+    echo "ERROR: The managed Scanpy environment is not ready at $environment." >&2
+    echo "In CodeSpringApp, use the 'Set up Scanpy environment' step for this H5AD project, then rerun the requested stage." >&2
+    return 2
   fi
 
   conda_executable="$(command -v conda || true)"
@@ -84,9 +91,19 @@ case "$engine" in
   scanpy)
     module load EBModules 2>/dev/null || true
     module load Anaconda3/2021.05 2>/dev/null || true
-    runtime_executable="$(scanpy_runtime)"
+    if [[ "$stage" == "setup-runtime" ]]; then
+      runtime_executable="$(scanpy_runtime true)"
+    else
+      runtime_executable="$(scanpy_runtime)"
+    fi
     require_executable "$runtime_executable" "managed Scanpy Python"
     echo "Scanpy runtime ready: $runtime_executable"
+    if [[ "$stage" == "setup-runtime" ]]; then
+      mkdir -p "$out_dir"
+      printf 'ready\n' > "$out_dir/_SCANPY_RUNTIME_READY"
+      echo "Managed Scanpy runtime setup completed."
+      exit 0
+    fi
     "$runtime_executable" "$script_dir/scrna_pipeline_scanpy.py" "$samples" "$out_dir" "$params" "$stage"
     ;;
   *)
