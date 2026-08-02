@@ -1,0 +1,41 @@
+Bootstrap: docker
+From: python:3.11-slim-bookworm
+
+%labels
+    Maintainer CodeSpringLab
+    Version 1.0.0
+    Description Scanpy runtime for reproducible CodeSpringLab H5AD processing
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
+    export PATH=/opt/venv/bin:$PATH
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgl1 \
+        libglib2.0-0
+    rm -rf /var/lib/apt/lists/*
+
+    python -m venv /opt/venv
+    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade pip==24.2
+    /opt/venv/bin/python -m pip install --no-cache-dir \
+        anndata==0.10.8 \
+        harmonypy==0.0.10 \
+        igraph==0.11.6 \
+        leidenalg==0.10.2 \
+        numpy==1.26.4 \
+        pandas==2.2.2 \
+        scanpy==1.10.2 \
+        scipy==1.13.1 \
+        scrublet==0.2.3
+    /opt/venv/bin/python -c 'import anndata, harmonypy, igraph, leidenalg, numpy, pandas, scanpy, scipy, scrublet'
+
+%runscript
+    exec python "$@"
+
+%test
+    python -c 'import anndata, harmonypy, igraph, leidenalg, numpy, pandas, scanpy, scipy, scrublet'

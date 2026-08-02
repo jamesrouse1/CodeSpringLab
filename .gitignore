@@ -1,1 +1,3 @@
 scripts_DoNotTouch/project_configs/
+scripts_DoNotTouch/singleCellRNAseq/__pycache__/
+scripts_DoNotTouch/singleCellRNAseq/containers/*.sif

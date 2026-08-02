@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Arguments: engine samples.tsv output_dir params.tsv [stage]
+# Arguments: engine samples.tsv output_dir params.tsv [stage] [scanpy_container.sif]
 engine="$1"
 samples="$2"
 out_dir="$3"
 params="$4"
 stage="${5:-all}"
+scanpy_container_path="${6:-${CSL_SCANPY_SIF:-}}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # This script is executed as a new shell by the SLURM wrapper. Shell functions
@@ -32,58 +33,45 @@ require_executable() {
   fi
 }
 
-scanpy_runtime() {
-  # Scanpy is not part of many cluster-wide Anaconda modules. Keep one
-  # managed, per-user environment outside either repository so every H5AD run
-  # has the same complete runtime and no username is hard-coded.
-  local allow_setup="${1:-false}"
-  local runtime_root="${CSL_WEB_HOME:-$HOME/.codespringweb}/runtimes"
-  local environment="${CSL_SCANPY_ENV:-$runtime_root/scanpy}"
-  local python="$environment/bin/python"
-  local conda_executable=""
+scanpy_container() {
+  # H5AD jobs run inside one immutable, tested SIF image. This avoids package
+  # solving and makes results reproducible across users and projects.
+  local default_container="$script_dir/containers/codespring-scanpy_1.0.0.sif"
+  local container="${scanpy_container_path:-$default_container}"
 
-  if [[ -x "$python" ]] && "$python" -c 'import anndata, harmonypy, igraph, leidenalg, numpy, pandas, scanpy, scipy, scrublet' >/dev/null 2>&1; then
-    printf '%s\n' "$python"
-    return 0
-  fi
-
-  if [[ "$allow_setup" != "true" ]]; then
-    echo "ERROR: The managed Scanpy environment is not ready at $environment." >&2
-    echo "In CodeSpringApp, use the 'Set up Scanpy environment' step for this H5AD project, then rerun the requested stage." >&2
+  module load singularity/3.6.3 >/dev/null 2>&1 || true
+  local singularity_executable="$(command -v singularity || true)"
+  if [[ -z "$singularity_executable" ]]; then
+    echo "ERROR: Singularity could not be loaded. This cluster requires singularity/3.6.3 for CodeSpringLab Scanpy jobs." >&2
     return 2
   fi
-
-  conda_executable="$(command -v conda || true)"
-  if [[ -z "$conda_executable" && -n "${CONDA_EXE:-}" && -x "${CONDA_EXE}" ]]; then
-    conda_executable="$CONDA_EXE"
-  fi
-  if [[ -z "$conda_executable" ]]; then
-    echo "ERROR: Scanpy is not available and Conda could not be found to create the managed runtime." >&2
-    echo "Load a supported Anaconda module, then rerun this stage." >&2
+  if [[ ! -r "$container" ]]; then
+    echo "ERROR: The shared Scanpy container is unavailable: $container" >&2
+    echo "A CodeSpringLab maintainer must install the versioned SIF image once; individual users do not need to create Python environments." >&2
     return 2
   fi
+  printf '%s\t%s\n' "$singularity_executable" "$container"
+}
 
-  echo "INFO: Creating the one-time managed Scanpy runtime at $environment" >&2
-  echo "INFO: This first H5AD job can take several minutes; later Scanpy jobs reuse it." >&2
-  mkdir -p "$runtime_root"
-  # This cluster's Conda mirror provides Scanpy and its compiled scientific
-  # stack, but not Scrublet/HarmonyPy. Install the core reproducibly with
-  # Conda, then use the environment's own pip for only those pure-Python
-  # extensions. --force also repairs a partial environment left by a failed
-  # first setup attempt at this dedicated CodeSpring-owned location.
-  "$conda_executable" create -y --force -p "$environment" -c conda-forge \
-    python=3.11 pip scanpy anndata python-igraph leidenalg >&2
-  python="$environment/bin/python"
-  if [[ -x "$python" ]]; then
-    echo "INFO: Installing Scrublet and HarmonyPy with the managed environment's pip." >&2
-    "$python" -m pip install --no-cache-dir scrublet harmonypy >&2
+scanpy_bind_args() {
+  # Bind project outputs, the manifest, the runner, and every parent input
+  # directory explicitly. This works whether project data are in $HOME, /grid,
+  # or another filesystem that Singularity does not auto-bind on a given node.
+  local -a directories=("$out_dir" "$(dirname "$samples")" "$script_dir")
+  local input_column
+  input_column="$(awk -F '\t' 'NR==1 {for (i=1;i<=NF;i++) if ($i=="input_path") {print i; exit}}' "$samples")"
+  if [[ -n "$input_column" ]]; then
+    while IFS= read -r input_path; do
+      [[ -n "$input_path" ]] && directories+=("$(dirname "$input_path")")
+    done < <(awk -F '\t' -v col="$input_column" 'NR>1 && $col != "" {print $col}' "$samples")
   fi
-  if [[ ! -x "$python" ]] || ! "$python" -c 'import anndata, harmonypy, igraph, leidenalg, numpy, pandas, scanpy, scipy, scrublet' >/dev/null 2>&1; then
-    echo "ERROR: The managed Scanpy runtime could not be initialized at $environment." >&2
-    echo "Check the job log for the Conda error, then rerun this stage; no input data were modified." >&2
-    return 2
-  fi
-  printf '%s\n' "$python"
+  local seen=$'\n'
+  local directory
+  for directory in "${directories[@]}"; do
+    [[ -d "$directory" && "$seen" != *$'\n'"$directory"$'\n'* ]] || continue
+    seen+="$directory"$'\n'
+    printf '%s\n' "--bind=$directory"
+  done
 }
 
 engine="$(printf '%s' "$engine" | tr '[:upper:]' '[:lower:]')"
@@ -99,21 +87,25 @@ case "$engine" in
     ;;
   scanpy)
     module load EBModules 2>/dev/null || true
-    module load Anaconda3/2021.05 2>/dev/null || true
-    if [[ "$stage" == "setup-runtime" ]]; then
-      runtime_executable="$(scanpy_runtime true)"
-    else
-      runtime_executable="$(scanpy_runtime)"
+    runtime_info="$(scanpy_container)"
+    singularity_executable="${runtime_info%%$'\t'*}"
+    container="${runtime_info#*$'\t'}"
+    if [[ -z "$singularity_executable" || -z "$container" || "$runtime_info" == "$singularity_executable" ]]; then
+      echo "ERROR: Could not resolve the shared Scanpy container runtime." >&2
+      exit 2
     fi
-    require_executable "$runtime_executable" "managed Scanpy Python"
-    echo "Scanpy runtime ready: $runtime_executable"
-    if [[ "$stage" == "setup-runtime" ]]; then
-      mkdir -p "$out_dir"
-      printf 'ready\n' > "$out_dir/_SCANPY_RUNTIME_READY"
-      echo "Managed Scanpy runtime setup completed."
-      exit 0
-    fi
-    "$runtime_executable" "$script_dir/scrna_pipeline_scanpy.py" "$samples" "$out_dir" "$params" "$stage"
+    bind_args=()
+    while IFS= read -r bind_arg; do
+      bind_args+=("$bind_arg")
+    done < <(scanpy_bind_args)
+    echo "Scanpy container ready: $(basename "$container")"
+    SINGULARITYENV_MPLBACKEND=Agg \
+      SINGULARITYENV_TMPDIR="${TMPDIR:-$out_dir/tmp}" \
+      SINGULARITYENV_MPLCONFIGDIR="${MPLCONFIGDIR:-$out_dir/tmp/matplotlib}" \
+      SINGULARITYENV_NUMBA_CACHE_DIR="${NUMBA_CACHE_DIR:-$out_dir/tmp/numba}" \
+      SINGULARITYENV_XDG_CACHE_HOME="${XDG_CACHE_HOME:-$out_dir/tmp/cache}" \
+      "$singularity_executable" exec --cleanenv "${bind_args[@]}" "$container" \
+      python "$script_dir/scrna_pipeline_scanpy.py" "$samples" "$out_dir" "$params" "$stage"
     ;;
   *)
     echo "ERROR: engine must be seurat or scanpy" >&2
