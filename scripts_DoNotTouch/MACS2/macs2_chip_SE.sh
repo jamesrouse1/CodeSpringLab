@@ -51,7 +51,17 @@ summary="${outdir}/${sample}_macs2_summary.txt"
 complete_marker="${outdir}/${sample}_macs2_complete.txt"
 rm -f "$complete_marker"
 macs_status=0
+model_mode="estimated"
 macs2 "${args[@]}" 2> "$run_log" || macs_status=$?
+if ((macs_status != 0)) && [[ "$input_format" == "BAM" ]] && grep -Eq 'Too few paired peaks|can not build the model|cannot build the model' "$run_log"; then
+  model_mode="fixed_extension_147_fallback"
+  fallback_log="${run_log}.fallback"
+  printf '\nINFO: MACS2 could not estimate a strand-shift model; retrying with --nomodel --extsize 147.\n' >> "$run_log"
+  macs_status=0
+  macs2 "${args[@]}" --nomodel --extsize 147 2> "$fallback_log" || macs_status=$?
+  cat "$fallback_log" >> "$run_log"
+  rm -f "$fallback_log"
+fi
 cat "$run_log" >&2
 if ((macs_status != 0)); then
   echo "ERROR: MACS2 exited with status ${macs_status} for ${sample}. See ${run_log}." >&2
@@ -80,6 +90,8 @@ caller_version="$(macs2 --version 2>&1 | head -n 1)"
   printf 'genome_size\t%s\n' "$genome_size"
   printf 'qvalue\t%s\n' "$qvalue"
   printf 'peak_type\t%s\n' "$peak_type"
+  printf 'model_mode\t%s\n' "$model_mode"
+  printf 'fixed_extension_bp\t%s\n' "$([[ "$model_mode" == "fixed_extension_147_fallback" ]] && printf 147 || printf NA)"
   printf 'peak_file\t%s\n' "$peak_file"
   printf 'peak_count\t%s\n' "$peak_count"
   printf 'run_log\t%s\n' "$run_log"

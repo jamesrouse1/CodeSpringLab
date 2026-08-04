@@ -40,18 +40,23 @@ cat > "$fake_bin/macs2" <<'FAKE_MACS2'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == "--version" ]]; then echo "macs2 2.2.9.1-fake"; exit 0; fi
-name=""; outdir=""; broad=false
+name=""; outdir=""; broad=false; nomodel=false
 while (($#)); do
   case "$1" in
     -n) name="$2"; shift 2 ;;
     --outdir) outdir="$2"; shift 2 ;;
     --broad) broad=true; shift ;;
+    --nomodel) nomodel=true; shift ;;
     *) shift ;;
   esac
 done
 [[ -n "$name" && -n "$outdir" ]] || { echo "fake macs2 missing name/outdir" >&2; exit 2; }
 mkdir -p "$outdir"
 if [[ "${FAKE_MACS2_MODE:-success}" == "fail" ]]; then echo "forced failure" >&2; exit 9; fi
+if [[ "${FAKE_MACS2_MODE:-success}" == "model_fail" && "$nomodel" == "false" ]]; then
+  echo "WARNING: Too few paired peaks (0) so I can not build the model!" >&2
+  exit 1
+fi
 ext="narrowPeak"; $broad && ext="broadPeak"
 if [[ "${FAKE_MACS2_MODE:-success}" == "zero" ]]; then
   : > "$outdir/${name}_peaks.${ext}"
@@ -194,6 +199,18 @@ bash "$repo_root/scripts_DoNotTouch/MACS2/macs2_chip_SE.sh" \
 assert_file "$chip_out/T1_macs2_complete.txt"
 assert_file "$chip_out/T1_macs2_summary.txt"
 assert_file "$chip_out/T1_peaks.narrowPeak"
+grep -q $'^model_mode\testimated$' "$chip_out/T1_macs2_summary.txt"
+
+rm -f "$chip_out/T1_macs2_complete.txt" "$chip_out/T1_peaks.narrowPeak" "$chip_out/T1_peaks.xls"
+export FAKE_MACS2_MODE=model_fail
+bash "$repo_root/scripts_DoNotTouch/MACS2/macs2_chip_SE.sh" \
+  T1 "$chip_root/target.bam" "$chip_root/input.bam" BAM mm 0.01 narrow "$chip_out"
+assert_file "$chip_out/T1_macs2_complete.txt"
+assert_file "$chip_out/T1_peaks.narrowPeak"
+grep -q $'^model_mode\tfixed_extension_147_fallback$' "$chip_out/T1_macs2_summary.txt"
+grep -q $'^fixed_extension_bp\t147$' "$chip_out/T1_macs2_summary.txt"
+grep -q -- '--nomodel --extsize 147' "$chip_out/T1_macs2.log" || grep -q 'retrying with --nomodel --extsize 147' "$chip_out/T1_macs2.log"
+unset FAKE_MACS2_MODE
 
 rm -f "$chip_out/T1_macs2_complete.txt"
 export FAKE_MACS2_MODE=traceback
