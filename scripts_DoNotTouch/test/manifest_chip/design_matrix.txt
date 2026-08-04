@@ -1,9 +1,6 @@
 sample	treatment	reference	condition	replicate	control_sample	filename
-siGATA_rep1	siGATA	chip	siGATA	1	input1	siGATA_rep1_R1_001.fastq.gz
-input1	siGATA	input	siGATA	1		input1_R1_001.fastq.gz
-siGATA_rep2	siGATA	chip	siGATA	2	input2	siGATA_rep2_R1_001.fastq.gz
-input2	siGATA	input	siGATA	2		input2_R1_001.fastq.gz
-control_rep1	control	chip	control	1	input3	control_rep1_R1_001.fastq.gz
-input3	control	input	control	1		input3_R1_001.fastq.gz
-control_rep2	control	chip	control	2	input4	control_rep2_R1_001.fastq.gz
-input4	control	input	control	2		input4_R1_001.fastq.gz
+siGATA_rep1	siGATA	chip	siGATA	1	input	siGATA_rep1_R1_001.fastq.gz
+siGATA_rep2	siGATA	chip	siGATA	2	input	siGATA_rep2_R1_001.fastq.gz
+control_rep1	control	chip	control	1	input	control_rep1_R1_001.fastq.gz
+control_rep2	control	chip	control	2	input	control_rep2_R1_001.fastq.gz
+input	shared	input	input	1		input1_R1_001.fastq.gz

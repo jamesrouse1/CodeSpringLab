@@ -68,4 +68,26 @@ if len(condition_counts) < 2 or any(count < 2 for count in condition_counts.valu
     raise SystemExit("ATAC example needs at least two replicates in each comparison condition")
 PY
 
+python3 - "$repo_root" <<'PY'
+import csv
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = root / "scripts_DoNotTouch/test/manifest_chip/design_matrix.txt"
+fastq_dir = root / "scripts_DoNotTouch/test/fastq_chip"
+with manifest.open(newline="") as handle:
+    rows = list(csv.DictReader(handle, delimiter="\t"))
+
+targets = [row for row in rows if row["reference"].strip().lower() == "chip"]
+inputs = [row for row in rows if row["reference"].strip().lower() == "input"]
+if len(targets) != 4 or len(inputs) != 1:
+    raise SystemExit("ChIP example must contain four ChIP libraries and one shared input library")
+shared_input = inputs[0]["sample"].strip()
+if not shared_input or any(row["control_sample"].strip() != shared_input for row in targets):
+    raise SystemExit("Every ChIP example target must reference the one shared input library")
+if any(not (fastq_dir / row["filename"].strip()).is_file() for row in rows):
+    raise SystemExit("A ChIP example FASTQ named in the design matrix is missing")
+PY
+
 echo "Shell, Python, and R source syntax checks passed."
