@@ -29,6 +29,10 @@ grep -Fq 'choices = completed_deseq_columns' "$repo_root/scripts_DoNotTouch/Shin
 grep -Fq 'choices = completed_gsea_columns' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'completed_controls(completed_deseq_catalog' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'completed_controls(completed_gsea_catalog' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'configured_species, "maize"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'maize_nc350_nam1' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'maize_w22_nrgene2' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'optional_quantifiers_enabled' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 
 python3 - "$repo_root" <<'PY'
 import csv

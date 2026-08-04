@@ -62,6 +62,7 @@ pick_first_existing_path <- function(paths) {
   NULL
 }
 configured_species <- tolower(trimws(as.character(config_value("genome_species", ""))[1]))
+configured_genome_version <- tolower(trimws(as.character(config_value("genome_version", ""))[1]))
 configured_gtf <- trimws(as.character(config_value("selected_gtf_path", ""))[1])
 configured_gtf_for <- function(species) {
   if (!identical(configured_species, species) || !nzchar(configured_gtf)) return(NULL)
@@ -85,6 +86,20 @@ if (is.null(human_gtf_path)) {
     "/grid/bsr/data/data/utama/genome/hg38_p13_gencode/gencode.v42.chr_patch_hapl_scaff.annotation.gtf"
   ))
 }
+maize_gtf_path <- configured_gtf_for("maize")
+if (is.null(maize_gtf_path)) {
+  maize_gtf_candidates <- switch(
+    configured_genome_version,
+    maize_nc350_nam1 = "/grid/bsr/data/data/utama/genome/maize/Zm-NC350-REFERENCE-NAM-1.0.gtf",
+    maize_w22_nrgene2 = "/grid/bsr/data/data/utama/genome/maize/Zm-W22-REFERENCE-NRGENE-2.0.clean.gtf",
+    "/grid/bsr/data/data/utama/genome/maize/Zm-B73-REFERENCE-NAM-5.0.gtf"
+  )
+  maize_gtf_path <- pick_first_existing_path(c(
+    maize_gtf_candidates,
+    file.path(gtf_dir, basename(maize_gtf_candidates))
+  ))
+}
+optional_quantifiers_enabled <- !identical(configured_species, "maize")
 deseq2_dir <- file.path(data_dir, "deseq2")
 deseq2_gene_name_dir <- file.path(data_dir, "deseq2_gene_name")
 gseapy_dir <- file.path(data_dir, "gseapy")
@@ -342,8 +357,8 @@ kallisto_abundance_files <- if (dir.exists(kallisto_dir)) list.files(kallisto_di
 kallisto_sample_names <- sort(unique(basename(dirname(kallisto_abundance_files))))
 kallisto_saved_matrices <- if (dir.exists(counts_dir)) list.files(counts_dir, pattern = "^kallisto_.*_matrix.*\\.txt$", full.names = TRUE) else character(0)
 rsem_saved_matrices <- if (dir.exists(counts_dir)) list.files(counts_dir, pattern = "^rsem_.*_matrix.*\\.txt$", full.names = TRUE) else character(0)
-kallisto_available <- length(kallisto_sample_names) > 0 || length(kallisto_saved_matrices) > 0
-rsem_available <- (dir.exists(rsem_dir) && length(list.files(rsem_dir, pattern = "\\.(genes|isoforms)\\.results$", recursive = TRUE)) > 0) || length(rsem_saved_matrices) > 0
+kallisto_available <- optional_quantifiers_enabled && (length(kallisto_sample_names) > 0 || length(kallisto_saved_matrices) > 0)
+rsem_available <- optional_quantifiers_enabled && ((dir.exists(rsem_dir) && length(list.files(rsem_dir, pattern = "\\.(genes|isoforms)\\.results$", recursive = TRUE)) > 0) || length(rsem_saved_matrices) > 0)
 deseq2_output_dirs <- c(deseq2_dir, deseq2_gene_name_dir)
 deseq2_available <- any(vapply(
   deseq2_output_dirs,
@@ -362,12 +377,22 @@ rna_stage_status <- if (counts_only_mode) {
     status = ifelse(c(nrow(design_df) > 0, count_matrix_available, deseq2_available, gseapy_available), "Complete", "Not started"),
     stringsAsFactors = FALSE
   )
-} else {
+} else if (optional_quantifiers_enabled) {
   data.frame(
     stage = c("Design matrix", "Initial QC", "Alignment", "Gene counts", "Differential expression", "Pathway analysis", "RSEM (optional)", "Kallisto (optional)"),
     status = ifelse(
       c(nrow(design_df) > 0, fastqc_raw_available || fastqc_trim_available, star_available, count_matrix_available,
         deseq2_available, gseapy_available, rsem_available, kallisto_available),
+      "Complete", "Not started"
+    ),
+    stringsAsFactors = FALSE
+  )
+} else {
+  data.frame(
+    stage = c("Design matrix", "Initial QC", "Alignment", "Gene counts", "Differential expression", "Pathway analysis"),
+    status = ifelse(
+      c(nrow(design_df) > 0, fastqc_raw_available || fastqc_trim_available, star_available, count_matrix_available,
+        deseq2_available, gseapy_available),
       "Complete", "Not started"
     ),
     stringsAsFactors = FALSE
@@ -695,6 +720,7 @@ detect_species_from_ids <- function(x) {
   x <- x[!is.na(x) & nzchar(x)]
   if (!length(x)) return(NA_character_)
   x_head <- head(x, 500)
+  if (sum(grepl("^Zm[0-9]+[A-Za-z]*[0-9]+", x_head)) > 0) return("maize")
   if (sum(grepl("^ENSMUSG", x_head) | grepl("^ENSMUST", x_head)) > 0) return("mouse")
   if (sum(grepl("^ENSG", x_head) | grepl("^ENST", x_head)) > 0) return("human")
   if (sum(grepl("^Gm[0-9]+$", x_head) | grepl("^[A-Z][a-z0-9]+$", x_head) | grepl("Rik$", x_head)) > sum(grepl("^[A-Z0-9\\-]+$", x_head))) return("mouse")
@@ -730,7 +756,7 @@ looks_like_gene_id <- function(ids) {
   ids <- ids[!is.na(ids) & nzchar(ids)]
   if (!length(ids)) return(FALSE)
   ids <- head(ids, 500)
-  mean(grepl("^(ENSG|ENSMUSG|ENS[A-Z]*G)[0-9]+", ids)) >= 0.5
+  mean(grepl("^(ENSG|ENSMUSG|ENS[A-Z]*G)[0-9]+|^Zm[0-9]+[A-Za-z]*[0-9]+", ids)) >= 0.5
 }
 
 convert_gene_labels <- function(ids, map_df) {
@@ -1319,6 +1345,7 @@ normalized_counts_raw_label_mode <- function(treatment_value, control_value) {
 }
 
 normalized_counts_label_choices <- function(treatment_value, control_value) {
+  if (identical(configured_species, "maize")) return(c("Gene ID" = "gene_id"))
   raw_mode <- normalized_counts_raw_label_mode(treatment_value, control_value)
   if (identical(raw_mode, "gene_name") && !file.exists(normalized_counts_path(treatment_value, control_value, "gene_name"))) {
     return(c("Gene name" = "gene_name"))
@@ -1790,7 +1817,7 @@ kallisto_filter_columns <- c("gene_symbol", "transcript_name", "transcript_id", 
 counts_subtabs <- c(
   counts_subtabs,
   list(
-    tabPanel(
+    if (optional_quantifiers_enabled) tabPanel(
       "RSEM",
       sidebarLayout(
         sidebarPanel(
@@ -1810,7 +1837,7 @@ counts_subtabs <- c(
           download_table_button("download_rsem_table", "Download RSEM table")
         )
       )
-    ),
+    ) else NULL,
     tabPanel(
       "DESeq2 Normalized Counts",
       sidebarLayout(
@@ -1835,7 +1862,7 @@ counts_subtabs <- c(
         )
       )
     ),
-    tabPanel(
+    if (optional_quantifiers_enabled) tabPanel(
       "Kallisto",
       sidebarLayout(
         sidebarPanel(
@@ -1871,9 +1898,10 @@ counts_subtabs <- c(
           download_table_button("download_kallisto_table", "Download Kallisto table")
         )
       )
-    )
+    ) else NULL
   )
 )
+counts_subtabs <- Filter(Negate(is.null), counts_subtabs)
 
 rna_overview_tab <- tabPanel(
   "Overview",
@@ -2755,7 +2783,7 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
-  gtf_cache <- reactiveValues(mouse = NULL, human = NULL)
+  gtf_cache <- reactiveValues(mouse = NULL, human = NULL, maize = NULL)
 
   rna_files_filtered <- reactive({
     category <- value_or(input$rna_file_category, "all")
@@ -2797,6 +2825,10 @@ server <- function(input, output, session) {
     if (identical(species, "human")) {
       if (is.null(gtf_cache$human)) gtf_cache$human <- read_gtf_gene_map(human_gtf_path)
       return(gtf_cache$human)
+    }
+    if (identical(species, "maize")) {
+      if (is.null(gtf_cache$maize)) gtf_cache$maize <- read_gtf_gene_map(maize_gtf_path)
+      return(gtf_cache$maize)
     }
     NULL
   }
@@ -3136,7 +3168,9 @@ server <- function(input, output, session) {
 
   output$featurecounts_label_mode_ui <- renderUI({
     raw_mode <- featurecounts_raw_label_mode()
-    choices <- if (identical(raw_mode, "gene_name")) {
+    choices <- if (identical(configured_species, "maize")) {
+      c("Gene ID" = "gene_id")
+    } else if (identical(raw_mode, "gene_name")) {
       c("Gene name" = "gene_name")
     } else {
       c("Gene ID" = "gene_id", "Gene name" = "gene_name")
