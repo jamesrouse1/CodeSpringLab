@@ -7,7 +7,7 @@ feature="${3:-}"
 out_prefix="${4:-}"
 strand_bed="${5:-}"
 if [[ -z "$bam" || -z "$gtf" || -z "$feature" || -z "$out_prefix" || -z "$strand_bed" ]]; then
-  echo "ERROR: usage: featurecounts_SE.sh <BAM> <GTF> <feature attribute> <output prefix> <strand BED>" >&2
+  echo "ERROR: usage: featurecounts_SE.sh <BAM> <GTF> <feature attribute> <output prefix> <strand BED|none>" >&2
   exit 2
 fi
 
@@ -18,26 +18,33 @@ if ! type module >/dev/null 2>&1; then
 fi
 type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavailable." >&2; exit 127; }
 module load EBModules
-module load RSeQC/4.0.0-foss-2021b
+if [[ "$strand_bed" != "none" ]]; then
+  module load RSeQC/4.0.0-foss-2021b
+fi
 module load Subread
-command -v infer_experiment.py >/dev/null 2>&1 || { echo "ERROR: infer_experiment.py was not found after loading RSeQC." >&2; exit 127; }
 command -v featureCounts >/dev/null 2>&1 || { echo "ERROR: featureCounts was not found after loading Subread." >&2; exit 127; }
 [[ -s "$bam" ]] || { echo "ERROR: input BAM is missing or empty: $bam" >&2; exit 2; }
 [[ -s "$gtf" ]] || { echo "ERROR: annotation GTF is missing or empty: $gtf" >&2; exit 2; }
-[[ -s "$strand_bed" ]] || { echo "ERROR: strand-detection BED is missing or empty: $strand_bed" >&2; exit 2; }
 
 mkdir -p "$(dirname "$out_prefix")"
 strand_report="${out_prefix}_strand.txt"
 counts_file="${out_prefix}_counts.txt"
 rm -f -- "$counts_file" "${counts_file}.summary"
-infer_experiment.py -r "$strand_bed" -i "$bam" > "$strand_report"
-fw="$(awk 'NR==5 {print $NF}' "$strand_report")"
-rv="$(awk 'NR==6 {print $NF}' "$strand_report")"
-if ! awk -v fw="$fw" -v rv="$rv" 'BEGIN {exit !(fw ~ /^[0-9.]+$/ && rv ~ /^[0-9.]+$/ && fw + rv > 0)}'; then
-  echo "ERROR: could not determine library strandedness from $strand_report" >&2
-  exit 1
+strand_idx=0
+if [[ "$strand_bed" == "none" ]]; then
+  printf 'strand_reference\tnone\nfeatureCounts_strand\t0 (unstranded)\nreason\tNo strand-detection BED is configured for this reference.\n' > "$strand_report"
+else
+  command -v infer_experiment.py >/dev/null 2>&1 || { echo "ERROR: infer_experiment.py was not found after loading RSeQC." >&2; exit 127; }
+  [[ -s "$strand_bed" ]] || { echo "ERROR: strand-detection BED is missing or empty: $strand_bed" >&2; exit 2; }
+  infer_experiment.py -r "$strand_bed" -i "$bam" > "$strand_report"
+  fw="$(awk 'NR==5 {print $NF}' "$strand_report")"
+  rv="$(awk 'NR==6 {print $NF}' "$strand_report")"
+  if ! awk -v fw="$fw" -v rv="$rv" 'BEGIN {exit !(fw ~ /^[0-9.]+$/ && rv ~ /^[0-9.]+$/ && fw + rv > 0)}'; then
+    echo "ERROR: could not determine library strandedness from $strand_report" >&2
+    exit 1
+  fi
+  strand_idx="$(awk -v fw="$fw" -v rv="$rv" 'BEGIN {d=(fw-rv)*100/(fw+rv); if (d<0) a=-d; else a=d; if (a<20) print 0; else if (d>0) print 1; else print 2}')"
 fi
-strand_idx="$(awk -v fw="$fw" -v rv="$rv" 'BEGIN {d=(fw-rv)*100/(fw+rv); if (d<0) a=-d; else a=d; if (a<20) print 0; else if (d>0) print 1; else print 2}')"
 
 featureCounts -a "$gtf" \
   -T "${SLURM_CPUS_PER_TASK:-2}" \
@@ -50,4 +57,3 @@ featureCounts -a "$gtf" \
   "$bam"
 
 [[ -s "$counts_file" ]] || { echo "ERROR: featureCounts did not create a non-empty count table: $counts_file" >&2; exit 1; }
-

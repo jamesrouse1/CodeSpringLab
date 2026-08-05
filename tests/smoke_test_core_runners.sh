@@ -234,6 +234,14 @@ if grep -q -- '--countReadPairs' "$FAKE_FEATURECOUNTS_ARGS"; then
 fi
 
 export FAKE_INFER_MODE=malformed
+(cd "$work" && bash "$repo_root/scripts_DoNotTouch/featureCounts/qsub_featurecounts_PE.sh" \
+  "$work/inputs/input.bam" "$work/inputs/genes.gtf" gene_id "$work/output/maize counts" \
+  none maize_project "$repo_root/scripts_DoNotTouch/featureCounts/featurecounts_PE.sh")
+assert_file "$work/output/maize counts_counts.txt"
+assert_file "$work/output/maize counts_strand.txt"
+grep -q -- '-s 0' "$FAKE_FEATURECOUNTS_ARGS"
+grep -q 'No strand-detection BED is configured' "$work/output/maize counts_strand.txt"
+
 if bash "$repo_root/scripts_DoNotTouch/featureCounts/featurecounts_SE.sh" \
   "$work/inputs/input.bam" "$work/inputs/genes.gtf" gene_id "$work/output/bad counts" "$work/inputs/strand.bed"; then
   echo "ASSERTION FAILED: malformed strandedness report returned success" >&2
