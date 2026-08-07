@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ensure basic system commands remain available when this runner is launched
+# from a clean SLURM batch environment.
+export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+
 # Arguments: engine samples.tsv output_dir params.tsv [stage] [scanpy_container.sif]
 engine="$1"
 samples="$2"

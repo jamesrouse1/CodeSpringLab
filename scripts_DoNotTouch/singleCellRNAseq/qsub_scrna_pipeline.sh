@@ -9,6 +9,11 @@
 
 set -euo pipefail
 
+# `--export=NONE` gives a clean SLURM environment, which can omit PATH on
+# some clusters.  The module initializer needs basic system tools (including
+# ps) before it can construct the scientific runtime environment.
+export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+
 # SLURM batch shells do not always inherit the interactive module function.
 # Initialize it when available so the runner sees the intended R/Python stack.
 if ! command -v module >/dev/null 2>&1; then
