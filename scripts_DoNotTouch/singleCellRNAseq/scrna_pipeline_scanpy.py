@@ -649,7 +649,9 @@ def apply_marker_annotation(adata, path: Path, tables_dir: Path):
     if not lists:
         raise SystemExit("None of the supplied marker genes were present in the expression object.")
     for name, genes_for_type in lists.items():
-        sc.tl.score_genes(adata, genes_for_type, score_name=f"marker_score__{name}", use_raw=False)
+        # Use normalized log-expression, not the scaled/clipped matrix used
+        # for PCA and neighbor construction.
+        sc.tl.score_genes(adata, genes_for_type, score_name=f"marker_score__{name}", use_raw=True)
     clusters = adata.obs["cluster"].astype(str)
     score_columns = [f"marker_score__{x}" for x in lists]
     means = adata.obs.assign(cluster=clusters).groupby("cluster", observed=True)[score_columns].mean()
@@ -847,7 +849,6 @@ def main():
         pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
         pd.DataFrame([{"recommended_n_pcs": recommended_pcs, "basis": "PCA variance elbow (bounded to 10–50 PCs)"}]).to_csv(tables / "pca_recommended_parameters.tsv", sep="\t", index=False)
         save_pca_outputs(adata, figures, recommended_pcs=recommended_pcs)
-        save_dashboard_expression(adata, tables)
         # The dashboard uses this full symbol list to request one gene at a
         # time from the post-UMAP H5AD's normalized `.raw` layer.
         pd.DataFrame({"gene": adata.raw.var_names.astype(str)}).to_csv(tables / "dashboard_all_genes.tsv", sep="\t", index=False)
