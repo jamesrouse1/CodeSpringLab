@@ -561,18 +561,29 @@ def main():
             raise SystemExit(f"The {prior} stage has not completed. Run {prior} before this stage.")
         return sc.read_h5ad(path)
 
+    def discard_checkpoint(path: Path):
+        """Remove only a checkpoint that has been superseded successfully."""
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    # Validate the manifest once.  Each submitted stage then opens just the
+    # one checkpoint it needs; separate SLURM jobs cannot share memory, but
+    # they also must not serially reload older checkpoints on the way there.
+    samples = read_table(samples_path)
+    if not {"sample_id", "input_path"}.issubset(samples.columns):
+        raise SystemExit("Sample manifest requires sample_id and input_path columns.")
+    samples = samples[(samples.sample_id.str.strip() != "") & (samples.input_path.str.strip() != "")].copy()
+    if samples.empty:
+        raise SystemExit("No valid sample rows were supplied.")
+    samples["sample_id"] = samples["sample_id"].astype(str).str.strip()
+    if samples["sample_id"].duplicated().any():
+        duplicates = ", ".join(samples.loc[samples["sample_id"].duplicated(), "sample_id"].unique())
+        raise SystemExit(f"sample_id values must be unique in the input manifest: {duplicates}")
+
     # Stage 1: inspect each source object and preserve a raw-count checkpoint.
     if stage in {"inspect", "all"}:
-        samples = read_table(samples_path)
-        if not {"sample_id", "input_path"}.issubset(samples.columns):
-            raise SystemExit("Sample manifest requires sample_id and input_path columns.")
-        samples = samples[(samples.sample_id.str.strip() != "") & (samples.input_path.str.strip() != "")].copy()
-        if samples.empty:
-            raise SystemExit("No valid sample rows were supplied.")
-        samples["sample_id"] = samples["sample_id"].astype(str).str.strip()
-        if samples["sample_id"].duplicated().any():
-            duplicates = ", ".join(samples.loc[samples["sample_id"].duplicated(), "sample_id"].unique())
-            raise SystemExit(f"sample_id values must be unique in the input manifest: {duplicates}")
         samples.to_csv(tables / "sample_manifest_used.tsv", sep="\t", index=False)
         inputs = [read_one(row, figures) for row in samples.itertuples(index=False)]
         adata = ad.concat([item[0] for item in inputs], join="outer", merge="same", index_unique=None, fill_value=0)
@@ -592,9 +603,15 @@ def main():
         mark_complete("inspect")
         if stage == "inspect":
             return
-    else:
+    elif stage == "qc":
         adata = require_checkpoint(input_checkpoint, "input inspection")
-        samples = read_table(samples_path)
+    elif stage == "preprocess":
+        adata = require_checkpoint(qc_checkpoint, "QC and doublet handling")
+    elif stage == "cluster":
+        adata = require_checkpoint(preprocess_checkpoint, "normalization and PCA")
+    elif stage == "annotate":
+        annotation_input = cluster_checkpoint if cluster_checkpoint.exists() else objects / "processed_scanpy.h5ad"
+        adata = require_checkpoint(annotation_input, "UMAP and clustering")
 
     # Stage 2: filter cells/genes and handle doublets while the data is raw.
     if stage in {"qc", "all"}:
@@ -620,7 +637,6 @@ def main():
             raise SystemExit("Minimum cells per retained gene removed every gene.")
         adata = adata[:, gene_keep].copy()
         pd.DataFrame(feature_reports).to_csv(tables / "feature_filtering_by_sample.tsv", sep="\t", index=False)
-        adata.layers["counts"] = adata.X.copy()
         qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt", "doublet_score", "predicted_doublet"]].copy()
         qc.insert(0, "cell", adata.obs_names)
         qc.to_csv(tables / "qc_cell_metrics.tsv", sep="\t", index=False)
@@ -632,11 +648,14 @@ def main():
         mark_complete("qc")
         if stage == "qc":
             return
-    elif stage not in {"inspect"}:
-        adata = require_checkpoint(qc_checkpoint, "QC and doublet handling")
 
     # Stage 3: normalization, highly variable features, scaling, and PCA.
     if stage in {"preprocess", "all"}:
+        # Keep only one raw-count matrix in the QC checkpoint.  The counts
+        # layer is needed downstream, so create it here immediately before X
+        # is normalized instead of storing a second full sparse matrix during
+        # the QC review stage.
+        adata.layers["counts"] = adata.X.copy()
         sc.pp.normalize_total(adata, target_sum=1e4)
         sc.pp.log1p(adata)
         adata.raw = adata
@@ -663,11 +682,13 @@ def main():
         pca_ratio = np.asarray(adata.uns["pca"]["variance_ratio"]).ravel()
         pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
         write_h5ad_checkpoint(adata, preprocess_checkpoint)
+        # Once normalized/PCA data are safely checkpointed, the QC object is
+        # redundant.  The raw input checkpoint is retained so users can
+        # revise cutoffs without rereading the original 10x folders.
+        discard_checkpoint(qc_checkpoint)
         mark_complete("preprocess")
         if stage == "preprocess":
             return
-    elif stage not in {"inspect", "qc"}:
-        adata = require_checkpoint(preprocess_checkpoint, "normalization and PCA")
 
     # Stage 4: optional technical-batch integration followed by neighbours, UMAP, and clusters.
     if stage in {"cluster", "all"}:
@@ -707,8 +728,6 @@ def main():
         mark_complete("cluster")
         if stage == "cluster":
             return
-    elif stage == "annotate":
-        adata = require_checkpoint(cluster_checkpoint, "integration and clustering")
 
     # Stage 5: annotation, markers, and the final portable results set.
     if stage in {"annotate", "all"}:
@@ -745,6 +764,10 @@ def main():
         cell_type_by_sample["proportion_within_sample"] = cell_type_by_sample["cells"] / cell_type_by_sample.groupby("sample_id", observed=True)["cells"].transform("sum")
         cell_type_by_sample.to_csv(tables / "cell_type_by_sample.tsv", sep="\t", index=False)
         write_h5ad_checkpoint(adata, objects / "processed_scanpy.h5ad")
+        # The final H5AD includes the cluster representation, annotations,
+        # counts, and normalized raw values, making the previous clustered
+        # checkpoint unnecessary after successful annotation.
+        discard_checkpoint(cluster_checkpoint)
         (out_dir / "run_summary.txt").write_text("\n".join([
             "engine: scanpy", "normalization: lognormalize", f"integration: {integration}", f"doublet_method: {p['doublet_method']}",
             f"doublets_removed: {int(adata.uns.get('codespring_doublets_removed', 0))}", "input_processing_inventory: tables/input_processing_detected.tsv",
