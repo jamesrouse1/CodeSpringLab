@@ -278,26 +278,58 @@ def save_umap(adata, color, path, title=None):
 
 
 def save_qc_plots(adata, figures: Path, prefix: str = "01_qc"):
-    """Write small, portable QC plots without an interactive display."""
+    """Write clean, readable pre/post-filter QC figures without an interactive display."""
     import matplotlib.pyplot as plt
-    apply_jpplot_colors(adata, "sample_id")
-    sc.pl.violin(
-        adata,
-        keys=["n_genes_by_counts", "total_counts", "pct_counts_mt"],
-        groupby="sample_id",
-        multi_panel=True,
-        rotation=35,
-        show=False,
-        palette=adata.uns.get("sample_id_colors"),
-    )
-    plt.gcf().set_size_inches(11, 5)
-    plt.gcf().tight_layout()
-    plt.gcf().savefig(figures / f"{prefix}_violin.png", dpi=160)
-    plt.close(plt.gcf())
-    fig, ax = plt.subplots(figsize=(7, 5.5))
-    sc.pl.scatter(adata, x="total_counts", y="pct_counts_mt", color="sample_id", ax=ax, show=False, color_map=JP_COLOR_MAP_NAME)
-    fig.tight_layout()
-    fig.savefig(figures / f"{prefix}_counts_vs_mt.png", dpi=160)
+    sample_series = adata.obs["sample_id"].astype(str)
+    samples = list(dict.fromkeys(sample_series.tolist()))
+    display_labels = [sample if len(sample) <= 28 else f"{sample[:25]}…" for sample in samples]
+    single_sample = len(samples) == 1
+    colors = [JP_COLOR_MAP(position) for position in np.linspace(0.18, 0.82, max(len(samples), 2))]
+    metrics = [
+        ("n_genes_by_counts", "Detected genes per cell"),
+        ("total_counts", "UMIs per cell"),
+        ("pct_counts_mt", "Mitochondrial reads (%)"),
+    ]
+    fig, axes = plt.subplots(1, len(metrics), figsize=(14, 4.8), layout="constrained")
+    for axis, (column, label) in zip(axes, metrics):
+        groups = [pd.to_numeric(adata.obs.loc[sample_series == sample, column], errors="coerce").dropna().to_numpy() for sample in samples]
+        groups = [group if len(group) else np.array([0.0]) for group in groups]
+        violin = axis.violinplot(groups, showmedians=True, showextrema=False)
+        for body, color in zip(violin["bodies"], colors):
+            body.set_facecolor(color)
+            body.set_edgecolor("none")
+            body.set_alpha(0.82)
+        violin["cmedians"].set_color("#1f2937")
+        violin["cmedians"].set_linewidth(1.25)
+        if single_sample:
+            axis.set_xticks([])
+        else:
+            axis.set_xticks(range(1, len(samples) + 1), display_labels, rotation=28, ha="right")
+        axis.set_ylabel(label)
+        axis.set_title(label, loc="left", fontweight="bold")
+        axis.grid(axis="y", color="#d1d5db", linewidth=0.7, alpha=0.8)
+        axis.spines[["top", "right"]].set_visible(False)
+        axis.tick_params(axis="x", length=0)
+    if single_sample:
+        fig.suptitle(f"QC overview — {display_labels[0]}", fontsize=14, fontweight="bold")
+    fig.savefig(figures / f"{prefix}_violin.png", dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    fig, ax = plt.subplots(figsize=(7.6, 5.6), layout="constrained")
+    for sample, color, label in zip(samples, colors, display_labels):
+        subset = adata.obs.loc[sample_series == sample]
+        ax.scatter(
+            pd.to_numeric(subset["total_counts"], errors="coerce"),
+            pd.to_numeric(subset["pct_counts_mt"], errors="coerce"),
+            s=5, alpha=0.32, color=color, edgecolors="none", rasterized=True, label=label,
+        )
+    ax.set_xlabel("UMIs per cell")
+    ax.set_ylabel("Mitochondrial reads (%)")
+    ax.set_title("Library size versus mitochondrial content", loc="left", fontweight="bold")
+    ax.grid(color="#d1d5db", linewidth=0.7, alpha=0.8)
+    ax.spines[["top", "right"]].set_visible(False)
+    if len(samples) > 1:
+        ax.legend(title="Sample", frameon=False, markerscale=2.2, loc="best")
+    fig.savefig(figures / f"{prefix}_counts_vs_mt.png", dpi=160, bbox_inches="tight")
     plt.close(fig)
 
 
