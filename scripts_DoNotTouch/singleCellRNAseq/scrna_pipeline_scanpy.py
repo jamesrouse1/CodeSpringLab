@@ -361,6 +361,17 @@ def save_dashboard_expression(adata, tables: Path, max_genes=1000):
     pd.DataFrame({"gene": adata.var_names[selected].astype(str)}).to_csv(tables / "dashboard_gene_expression_genes.tsv", sep="\t", index=False)
 
 
+def save_umap_coordinates(adata, tables: Path):
+    """Write the interactive dashboard coordinates as soon as UMAP exists."""
+    umap_table = pd.DataFrame(adata.obsm["X_umap"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])
+    umap_metadata = adata.obs.copy()
+    if "cell" in umap_metadata.columns:
+        umap_metadata = umap_metadata.rename(columns={"cell": "input_cell"})
+    umap_table = pd.concat([umap_table, umap_metadata], axis=1)
+    umap_table.insert(0, "cell", umap_table.index.astype(str))
+    umap_table.to_csv(tables / "umap_coordinates.tsv", sep="\t", index=False)
+
+
 def qc_recommendations(adata):
     """Suggest conservative, distribution-aware QC thresholds for user review.
 
@@ -885,6 +896,7 @@ def main():
         save_umap(adata, "cluster", figures / "04_umap_clusters_pre_annotation.png", title="UMAP clusters")
         if adata.obs["sample_id"].astype(str).nunique() > 1:
             save_umap(adata, "sample_id", figures / "04_umap_samples_pre_annotation.png", title="UMAP by input sample")
+        save_umap_coordinates(adata, tables)
         write_h5ad_checkpoint(adata, cluster_checkpoint)
         mark_complete("cluster")
         if stage == "cluster":
@@ -915,11 +927,7 @@ def main():
         if "cell" in cell_metadata.columns: cell_metadata = cell_metadata.rename(columns={"cell": "input_cell"})
         cell_metadata.insert(0, "cell", cell_metadata.index.astype(str))
         cell_metadata.to_csv(tables / "cell_metadata.tsv", sep="\t", index=False)
-        umap_table = pd.DataFrame(adata.obsm["X_umap"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])
-        umap_metadata = adata.obs.copy()
-        if "cell" in umap_metadata.columns: umap_metadata = umap_metadata.rename(columns={"cell": "input_cell"})
-        umap_table = pd.concat([umap_table, umap_metadata], axis=1); umap_table.insert(0, "cell", umap_table.index.astype(str))
-        umap_table.to_csv(tables / "umap_coordinates.tsv", sep="\t", index=False)
+        save_umap_coordinates(adata, tables)
         adata.obs.groupby(["cluster", "cell_type"], observed=True).size().reset_index(name="cells").to_csv(tables / "cluster_cell_type_sizes.tsv", sep="\t", index=False)
         cell_type_by_sample = adata.obs.groupby(["sample_id", "cell_type"], observed=True).size().reset_index(name="cells")
         cell_type_by_sample["proportion_within_sample"] = cell_type_by_sample["cells"] / cell_type_by_sample.groupby("sample_id", observed=True)["cells"].transform("sum")
