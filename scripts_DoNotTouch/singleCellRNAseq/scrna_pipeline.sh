@@ -18,7 +18,12 @@ if ! command -v module >/dev/null 2>&1; then
   for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash; do
     if [[ -r "$module_init" ]]; then
       # shellcheck disable=SC1090
+      # The site module initializer references optional variables that are
+      # legitimately absent in a clean SLURM environment.  Temporarily relax
+      # nounset only while it defines the `module` shell function.
+      set +u
       source "$module_init"
+      set -u
       break
     fi
   done
