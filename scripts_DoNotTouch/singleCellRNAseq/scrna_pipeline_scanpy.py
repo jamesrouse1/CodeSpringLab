@@ -335,6 +335,32 @@ def save_pca_outputs(adata, figures: Path, recommended_pcs=None):
     plt.close(fig)
 
 
+def save_dashboard_expression(adata, tables: Path, max_genes=1000):
+    """Save a compact normalized expression layer for interactive UMAP gene coloring."""
+    from scipy import sparse
+    from scipy.io import mmwrite
+    import gzip
+    counts = adata.layers.get("counts")
+    if counts is None:
+        return
+    hvgs = np.flatnonzero(np.asarray(adata.var.get("highly_variable", False), dtype=bool))
+    if not len(hvgs):
+        hvgs = np.arange(adata.n_vars)
+    selected = hvgs[:min(max_genes, len(hvgs))]
+    expression = counts[:, selected].copy()
+    library_size = np.asarray(counts.sum(axis=1)).ravel()
+    library_size[library_size <= 0] = 1
+    if sparse.issparse(expression):
+        expression = expression.multiply((1e4 / library_size)[:, None]).tocsr()
+        expression.data = np.log1p(expression.data)
+    else:
+        expression = np.log1p(np.asarray(expression) * (1e4 / library_size)[:, None])
+    with gzip.open(tables / "dashboard_gene_expression.mtx.gz", "wb") as handle:
+        mmwrite(handle, expression)
+    pd.DataFrame({"cell": adata.obs_names.astype(str)}).to_csv(tables / "dashboard_gene_expression_cells.tsv", sep="\t", index=False)
+    pd.DataFrame({"gene": adata.var_names[selected].astype(str)}).to_csv(tables / "dashboard_gene_expression_genes.tsv", sep="\t", index=False)
+
+
 def qc_recommendations(adata):
     """Suggest conservative, distribution-aware QC thresholds for user review.
 
@@ -810,6 +836,7 @@ def main():
         pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
         pd.DataFrame([{"recommended_n_pcs": recommended_pcs, "basis": "PCA variance elbow (bounded to 10–50 PCs)"}]).to_csv(tables / "pca_recommended_parameters.tsv", sep="\t", index=False)
         save_pca_outputs(adata, figures, recommended_pcs=recommended_pcs)
+        save_dashboard_expression(adata, tables)
         write_h5ad_checkpoint(adata, preprocess_checkpoint)
         # Once normalized/PCA data are safely checkpointed, the QC object is
         # redundant.  The raw input checkpoint is retained so users can
