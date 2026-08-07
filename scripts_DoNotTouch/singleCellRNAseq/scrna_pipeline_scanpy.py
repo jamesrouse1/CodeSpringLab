@@ -318,9 +318,12 @@ def qc_recommendations(adata):
     deliberately conservative so one low-complexity sample is not discarded
     before sample-specific QC can be reviewed.
     """
-    def rounded(value, increment, minimum=0):
-        """Make suggested cutoffs easy to read and reproduce in the UI."""
-        return int(max(minimum, increment * round(float(value) / increment)))
+    def rounded(value, direction, minimum=0):
+        """Round lower filters down and upper filters up for readable QC choices."""
+        value = float(value)
+        increment = 100 if abs(value) >= 100 else 10
+        rounded_value = np.floor(value / increment) * increment if direction == "down" else np.ceil(value / increment) * increment
+        return int(max(minimum, rounded_value))
 
     rows = []
     for sample_id, sample in adata.obs.groupby("sample_id", observed=True):
@@ -335,11 +338,11 @@ def qc_recommendations(adata):
         rows.append({
             "sample_id": str(sample_id),
             "cells_before_qc": int(len(sample)),
-            "min_features": rounded(np.floor(gene_q05), 10, minimum=200),
-            "min_counts": rounded(np.floor(count_q05), 100),
-            "max_features": rounded(np.ceil(max(gene_q99, gene_q75 + 3 * gene_iqr)), 100),
+            "min_features": rounded(gene_q05, "down", minimum=200),
+            "min_counts": rounded(count_q05, "down"),
+            "max_features": rounded(max(gene_q99, gene_q75 + 3 * gene_iqr), "up"),
             "max_percent_mt": int(min(25, max(10, np.ceil(np.quantile(mitochondrial, 0.95))))),
-            "recommendation_basis": "5th percentile lower filters (genes rounded to 10; counts to 100); 99th percentile/IQR high-gene screen (rounded to 100); 95th percentile mitochondrial screen",
+            "recommendation_basis": "5th percentile lower filters rounded down (tens below 100; hundreds otherwise); 99th percentile/IQR high-gene screen rounded up on the same scale; 95th percentile mitochondrial screen",
         })
     recommendations = pd.DataFrame(rows)
     if recommendations.empty:
@@ -404,6 +407,16 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
         axis.set_ylabel(label)
         axis.set_title(label, loc="left", fontweight="bold")
         cutoff_lines(axis, column)
+        if column == "pct_counts_mt":
+            values = np.concatenate(groups)
+            suggested_max = float(cutoffs["max_percent_mt"]) if cutoffs else 0.0
+            # A handful of all-mitochondrial droplets can stretch this axis to
+            # 100% and hide the biologically useful part of the distribution.
+            # Show the central 99% plus the cutoff, while keeping the plot
+            # explicitly focused on the QC decision range.
+            display_max = max(10.0, suggested_max, float(np.nanquantile(values, 0.99)))
+            display_max = min(100.0, np.ceil(display_max / 5.0) * 5.0)
+            axis.set_ylim(bottom=0, top=display_max)
         axis.grid(axis="y", color="#d1d5db", linewidth=0.7, alpha=0.8)
         axis.spines[["top", "right"]].set_visible(False)
         axis.tick_params(axis="x", length=0)
@@ -430,6 +443,12 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
         ax.text(0.99, 0.98, f"Applied cutoffs: counts ≥ {cutoffs['min_counts']:g}; mitochondrial reads ≤ {cutoffs['max_percent_mt']:g}%",
                 transform=ax.transAxes, ha="right", va="top", fontsize=8, color="#991b1b",
                 bbox={"facecolor": "white", "edgecolor": "#fecaca", "alpha": 0.9, "pad": 3})
+    mt_values = pd.to_numeric(adata.obs["pct_counts_mt"], errors="coerce").dropna().to_numpy()
+    if len(mt_values):
+        suggested_max = float(cutoffs["max_percent_mt"]) if cutoffs else 0.0
+        display_max = max(10.0, suggested_max, float(np.nanquantile(mt_values, 0.99)))
+        display_max = min(100.0, np.ceil(display_max / 5.0) * 5.0)
+        ax.set_ylim(bottom=0, top=display_max)
     ax.grid(color="#d1d5db", linewidth=0.7, alpha=0.8)
     ax.spines[["top", "right"]].set_visible(False)
     if len(samples) > 1:
@@ -660,8 +679,11 @@ def main():
         pre_qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt"]].copy()
         pre_qc.insert(0, "cell", adata.obs_names)
         pre_qc.to_csv(tables / "qc_pre_filter_cell_metrics.tsv", sep="\t", index=False)
-        qc_recommendations(adata).to_csv(tables / "qc_recommended_thresholds.tsv", sep="\t", index=False)
-        save_qc_plots(adata, figures, prefix="00_qc_pre_filter")
+        recommendations = qc_recommendations(adata)
+        recommendations.to_csv(tables / "qc_recommended_thresholds.tsv", sep="\t", index=False)
+        global_recommendation = recommendations[recommendations["sample_id"] == "Recommended global"]
+        suggested_cutoffs = global_recommendation.iloc[0][["min_features", "min_counts", "max_features", "max_percent_mt"]].to_dict() if len(global_recommendation) else None
+        save_qc_plots(adata, figures, prefix="00_qc_pre_filter", cutoffs=suggested_cutoffs, state_label="Unfiltered cells — suggested cutoffs")
         write_h5ad_checkpoint(adata, input_checkpoint)
         mark_complete("inspect")
         if stage == "inspect":
