@@ -277,6 +277,48 @@ def save_umap(adata, color, path, title=None):
     plt.close(fig)
 
 
+def qc_recommendations(adata):
+    """Suggest conservative, distribution-aware QC thresholds for user review.
+
+    The workflow still requires the user to review and may override these values.
+    Per-sample suggestions use robust distribution tails; the global row is
+    deliberately conservative so one low-complexity sample is not discarded
+    before sample-specific QC can be reviewed.
+    """
+    rows = []
+    for sample_id, sample in adata.obs.groupby("sample_id", observed=True):
+        genes = pd.to_numeric(sample["n_genes_by_counts"], errors="coerce").dropna()
+        counts = pd.to_numeric(sample["total_counts"], errors="coerce").dropna()
+        mitochondrial = pd.to_numeric(sample["pct_counts_mt"], errors="coerce").dropna()
+        if not len(genes) or not len(counts) or not len(mitochondrial):
+            continue
+        gene_q05, gene_q75, gene_q99 = np.quantile(genes, [0.05, 0.75, 0.99])
+        count_q05 = np.quantile(counts, 0.05)
+        gene_iqr = gene_q75 - np.quantile(genes, 0.25)
+        rows.append({
+            "sample_id": str(sample_id),
+            "cells_before_qc": int(len(sample)),
+            "min_features": int(max(200, np.floor(gene_q05))),
+            "min_counts": int(max(0, np.floor(count_q05))),
+            "max_features": int(np.ceil(max(gene_q99, gene_q75 + 3 * gene_iqr))),
+            "max_percent_mt": int(min(25, max(10, np.ceil(np.quantile(mitochondrial, 0.95))))),
+            "recommendation_basis": "5th percentile lower filters; 99th percentile/IQR high-gene screen; 95th percentile mitochondrial screen",
+        })
+    recommendations = pd.DataFrame(rows)
+    if recommendations.empty:
+        return recommendations
+    global_row = {
+        "sample_id": "Recommended global",
+        "cells_before_qc": int(recommendations["cells_before_qc"].sum()),
+        "min_features": int(recommendations["min_features"].min()),
+        "min_counts": int(recommendations["min_counts"].min()),
+        "max_features": int(recommendations["max_features"].max()),
+        "max_percent_mt": int(recommendations["max_percent_mt"].max()),
+        "recommendation_basis": "Conservative global values across samples; review the per-sample rows before running QC",
+    }
+    return pd.concat([pd.DataFrame([global_row]), recommendations], ignore_index=True)
+
+
 def save_qc_plots(adata, figures: Path, prefix: str = "01_qc"):
     """Write clean, readable pre/post-filter QC figures without an interactive display."""
     import matplotlib.pyplot as plt
@@ -544,6 +586,7 @@ def main():
         pre_qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt"]].copy()
         pre_qc.insert(0, "cell", adata.obs_names)
         pre_qc.to_csv(tables / "qc_pre_filter_cell_metrics.tsv", sep="\t", index=False)
+        qc_recommendations(adata).to_csv(tables / "qc_recommended_thresholds.tsv", sep="\t", index=False)
         save_qc_plots(adata, figures, prefix="00_qc_pre_filter")
         write_h5ad_checkpoint(adata, input_checkpoint)
         mark_complete("inspect")
