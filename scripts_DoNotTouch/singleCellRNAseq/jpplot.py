@@ -17,6 +17,7 @@ def get_markers(adata, n_markers=20):
     return marker_dataframe[:n_markers]
 		
 def kneeplot(adata, vline=None, min_genes=1, min_cells=1):
+    import matplotlib
     import matplotlib.pyplot as pl
     import scanpy as sc
     import numpy as np
@@ -3130,11 +3131,18 @@ def cmapjp():
 	## This produces a truncated version of the RdYlBu_r color map where the lowest value is light blue
 	## Then when plotting, you can use color_map=jpcolors or cmap=jpcolors
     import numpy as np
+    import matplotlib
     import matplotlib.pyplot as pl
     from matplotlib import cm
     from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 
-    RdYlBu_r = cm.get_cmap('RdYlBu_r', 256)
+    # ``matplotlib.cm.get_cmap`` was removed in Matplotlib 3.10.  Use the
+    # current colormap registry, while retaining compatibility with older
+    # Matplotlib versions that may still be used outside the Scanpy container.
+    if hasattr(matplotlib, "colormaps"):
+        RdYlBu_r = matplotlib.colormaps.get_cmap('RdYlBu_r').resampled(256)
+    else:
+        RdYlBu_r = cm.get_cmap('RdYlBu_r', 256)
     jpcolors = ListedColormap(RdYlBu_r(np.linspace(.25,1,256)))
     print('Elegant colormap returned as: jpcolors.  Use this in plotting.')
     return jpcolors 

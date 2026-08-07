@@ -35,6 +35,7 @@ pd = require("pandas")
 np = require("numpy")
 sc = require("scanpy")
 ad = require("anndata")
+mpl = require("matplotlib")
 try:
     # Bundled with CodeSpringLab so Scanpy figures use the same established
     # jpplot color treatment regardless of the user's working directory.
@@ -43,7 +44,16 @@ except ImportError as exc:
     raise SystemExit("The bundled jpplot.py color module is missing from CodeSpringLab.") from exc
 
 JP_COLOR_MAP = jpplot.cmapjp()
-sc.settings.set_figure_params(color_map=JP_COLOR_MAP, dpi=160)
+# Newer Scanpy/Seaborn releases require a named colormap in the global plotting
+# settings; passing a ListedColormap object makes violin plots fail.  Register
+# the bundled palette once and use its stable name in every Scanpy plot.
+JP_COLOR_MAP_NAME = "codespring_jp"
+try:
+    mpl.colormaps.register(JP_COLOR_MAP, name=JP_COLOR_MAP_NAME)
+except ValueError:
+    # The name may already be registered when a worker reuses a Python process.
+    pass
+sc.settings.set_figure_params(color_map=JP_COLOR_MAP_NAME, dpi=160)
 
 
 def apply_jpplot_colors(adata, *keys):
@@ -53,9 +63,10 @@ def apply_jpplot_colors(adata, *keys):
         if key not in adata.obs.columns:
             continue
         values = adata.obs[key]
-        if not (pd.api.types.is_categorical_dtype(values) or values.dtype == object or pd.api.types.is_string_dtype(values)):
+        is_categorical = isinstance(values.dtype, pd.CategoricalDtype)
+        if not (is_categorical or values.dtype == object or pd.api.types.is_string_dtype(values)):
             continue
-        if not pd.api.types.is_categorical_dtype(values):
+        if not is_categorical:
             adata.obs[key] = pd.Categorical(values.astype(str))
             values = adata.obs[key]
         categories = [str(value) for value in values.cat.categories if str(value)]
@@ -204,7 +215,7 @@ def save_input_umap(adata, sample_id: str, figures: Path):
     color = categorical_plot_column(adata)
     apply_jpplot_colors(adata, color)
     fig, ax = plt.subplots(figsize=(8, 6))
-    sc.pl.umap(adata, color=color, ax=ax, show=False, title="UMAP supplied with input object", frameon=False, color_map=JP_COLOR_MAP)
+    sc.pl.umap(adata, color=color, ax=ax, show=False, title="UMAP supplied with input object", frameon=False, color_map=JP_COLOR_MAP_NAME)
     fig.tight_layout()
     safe_sample = "".join(char if char.isalnum() or char in "._-" else "_" for char in sample_id)
     fig.savefig(figures / f"00_input_umap_{safe_sample}.png", dpi=160)
@@ -260,7 +271,7 @@ def save_umap(adata, color, path, title=None):
     import matplotlib.pyplot as plt
     apply_jpplot_colors(adata, color)
     fig, ax = plt.subplots(figsize=(7, 5.5))
-    sc.pl.umap(adata, color=color, ax=ax, show=False, title=title or str(color), frameon=False, color_map=JP_COLOR_MAP)
+    sc.pl.umap(adata, color=color, ax=ax, show=False, title=title or str(color), frameon=False, color_map=JP_COLOR_MAP_NAME)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -284,7 +295,7 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc"):
     plt.gcf().savefig(figures / f"{prefix}_violin.png", dpi=160)
     plt.close(plt.gcf())
     fig, ax = plt.subplots(figsize=(7, 5.5))
-    sc.pl.scatter(adata, x="total_counts", y="pct_counts_mt", color="sample_id", ax=ax, show=False, color_map=JP_COLOR_MAP)
+    sc.pl.scatter(adata, x="total_counts", y="pct_counts_mt", color="sample_id", ax=ax, show=False, color_map=JP_COLOR_MAP_NAME)
     fig.tight_layout()
     fig.savefig(figures / f"{prefix}_counts_vs_mt.png", dpi=160)
     plt.close(fig)
