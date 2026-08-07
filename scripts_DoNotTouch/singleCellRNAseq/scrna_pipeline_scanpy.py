@@ -277,6 +277,39 @@ def save_umap(adata, color, path, title=None):
     plt.close(fig)
 
 
+def save_pca_outputs(adata, figures: Path):
+    """Save compact, interpretable PCA outputs immediately after preprocessing."""
+    import matplotlib.pyplot as plt
+    variance = np.asarray(adata.uns.get("pca", {}).get("variance_ratio", [])).ravel()
+    if len(variance):
+        fig, ax = plt.subplots(figsize=(7.2, 4.6), layout="constrained")
+        pcs = np.arange(1, len(variance) + 1)
+        ax.plot(pcs, 100 * variance, marker="o", markersize=3.5, linewidth=1.5, color="#356D9C")
+        ax.set(xlabel="Principal component", ylabel="Variance explained (%)", title="PCA variance explained")
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", color="#d1d5db", linewidth=0.7)
+        fig.savefig(figures / "03_pca_variance_explained.png", dpi=160, bbox_inches="tight")
+        plt.close(fig)
+    if "X_pca" not in adata.obsm or adata.obsm["X_pca"].shape[1] < 2:
+        return
+    sample_series = adata.obs["sample_id"].astype(str)
+    samples = list(dict.fromkeys(sample_series.tolist()))
+    colors = [JP_COLOR_MAP(position) for position in np.linspace(0.18, 0.82, max(len(samples), 2))]
+    fig, ax = plt.subplots(figsize=(7.2, 5.4), layout="constrained")
+    coordinates = adata.obsm["X_pca"]
+    for sample, color in zip(samples, colors):
+        keep = (sample_series == sample).to_numpy()
+        ax.scatter(coordinates[keep, 0], coordinates[keep, 1], s=5, alpha=0.35, color=color, edgecolors="none", rasterized=True, label=sample)
+    x_pct = 100 * variance[0] if len(variance) else 0
+    y_pct = 100 * variance[1] if len(variance) > 1 else 0
+    ax.set(xlabel=f"PC1 ({x_pct:.1f}% variance)", ylabel=f"PC2 ({y_pct:.1f}% variance)", title="PCA by input sample")
+    ax.spines[["top", "right"]].set_visible(False)
+    if len(samples) > 1:
+        ax.legend(title="Sample", frameon=False, markerscale=2.2, loc="best")
+    fig.savefig(figures / "03_pca_by_sample.png", dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
 def qc_recommendations(adata):
     """Suggest conservative, distribution-aware QC thresholds for user review.
 
@@ -681,6 +714,7 @@ def main():
         sc.tl.pca(adata, n_comps=n_pcs, svd_solver="arpack", use_highly_variable=use_hvg, zero_center=False)
         pca_ratio = np.asarray(adata.uns["pca"]["variance_ratio"]).ravel()
         pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
+        save_pca_outputs(adata, figures)
         write_h5ad_checkpoint(adata, preprocess_checkpoint)
         # Once normalized/PCA data are safely checkpointed, the QC object is
         # redundant.  The raw input checkpoint is retained so users can
@@ -724,6 +758,11 @@ def main():
         sc.tl.umap(adata, random_state=p["seed"])
         sc.tl.leiden(adata, resolution=p["cluster_resolution"], key_added="cluster", random_state=p["seed"])
         adata.uns["codespring_integration"] = integration
+        # These previews are available before annotation so users can assess
+        # the UMAP and clustering result in the Run Pipeline step itself.
+        save_umap(adata, "cluster", figures / "04_umap_clusters_pre_annotation.png", title="UMAP clusters")
+        if adata.obs["sample_id"].astype(str).nunique() > 1:
+            save_umap(adata, "sample_id", figures / "04_umap_samples_pre_annotation.png", title="UMAP by input sample")
         write_h5ad_checkpoint(adata, cluster_checkpoint)
         mark_complete("cluster")
         if stage == "cluster":
