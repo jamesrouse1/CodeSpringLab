@@ -848,6 +848,9 @@ def main():
         pd.DataFrame([{"recommended_n_pcs": recommended_pcs, "basis": "PCA variance elbow (bounded to 10–50 PCs)"}]).to_csv(tables / "pca_recommended_parameters.tsv", sep="\t", index=False)
         save_pca_outputs(adata, figures, recommended_pcs=recommended_pcs)
         save_dashboard_expression(adata, tables)
+        # The dashboard uses this full symbol list to request one gene at a
+        # time from the post-UMAP H5AD's normalized `.raw` layer.
+        pd.DataFrame({"gene": adata.raw.var_names.astype(str)}).to_csv(tables / "dashboard_all_genes.tsv", sep="\t", index=False)
         write_h5ad_checkpoint(adata, preprocess_checkpoint)
         # Once normalized/PCA data are safely checkpointed, the QC object is
         # redundant.  The raw input checkpoint is retained so users can
