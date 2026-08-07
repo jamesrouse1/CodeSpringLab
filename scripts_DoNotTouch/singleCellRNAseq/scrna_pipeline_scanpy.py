@@ -282,7 +282,24 @@ def save_umap(adata, color, path, title=None):
     plt.close(fig)
 
 
-def save_pca_outputs(adata, figures: Path):
+def recommended_pcs_from_variance(variance):
+    """Estimate a practical PCA elbow while avoiding unrealistically tiny choices."""
+    values = np.asarray(variance, dtype=float).ravel()
+    usable = min(len(values), 50)
+    if usable < 3 or not np.isfinite(values[:usable]).all():
+        return min(30, len(values)) if len(values) else 0
+    x = np.linspace(0, 1, usable)
+    y = values[:usable]
+    y_range = y.max() - y.min()
+    if y_range <= 0:
+        return min(30, usable)
+    y = (y - y.min()) / y_range
+    line = y[0] + (y[-1] - y[0]) * x
+    elbow = int(np.argmax(np.abs(y - line)) + 1)
+    return max(10, min(50, usable, elbow))
+
+
+def save_pca_outputs(adata, figures: Path, recommended_pcs=None):
     """Save compact, interpretable PCA outputs immediately after preprocessing."""
     import matplotlib.pyplot as plt
     variance = np.asarray(adata.uns.get("pca", {}).get("variance_ratio", [])).ravel()
@@ -290,6 +307,9 @@ def save_pca_outputs(adata, figures: Path):
         fig, ax = plt.subplots(figsize=(7.2, 4.6), layout="constrained")
         pcs = np.arange(1, len(variance) + 1)
         ax.plot(pcs, 100 * variance, marker="o", markersize=3.5, linewidth=1.5, color="#356D9C")
+        if recommended_pcs and recommended_pcs <= len(variance):
+            ax.axvline(recommended_pcs, color="#b91c1c", linestyle="--", linewidth=1.3, label=f"Suggested elbow: PC{recommended_pcs}")
+            ax.legend(frameon=False, loc="upper right")
         ax.set(xlabel="Principal component", ylabel="Variance explained (%)", title="PCA variance explained")
         ax.spines[["top", "right"]].set_visible(False)
         ax.grid(axis="y", color="#d1d5db", linewidth=0.7)
@@ -786,8 +806,10 @@ def main():
         n_pcs = min(p["n_pcs"], max_pcs)
         sc.tl.pca(adata, n_comps=n_pcs, svd_solver="arpack", use_highly_variable=use_hvg, zero_center=False)
         pca_ratio = np.asarray(adata.uns["pca"]["variance_ratio"]).ravel()
+        recommended_pcs = recommended_pcs_from_variance(pca_ratio)
         pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
-        save_pca_outputs(adata, figures)
+        pd.DataFrame([{"recommended_n_pcs": recommended_pcs, "basis": "PCA variance elbow (bounded to 10–50 PCs)"}]).to_csv(tables / "pca_recommended_parameters.tsv", sep="\t", index=False)
+        save_pca_outputs(adata, figures, recommended_pcs=recommended_pcs)
         write_h5ad_checkpoint(adata, preprocess_checkpoint)
         # Once normalized/PCA data are safely checkpointed, the QC object is
         # redundant.  The raw input checkpoint is retained so users can
