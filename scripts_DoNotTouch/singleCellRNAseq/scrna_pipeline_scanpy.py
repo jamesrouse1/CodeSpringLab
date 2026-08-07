@@ -97,6 +97,11 @@ def params_from(path: Path):
         "batch_column": get("batch_column", "batch"),
         "cluster_resolution": float(get("cluster_resolution", "0.6") or 0.6),
         "n_pcs": int(float(get("n_pcs", "30") or 30)),
+        "n_neighbors": int(float(get("n_neighbors", "15") or 15)),
+        "umap_min_dist": float(get("umap_min_dist", "0.5") or 0.5),
+        "umap_spread": float(get("umap_spread", "1.0") or 1.0),
+        "umap_metric": get("umap_metric", "euclidean").lower(),
+        "umap_init_pos": get("umap_init_pos", "spectral").lower(),
         "min_features": int(float(get("min_features", "200") or 200)),
         "min_counts": int(float(get("min_counts", "0") or 0)),
         "max_features": int(float(get("max_features", "0") or 0)),
@@ -629,6 +634,14 @@ def main():
         raise SystemExit("The Scanpy engine supports LogNormalize/log1p normalization. Use the Seurat engine for SCTransform.")
     if p["integration"] not in {"auto", "none", "scvi", "harmony"}:
         raise SystemExit("Scanpy integration must be auto, none, scvi, or harmony.")
+    if not 2 <= p["n_neighbors"] <= 200:
+        raise SystemExit("UMAP neighbours must be between 2 and 200.")
+    if not 0 <= p["umap_min_dist"] <= 2 or not 0.1 <= p["umap_spread"] <= 10:
+        raise SystemExit("UMAP minimum distance must be 0–2 and spread must be 0.1–10.")
+    if p["umap_metric"] not in {"euclidean", "cosine", "manhattan", "correlation"}:
+        raise SystemExit("Unsupported UMAP distance metric.")
+    if p["umap_init_pos"] not in {"spectral", "random"}:
+        raise SystemExit("UMAP initialization must be spectral or random.")
     np.random.seed(p["seed"])
     input_checkpoint = checkpoints / "01_input_scanpy.h5ad"
     qc_checkpoint = checkpoints / "02_qc_scanpy.h5ad"
@@ -814,8 +827,8 @@ def main():
             except Exception as exc:
                 raise SystemExit("Harmony integration was requested but harmonypy was unavailable or failed: " + str(exc)) from exc
             representation = "X_harmony"
-        sc.pp.neighbors(adata, n_neighbors=min(15, max(2, adata.n_obs - 1)), n_pcs=min(n_pcs, adata.obsm[representation].shape[1]), use_rep=representation)
-        sc.tl.umap(adata, random_state=p["seed"])
+        sc.pp.neighbors(adata, n_neighbors=min(p["n_neighbors"], max(2, adata.n_obs - 1)), n_pcs=min(n_pcs, adata.obsm[representation].shape[1]), use_rep=representation, metric=p["umap_metric"])
+        sc.tl.umap(adata, min_dist=p["umap_min_dist"], spread=p["umap_spread"], init_pos=p["umap_init_pos"], random_state=p["seed"])
         sc.tl.leiden(adata, resolution=p["cluster_resolution"], key_added="cluster", random_state=p["seed"])
         adata.uns["codespring_integration"] = integration
         # These previews are available before annotation so users can assess
