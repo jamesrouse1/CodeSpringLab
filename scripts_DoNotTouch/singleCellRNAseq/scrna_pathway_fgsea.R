@@ -50,15 +50,38 @@ ranks <- setNames(as.numeric(de$stat), as.character(de$gene))
 species <- tolower(get("pathway_species", "human"))
 mapping_note <- "Input ranks already use human gene symbols."
 mapped_genes <- length(ranks)
-if (identical(species, "mouse")) {
-  file_arg <- grep("^--file=", commandArgs(), value = TRUE)
-  script_path <- if (length(file_arg)) sub("^--file=", "", file_arg[[1]]) else ""
-  ortholog_path <- normalizePath(file.path(dirname(script_path), "..", "reference", "mouse_human_orthologs_MGI.tsv"), mustWork = FALSE)
+file_arg <- grep("^--file=", commandArgs(), value = TRUE)
+script_path <- if (length(file_arg)) sub("^--file=", "", file_arg[[1]]) else ""
+ortholog_path <- trimws(get("pathway_ortholog_file", ""))
+if (!nzchar(ortholog_path)) ortholog_path <- normalizePath(file.path(dirname(script_path), "..", "reference", "mouse_human_orthologs_MGI.tsv"), mustWork = FALSE)
+read_orthologs <- function(path) {
   if (!file.exists(ortholog_path)) stop("Mouse pathway analysis requires the bundled MGI mouse-human ortholog table: ", ortholog_path)
-  orthologs <- utils::read.delim(ortholog_path, check.names = FALSE, stringsAsFactors = FALSE)
-  required_ortholog <- c("mouse_gene_symbol", "human_gene_symbol")
-  if (!all(required_ortholog %in% names(orthologs))) stop("The bundled ortholog table is missing mouse_gene_symbol or human_gene_symbol.")
+  reader <- if (grepl("\\.csv$", path, ignore.case = TRUE)) utils::read.csv else utils::read.delim
+  orthologs <- reader(path, check.names = FALSE, stringsAsFactors = FALSE)
+  normalized <- setNames(names(orthologs), gsub("[^a-z0-9]+", "", tolower(names(orthologs))))
+  pick <- function(candidates) {
+    hits <- unname(normalized[gsub("[^a-z0-9]+", "", tolower(candidates))])
+    hits <- hits[!is.na(hits)]
+    if (length(hits)) hits[[1]] else ""
+  }
+  mouse_col <- pick(c("mouse_gene_symbol", "mouse_symbol", "mgi_symbol", "marker_symbol", "external_gene_name", "mouse_gene_name"))
+  human_col <- pick(c("human_gene_symbol", "human_symbol", "hgnc_symbol", "human_gene_name", "hsapiens_homolog_associated_gene_name"))
+  if (!nzchar(mouse_col) || !nzchar(human_col)) stop("Ortholog table needs recognizable mouse and human gene-symbol columns.")
+  names(orthologs)[names(orthologs) == mouse_col] <- "mouse_gene_symbol"
+  names(orthologs)[names(orthologs) == human_col] <- "human_gene_symbol"
+  orthologs
+}
+orthologs <- NULL
+if (species %in% c("auto", "mouse")) orthologs <- read_orthologs(ortholog_path)
+if (identical(species, "auto")) {
+  mouse_overlap <- sum(names(ranks) %in% orthologs$mouse_gene_symbol)
+  human_overlap <- sum(names(ranks) %in% orthologs$human_gene_symbol)
+  if (mouse_overlap == human_overlap) stop("Could not infer mouse versus human differential-expression symbols. Choose the species explicitly in CodeSpringApp.")
+  species <- if (mouse_overlap > human_overlap) "mouse" else "human"
+}
+if (identical(species, "mouse")) {
   orthologs <- orthologs[nzchar(orthologs$mouse_gene_symbol) & nzchar(orthologs$human_gene_symbol), , drop = FALSE]
+  required_ortholog <- c("mouse_gene_symbol", "human_gene_symbol")
   mouse_counts <- table(orthologs$mouse_gene_symbol)
   orthologs <- orthologs[mouse_counts[orthologs$mouse_gene_symbol] == 1L, , drop = FALSE]
   rank_table <- data.frame(mouse_gene_symbol = names(ranks), stat = as.numeric(ranks), stringsAsFactors = FALSE)

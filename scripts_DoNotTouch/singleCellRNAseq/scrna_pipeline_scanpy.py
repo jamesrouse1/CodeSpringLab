@@ -92,7 +92,49 @@ def apply_categorical_colors(adata, *keys):
 
 
 def read_table(path: Path):
-    return pd.read_csv(path, sep="\t", dtype=str).fillna("")
+    return pd.read_csv(path, sep="," if str(path).lower().endswith(".csv") else "\t", dtype=str).fillna("")
+
+
+def _pick_ortholog_column(table, candidates):
+    normalized = {re.sub(r"[^a-z0-9]+", "", str(col).lower()): col for col in table.columns}
+    for candidate in candidates:
+        hit = normalized.get(re.sub(r"[^a-z0-9]+", "", candidate.lower()))
+        if hit is not None:
+            return hit
+    return None
+
+
+def map_cross_species_genes(genes, set_names, source_species, ortholog_path: Path, expression_genes, audit_path: Path):
+    pairs = [(str(g).strip(), str(s)) for g, s in zip(genes, set_names) if str(g).strip()]
+    genes = [g for g, _ in pairs]
+    set_names = [s for _, s in pairs]
+    if source_species == "same":
+        return genes, set_names
+    orth = read_table(ortholog_path)
+    mouse_col = _pick_ortholog_column(orth, ["mouse_gene_symbol", "mouse_symbol", "mgi_symbol", "marker_symbol", "external_gene_name", "mouse_gene_name"])
+    human_col = _pick_ortholog_column(orth, ["human_gene_symbol", "human_symbol", "hgnc_symbol", "human_gene_name", "hsapiens_homolog_associated_gene_name"])
+    if mouse_col is None or human_col is None:
+        raise SystemExit("Ortholog table needs recognizable mouse and human gene-symbol columns (for example mouse_gene_symbol and human_gene_symbol).")
+    orth = orth[[mouse_col, human_col]].rename(columns={mouse_col: "mouse", human_col: "human"})
+    orth = orth[(orth["mouse"].str.strip() != "") & (orth["human"].str.strip() != "")].drop_duplicates()
+    expression = set(map(str, expression_genes))
+    mouse_overlap = len(expression.intersection(orth["mouse"]))
+    human_overlap = len(expression.intersection(orth["human"]))
+    target_species = "mouse" if mouse_overlap > human_overlap else "human" if human_overlap > mouse_overlap else "unknown"
+    if target_species == "unknown":
+        raise SystemExit("Could not infer whether expression features are mouse or human from the ortholog table. Choose 'Same as the expression dataset' if conversion is unnecessary.")
+    if source_species == target_species:
+        audit = pd.DataFrame({"set": set_names, "original_gene": genes, "mapped_gene": genes, "status": "same_species", "source_species": source_species, "target_species": target_species})
+    else:
+        source_col, target_col = source_species, target_species
+        counts = orth[source_col].value_counts()
+        usable = orth[orth[source_col].map(counts).eq(1)]
+        lookup = dict(zip(usable[source_col], usable[target_col]))
+        mapped = [lookup.get(g, "") for g in genes]
+        audit = pd.DataFrame({"set": set_names, "original_gene": genes, "mapped_gene": mapped, "status": ["mapped" if x else "unmapped_or_ambiguous" for x in mapped], "source_species": source_species, "target_species": target_species})
+    audit.to_csv(audit_path, sep="\t", index=False)
+    keep = audit["status"].isin(["mapped", "same_species"])
+    return audit.loc[keep, "mapped_gene"].tolist(), audit.loc[keep, "set"].tolist()
 
 
 def params_from(path: Path):
@@ -125,8 +167,12 @@ def params_from(path: Path):
         "remove_doublets": get_bool("remove_doublets", True),
         "marker_file": get("marker_file", ""),
         "celltype_file": get("celltype_file", ""),
+        "marker_species": get("marker_species", "same").lower(),
+        "marker_ortholog_file": get("marker_ortholog_file", ""),
         "annotation_name": get("annotation_name", "cell_type"),
         "signature_file": get("signature_file", ""),
+        "signature_species": get("signature_species", "same").lower(),
+        "signature_ortholog_file": get("signature_ortholog_file", ""),
         "de_group_column": get("de_group_column", "condition"),
         "de_reference": get("de_reference", ""),
         "de_comparison": get("de_comparison", ""),
@@ -668,16 +714,23 @@ def apply_celltype_mapping(adata, path: Path, annotation_name: str):
     adata.obs["annotation_source"] = f"provided cell metadata ({annotation_name})"
 
 
-def apply_marker_annotation(adata, path: Path, tables_dir: Path, annotation_name: str):
+def apply_marker_annotation(adata, path: Path, tables_dir: Path, annotation_name: str, marker_species="same", ortholog_path=None):
     tab = read_table(path)
     if not {"cell_type", "gene"}.issubset(tab.columns):
         raise SystemExit("Marker list needs cell_type and gene columns.")
-    lists = {}
-    genes = set(adata.var_names)
+    expanded_genes, expanded_sets = [], []
     for cell_type, group in tab.groupby("cell_type", sort=False):
-        entries = []
         for value in group["gene"].astype(str):
-            entries.extend([g for g in value.replace(";", ",").replace(" ", ",").split(",") if g])
+            parsed = [g for g in re.split(r"[,;\s]+", value) if g]
+            expanded_genes.extend(parsed); expanded_sets.extend([str(cell_type)] * len(parsed))
+    if marker_species != "same":
+        expression_genes = adata.raw.var_names if adata.raw is not None else adata.var_names
+        expanded_genes, expanded_sets = map_cross_species_genes(expanded_genes, expanded_sets, marker_species, Path(ortholog_path).expanduser(), expression_genes, tables_dir / "marker_ortholog_mapping.tsv")
+    expanded = pd.DataFrame({"cell_type": expanded_sets, "gene": expanded_genes})
+    lists = {}
+    genes = set(adata.raw.var_names if adata.raw is not None else adata.var_names)
+    for cell_type, group in expanded.groupby("cell_type", sort=False):
+        entries = group["gene"].astype(str).tolist()
         keep = sorted(set(entries).intersection(genes))
         if keep:
             lists[str(cell_type)] = keep
@@ -746,11 +799,19 @@ def write_composition_outputs(adata, annotation_name: str, tables_dir: Path):
     cluster_sizes.rename(columns={"annotation_label": "cell_type"})[["cluster", "cell_type", "cells"]].to_csv(tables_dir / "cluster_cell_type_sizes.tsv", sep="\t", index=False)
 
 
-def score_signatures(adata, path: Path, tables_dir: Path, annotation_name: str):
+def score_signatures(adata, path: Path, tables_dir: Path, annotation_name: str, signature_species="same", ortholog_path=None):
     signatures = read_table(path)
     if not {"signature", "gene"}.issubset(signatures.columns):
         raise SystemExit("Signature list needs signature and gene columns.")
     available = set(adata.raw.var_names if adata.raw is not None else adata.var_names)
+    expanded_genes, expanded_sets = [], []
+    for signature, group in signatures.groupby("signature", sort=False):
+        for value in group["gene"].astype(str):
+            parsed = [x for x in re.split(r"[,;\s]+", value) if x]
+            expanded_genes.extend(parsed); expanded_sets.extend([str(signature)] * len(parsed))
+    if signature_species != "same":
+        expanded_genes, expanded_sets = map_cross_species_genes(expanded_genes, expanded_sets, signature_species, Path(ortholog_path).expanduser(), available, tables_dir / "signature_ortholog_mapping.tsv")
+    signatures = pd.DataFrame({"signature": expanded_sets, "gene": expanded_genes})
     score_columns = []
     coverage = []
     for signature, group in signatures.groupby("signature", sort=False):
@@ -1136,7 +1197,7 @@ def main():
         if p["celltype_file"] and p["celltype_file"].lower() != "none":
             apply_celltype_mapping(adata, Path(p["celltype_file"]).expanduser(), annotation_name)
         elif p["marker_file"] and p["marker_file"].lower() != "none":
-            apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables, annotation_name)
+            apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables, annotation_name, p["marker_species"], p["marker_ortholog_file"])
         elif not apply_existing_annotation(adata):
             adata.obs[annotation_name] = adata.obs["cluster"].astype("category")
             adata.obs[f"annotation_source__{annotation_name}"] = "cluster ID (no annotation supplied)"
@@ -1175,7 +1236,7 @@ def main():
         if not p["signature_file"] or p["signature_file"].lower() == "none":
             raise SystemExit("Choose a signature TSV with signature and gene columns.")
         annotation_name = safe_metadata_name(str(adata.uns.get("codespring_active_annotation", p["annotation_name"])))
-        score_signatures(adata, Path(p["signature_file"]).expanduser(), tables, annotation_name)
+        score_signatures(adata, Path(p["signature_file"]).expanduser(), tables, annotation_name, p["signature_species"], p["signature_ortholog_file"])
         write_cell_metadata_outputs(adata, tables)
         write_h5ad_checkpoint(adata, processed_object)
         mark_complete("score")

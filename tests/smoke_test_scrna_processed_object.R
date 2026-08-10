@@ -37,9 +37,13 @@ saveRDS(object, source_object)
 source_md5 <- unname(tools::md5sum(source_object))
 manifest <- file.path(work, "samples.tsv")
 utils::write.table(data.frame(sample_id = "fixture", input_path = source_object), manifest, sep = "\t", row.names = FALSE, quote = FALSE)
+marker_file <- file.path(work, "mouse_markers.tsv")
+utils::write.table(data.frame(cell_type = rep(c("Type A", "Type B"), each = 2L), gene = c("MouseA1", "MouseA2", "MouseB1", "MouseB2")), marker_file, sep = "\t", row.names = FALSE, quote = FALSE)
+ortholog_file <- file.path(work, "orthologs.tsv")
+utils::write.table(data.frame(mouse_gene_symbol = c("MouseA1", "MouseA2", "MouseB1", "MouseB2"), human_gene_symbol = c("Gene9", "Gene10", "Gene11", "Gene12")), ortholog_file, sep = "\t", row.names = FALSE, quote = FALSE)
 params <- file.path(work, "params.tsv")
 utils::write.table(
-  data.frame(key = c("normalization", "integration", "n_pcs", "min_features", "min_cells_per_gene", "doublet_method", "annotation_name"), value = c("lognormalize", "none", "8", "0", "1", "none", "cell_type")),
+  data.frame(key = c("normalization", "integration", "n_pcs", "min_features", "min_cells_per_gene", "doublet_method", "annotation_name", "marker_file", "marker_species", "marker_ortholog_file"), value = c("lognormalize", "none", "8", "0", "1", "none", "ortholog_cell_type", marker_file, "mouse", ortholog_file)),
   params, sep = "\t", row.names = FALSE, quote = FALSE
 )
 output <- file.path(work, "output")
@@ -55,6 +59,8 @@ stopifnot(
   identical(unname(tools::md5sum(source_object)), source_md5),
   file.exists(file.path(output, "_STAGE_ANNOTATE_COMPLETE")),
   file.exists(file.path(output, "tables", "cell_metadata.tsv")),
-  file.exists(file.path(output, "figures", "05_umap_cell_type.png"))
+  file.exists(file.path(output, "figures", "05_umap_ortholog_cell_type.png")),
+  file.exists(file.path(output, "tables", "marker_ortholog_mapping.tsv")),
+  all(utils::read.delim(file.path(output, "tables", "marker_ortholog_mapping.tsv"))$status == "mapped")
 )
 message("Processed Seurat object continuation smoke test passed.")

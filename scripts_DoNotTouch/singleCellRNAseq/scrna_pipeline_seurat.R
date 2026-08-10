@@ -73,8 +73,49 @@ jpplot_point_layer <- function(plot, color = jpplot_colors[[7]]) {
 }
 
 read_delim_safe <- function(path) {
-  tryCatch(utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE, comment.char = "", quote = ""),
+  reader <- if (grepl("\\.csv$", path, ignore.case = TRUE)) utils::read.csv else utils::read.delim
+  tryCatch(reader(path, check.names = FALSE, stringsAsFactors = FALSE, comment.char = "", quote = ""),
            error = function(e) stop("Could not read ", path, ": ", conditionMessage(e)))
+}
+
+normalized_column_name <- function(x) gsub("[^a-z0-9]+", "", tolower(x))
+pick_ortholog_column <- function(tab, candidates) {
+  keys <- stats::setNames(names(tab), normalized_column_name(names(tab)))
+  hit <- keys[normalized_column_name(candidates)]
+  unname(hit[!is.na(hit)][1] %||% "")
+}
+read_ortholog_symbols <- function(path) {
+  tab <- read_delim_safe(path)
+  mouse_col <- pick_ortholog_column(tab, c("mouse_gene_symbol", "mouse_symbol", "mgi_symbol", "marker_symbol", "external_gene_name", "mouse_gene_name"))
+  human_col <- pick_ortholog_column(tab, c("human_gene_symbol", "human_symbol", "hgnc_symbol", "human_gene_name", "hsapiens_homolog_associated_gene_name"))
+  if (!nzchar(mouse_col) || !nzchar(human_col)) stop("Ortholog table needs recognizable mouse and human gene-symbol columns (for example mouse_gene_symbol and human_gene_symbol).")
+  out <- unique(data.frame(mouse = trimws(as.character(tab[[mouse_col]])), human = trimws(as.character(tab[[human_col]])), stringsAsFactors = FALSE))
+  out <- out[nzchar(out$mouse) & nzchar(out$human) & !is.na(out$mouse) & !is.na(out$human), , drop = FALSE]
+  out
+}
+map_cross_species_genes <- function(genes, source_species, ortholog_path, expression_genes, audit_path, set_names = NULL) {
+  genes <- trimws(as.character(genes)); keep <- nzchar(genes); genes <- genes[keep]
+  if (!is.null(set_names)) set_names <- as.character(set_names)[keep]
+  source_species <- tolower(source_species %||% "same")
+  if (identical(source_species, "same")) return(genes)
+  orth <- read_ortholog_symbols(ortholog_path)
+  mouse_overlap <- sum(expression_genes %in% orth$mouse)
+  human_overlap <- sum(expression_genes %in% orth$human)
+  target_species <- if (mouse_overlap > human_overlap) "mouse" else if (human_overlap > mouse_overlap) "human" else "unknown"
+  if (identical(target_species, "unknown")) stop("Could not infer whether expression features are mouse or human from the ortholog table. Choose 'Same as the expression dataset' if conversion is unnecessary.")
+  if (identical(source_species, target_species)) {
+    audit <- data.frame(set = set_names %||% "", original_gene = genes, mapped_gene = genes, status = "same_species", source_species = source_species, target_species = target_species)
+    utils::write.table(audit, audit_path, sep = "\t", row.names = FALSE, quote = FALSE)
+    return(genes)
+  }
+  source_col <- source_species; target_col <- target_species
+  source_counts <- table(orth[[source_col]])
+  usable <- orth[source_counts[orth[[source_col]]] == 1L, , drop = FALSE]
+  lookup <- stats::setNames(usable[[target_col]], usable[[source_col]])
+  mapped <- unname(lookup[genes]); status <- ifelse(is.na(mapped) | !nzchar(mapped), "unmapped_or_ambiguous", "mapped")
+  audit <- data.frame(set = set_names %||% "", original_gene = genes, mapped_gene = ifelse(is.na(mapped), "", mapped), status = status, source_species = source_species, target_species = target_species)
+  utils::write.table(audit, audit_path, sep = "\t", row.names = FALSE, quote = FALSE)
+  unique(mapped[status == "mapped"])
 }
 
 read_params <- function(path) {
@@ -99,8 +140,12 @@ read_params <- function(path) {
     remove_doublets = get_bool("remove_doublets", TRUE),
     marker_file = get("marker_file", ""),
     celltype_file = get("celltype_file", ""),
+    marker_species = tolower(get("marker_species", "same")),
+    marker_ortholog_file = get("marker_ortholog_file", ""),
     annotation_name = get("annotation_name", "cell_type"),
     signature_file = get("signature_file", ""),
+    signature_species = tolower(get("signature_species", "same")),
+    signature_ortholog_file = get("signature_ortholog_file", ""),
     de_group_column = get("de_group_column", "condition"),
     de_reference = get("de_reference", ""),
     de_comparison = get("de_comparison", ""),
@@ -649,7 +694,16 @@ apply_marker_annotation <- function(obj, path, annotation_name) {
   if (!nzchar(path) || identical(tolower(path), "none")) return(obj)
   markers <- read_delim_safe(path)
   if (!all(c("cell_type", "gene") %in% names(markers))) stop("Marker list needs cell_type and gene columns.")
-  marker_list <- split(unlist(strsplit(as.character(markers$gene), "[,;[:space:]]+")), as.character(markers$cell_type))
+  expanded <- do.call(rbind, lapply(seq_len(NROW(markers)), function(i) {
+    genes <- unique(Filter(nzchar, strsplit(as.character(markers$gene[[i]]), "[,;[:space:]]+")[[1]]))
+    data.frame(cell_type = as.character(markers$cell_type[[i]]), gene = genes, stringsAsFactors = FALSE)
+  }))
+  if (!identical(params$marker_species, "same")) {
+    mapped <- map_cross_species_genes(expanded$gene, params$marker_species, params$marker_ortholog_file, rownames(obj), file.path(tables_dir, "marker_ortholog_mapping.tsv"), expanded$cell_type)
+    audit <- read_delim_safe(file.path(tables_dir, "marker_ortholog_mapping.tsv"))
+    expanded <- data.frame(cell_type = audit$set[audit$status %in% c("mapped", "same_species")], gene = audit$mapped_gene[audit$status %in% c("mapped", "same_species")], stringsAsFactors = FALSE)
+  }
+  marker_list <- split(expanded$gene, expanded$cell_type)
   marker_list <- lapply(marker_list, function(x) intersect(unique(x[nzchar(x)]), rownames(obj)))
   marker_list <- marker_list[lengths(marker_list) > 0]
   if (!length(marker_list)) stop("None of the supplied marker genes were present in the expression object.")
@@ -803,6 +857,16 @@ if (identical(stage, "score")) {
   if (!nzchar(params$signature_file) || identical(tolower(params$signature_file), "none")) stop("Choose a signature TSV with signature and gene columns.")
   signatures <- read_delim_safe(params$signature_file)
   if (!all(c("signature", "gene") %in% names(signatures))) stop("Signature list needs signature and gene columns.")
+  expanded_signatures <- do.call(rbind, lapply(seq_len(NROW(signatures)), function(i) {
+    genes <- unique(Filter(nzchar, strsplit(as.character(signatures$gene[[i]]), "[,;[:space:]]+")[[1]]))
+    data.frame(signature = as.character(signatures$signature[[i]]), gene = genes, stringsAsFactors = FALSE)
+  }))
+  if (!identical(params$signature_species, "same")) {
+    map_cross_species_genes(expanded_signatures$gene, params$signature_species, params$signature_ortholog_file, rownames(obj), file.path(tables_dir, "signature_ortholog_mapping.tsv"), expanded_signatures$signature)
+    audit <- read_delim_safe(file.path(tables_dir, "signature_ortholog_mapping.tsv"))
+    expanded_signatures <- data.frame(signature = audit$set[audit$status %in% c("mapped", "same_species")], gene = audit$mapped_gene[audit$status %in% c("mapped", "same_species")], stringsAsFactors = FALSE)
+  }
+  signatures <- expanded_signatures
   annotation_name <- safe_metadata_name(attr(obj, "codespring_active_annotation") %||% params$annotation_name)
   DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
   signature_names <- unique(as.character(signatures$signature))

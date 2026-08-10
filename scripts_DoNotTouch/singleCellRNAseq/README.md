@@ -42,6 +42,9 @@ transcriptome folder. CodeSpringApp automatically looks for the current human
 and mouse references below
 `/grid/bsr/data/data/bsr_readable_data/references/cellranger` and passes the
 selected path to the maintained runner; the runner does not hardcode a species.
+Species and transcriptome version are therefore requested only for FASTQ-backed
+projects. Processed objects and filtered matrices do not receive a genome-build
+setting because alignment has already occurred.
 They
 run with intronic counting enabled, chemistry auto-detection, BAM creation, and
 secondary clustering disabled because CodeSpring performs QC, normalization,
@@ -124,6 +127,18 @@ For annotation, use either:
 
 A cell mapping takes precedence. Marker lists are scored per cluster and the
 best-scoring label is assigned to each cluster.
+
+Marker lists and signature lists can be declared as mouse, human, or already
+matching the expression dataset. When conversion is needed, both engines use
+the same MGI-style ortholog table accepted by the RNA-seq workflow (for example
+`mouse_gene_symbol` and `human_gene_symbol`; common MGI/HGNC aliases are also
+recognized). A user-supplied TSV/CSV can replace the bundled table. Ambiguous
+source-to-many mappings are excluded, and `marker_ortholog_mapping.tsv` or
+`signature_ortholog_mapping.tsv` records every mapped, unchanged, ambiguous,
+and unmapped input gene.
+Ranked pathway analysis similarly offers automatic species detection or an
+explicit mouse/human choice and accepts the same optional ortholog table before
+testing human-symbol pathway collections.
 
 ## Output layout
 
