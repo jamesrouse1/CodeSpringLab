@@ -53,6 +53,17 @@ mkdir -p "$MPLCONFIGDIR" "$NUMBA_CACHE_DIR" "$XDG_CACHE_HOME"
 if [[ "$stage" == "all" || "$stage" == "annotate" ]]; then
   rm -f "$out_dir/_COMPLETE"
 fi
+# A successfully completed upstream marker must never make stale downstream
+# outputs look current. Keep the files recoverable for inspection, but clear
+# only the exact completion markers whose inputs are being superseded.
+case "$stage" in
+  inspect) rm -f "$out_dir/_STAGE_QC_COMPLETE" "$out_dir/_STAGE_PREPROCESS_COMPLETE" "$out_dir/_STAGE_CLUSTER_COMPLETE" "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
+  qc) rm -f "$out_dir/_STAGE_PREPROCESS_COMPLETE" "$out_dir/_STAGE_CLUSTER_COMPLETE" "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
+  preprocess) rm -f "$out_dir/_STAGE_CLUSTER_COMPLETE" "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
+  cluster) rm -f "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
+  annotate) rm -f "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" ;;
+  differential) rm -f "$out_dir/_STAGE_PATHWAY_COMPLETE" ;;
+esac
 date '+%Y-%m-%dT%H:%M:%S%z' > "$out_dir/_RUN_STARTED_${stage}"
 trap 'rm -f "$out_dir/_RUN_STARTED_${stage}"' EXIT
 

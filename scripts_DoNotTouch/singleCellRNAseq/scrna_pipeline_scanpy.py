@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -112,6 +113,15 @@ def params_from(path: Path):
         "remove_doublets": get_bool("remove_doublets", True),
         "marker_file": get("marker_file", ""),
         "celltype_file": get("celltype_file", ""),
+        "annotation_name": get("annotation_name", "cell_type"),
+        "signature_file": get("signature_file", ""),
+        "de_group_column": get("de_group_column", "condition"),
+        "de_reference": get("de_reference", ""),
+        "de_comparison": get("de_comparison", ""),
+        "de_annotation_column": get("de_annotation_column", ""),
+        "de_annotation_value": get("de_annotation_value", ""),
+        "de_method": get("de_method", "both").lower(),
+        "de_covariates": [x.strip() for x in get("de_covariates", "").split(",") if x.strip()],
         "scvi_max_epochs": int(float(get("scvi_max_epochs", "400") or 400)),
         "seed": int(float(get("seed", "1234") or 1234)),
     }
@@ -621,7 +631,16 @@ def run_scrublet(adata, p, tables: Path, figures: Path):
     return adata
 
 
-def apply_celltype_mapping(adata, path: Path):
+def safe_metadata_name(value: str, default: str = "cell_type") -> str:
+    value = re.sub(r"[^A-Za-z0-9_]+", "_", str(value).strip()).strip("_")
+    if not value:
+        value = default
+    if value[0].isdigit():
+        value = "annotation_" + value
+    return value
+
+
+def apply_celltype_mapping(adata, path: Path, annotation_name: str):
     tab = read_table(path)
     cell_col = next((x for x in ["cell", "cell_id", "barcode", "Cell", "CellID"] if x in tab.columns), None)
     type_col = next((x for x in ["cell_type", "celltype", "CellType", "annotation"] if x in tab.columns), None)
@@ -629,11 +648,12 @@ def apply_celltype_mapping(adata, path: Path):
         raise SystemExit("Cell-type mapping needs a cell/barcode column and a cell_type column.")
     labels = dict(zip(tab[cell_col].astype(str), tab[type_col].astype(str)))
     values = [labels.get(str(cell), labels.get(str(raw), "Unassigned")) for cell, raw in zip(adata.obs_names, adata.obs["source_barcode"])]
-    adata.obs["cell_type"] = pd.Categorical(values)
-    adata.obs["annotation_source"] = "provided cell metadata"
+    adata.obs[annotation_name] = pd.Categorical(values)
+    adata.obs[f"annotation_source__{annotation_name}"] = "provided cell metadata"
+    adata.obs["annotation_source"] = f"provided cell metadata ({annotation_name})"
 
 
-def apply_marker_annotation(adata, path: Path, tables_dir: Path):
+def apply_marker_annotation(adata, path: Path, tables_dir: Path, annotation_name: str):
     tab = read_table(path)
     if not {"cell_type", "gene"}.issubset(tab.columns):
         raise SystemExit("Marker list needs cell_type and gene columns.")
@@ -656,8 +676,10 @@ def apply_marker_annotation(adata, path: Path, tables_dir: Path):
     score_columns = [f"marker_score__{x}" for x in lists]
     means = adata.obs.assign(cluster=clusters).groupby("cluster", observed=True)[score_columns].mean()
     winners = means.idxmax(axis=1).str.replace("marker_score__", "", regex=False)
-    adata.obs["cell_type"] = pd.Categorical(clusters.map(winners).fillna("Unassigned"))
-    adata.obs["annotation_source"] = "marker-list cluster scoring"
+    adata.obs[annotation_name] = pd.Categorical(clusters.map(winners).fillna("Unassigned"))
+    adata.obs[f"annotation_source__{annotation_name}"] = "marker-list cluster scoring"
+    adata.obs["annotation_source"] = f"marker-list cluster scoring ({annotation_name})"
+    means.to_csv(tables_dir / f"marker_annotation_cluster_scores__{annotation_name}.tsv", sep="\t")
     means.to_csv(tables_dir / "marker_annotation_cluster_scores.tsv", sep="\t")
 
 
@@ -677,12 +699,128 @@ def apply_existing_annotation(adata):
     return False
 
 
+def write_cell_metadata_outputs(adata, tables_dir: Path):
+    cell_metadata = adata.obs.copy()
+    if "cell" in cell_metadata.columns:
+        cell_metadata = cell_metadata.rename(columns={"cell": "input_cell"})
+    cell_metadata.insert(0, "cell", cell_metadata.index.astype(str))
+    cell_metadata.to_csv(tables_dir / "cell_metadata.tsv", sep="\t", index=False)
+    save_umap_coordinates(adata, tables_dir)
+
+
+def write_composition_outputs(adata, annotation_name: str, tables_dir: Path):
+    if annotation_name not in adata.obs.columns:
+        raise SystemExit(f"Annotation metadata field was not created: {annotation_name}")
+    current = adata.obs.groupby(["sample_id", annotation_name], observed=True).size().reset_index(name="cells")
+    current = current.rename(columns={annotation_name: "annotation_label"})
+    current.insert(1, "annotation_field", annotation_name)
+    current["proportion_within_sample"] = current["cells"] / current.groupby("sample_id", observed=True)["cells"].transform("sum")
+    long_path = tables_dir / "composition_by_sample.tsv"
+    if long_path.exists():
+        previous = pd.read_csv(long_path, sep="\t")
+        if "annotation_field" in previous.columns:
+            previous = previous[previous["annotation_field"].astype(str) != annotation_name]
+            current = pd.concat([previous, current], ignore_index=True)
+    current.to_csv(long_path, sep="\t", index=False)
+    legacy = current[current["annotation_field"] == annotation_name].rename(columns={"annotation_label": "cell_type"})
+    legacy[["sample_id", "cell_type", "cells", "proportion_within_sample"]].to_csv(tables_dir / "cell_type_by_sample.tsv", sep="\t", index=False)
+    cluster_sizes = adata.obs.groupby(["cluster", annotation_name], observed=True).size().reset_index(name="cells")
+    cluster_sizes = cluster_sizes.rename(columns={annotation_name: "annotation_label"})
+    cluster_sizes.insert(1, "annotation_field", annotation_name)
+    cluster_sizes.to_csv(tables_dir / "cluster_annotation_sizes.tsv", sep="\t", index=False)
+    cluster_sizes.rename(columns={"annotation_label": "cell_type"})[["cluster", "cell_type", "cells"]].to_csv(tables_dir / "cluster_cell_type_sizes.tsv", sep="\t", index=False)
+
+
+def score_signatures(adata, path: Path, tables_dir: Path, annotation_name: str):
+    signatures = read_table(path)
+    if not {"signature", "gene"}.issubset(signatures.columns):
+        raise SystemExit("Signature list needs signature and gene columns.")
+    available = set(adata.raw.var_names if adata.raw is not None else adata.var_names)
+    score_columns = []
+    coverage = []
+    for signature, group in signatures.groupby("signature", sort=False):
+        requested = []
+        for value in group["gene"].astype(str):
+            requested.extend([x for x in re.split(r"[,;\s]+", value) if x])
+        requested = list(dict.fromkeys(requested))
+        present = [x for x in requested if x in available]
+        if not present:
+            coverage.append({"signature": signature, "metadata_column": "", "genes_requested": len(requested), "genes_found": 0, "coverage": 0})
+            continue
+        column = "signature__" + safe_metadata_name(signature, "score")
+        sc.tl.score_genes(adata, present, score_name=column, use_raw=True, random_state=1234)
+        score_columns.append(column)
+        coverage.append({"signature": signature, "metadata_column": column, "genes_requested": len(requested), "genes_found": len(present), "coverage": len(present) / max(1, len(requested))})
+    pd.DataFrame(coverage).to_csv(tables_dir / "signature_gene_coverage.tsv", sep="\t", index=False)
+    if not score_columns:
+        raise SystemExit("None of the supplied signature genes were found in the normalized expression object.")
+    per_cell = adata.obs[["sample_id"] + ([annotation_name] if annotation_name in adata.obs.columns else []) + score_columns].copy()
+    per_cell.insert(0, "cell", adata.obs_names.astype(str))
+    per_cell.to_csv(tables_dir / "signature_scores_per_cell.tsv", sep="\t", index=False)
+    group_columns = ["sample_id"] + ([annotation_name] if annotation_name in adata.obs.columns else [])
+    summary = adata.obs.groupby(group_columns, observed=True)[score_columns].agg(["mean", "median", "count"])
+    summary.columns = [f"{score}__{stat}" for score, stat in summary.columns]
+    summary.reset_index().to_csv(tables_dir / "signature_scores_summary.tsv", sep="\t", index=False)
+    return score_columns
+
+
+def export_differential_inputs(adata, p, tables_dir: Path):
+    group_column = p["de_group_column"]
+    reference, comparison = p["de_reference"], p["de_comparison"]
+    if group_column not in adata.obs.columns:
+        raise SystemExit(f"Differential-expression group field is absent from cell metadata: {group_column}")
+    if not reference or not comparison or reference == comparison:
+        raise SystemExit("Choose two different reference and comparison groups for differential expression.")
+    keep = adata.obs[group_column].astype(str).isin([reference, comparison])
+    annotation_column, annotation_value = p["de_annotation_column"], p["de_annotation_value"]
+    if annotation_column and annotation_value and annotation_value.lower() not in {"all", "all cells"}:
+        if annotation_column not in adata.obs.columns:
+            raise SystemExit(f"Differential-expression annotation field is absent: {annotation_column}")
+        keep &= adata.obs[annotation_column].astype(str) == annotation_value
+    subset = adata[keep].copy()
+    if subset.n_obs == 0:
+        raise SystemExit("No cells remain for the requested differential-expression comparison.")
+    observed = set(subset.obs[group_column].astype(str))
+    if not {reference, comparison}.issubset(observed):
+        raise SystemExit("Both comparison groups must contain cells after annotation filtering.")
+    design_rows, matrices = [], []
+    counts = subset.layers.get("counts")
+    if counts is None:
+        raise SystemExit("Raw counts are unavailable in the processed Scanpy object; pseudobulk DE requires layers['counts'].")
+    for sample_id, cell_index in subset.obs.groupby("sample_id", observed=True).groups.items():
+        positions = subset.obs_names.get_indexer(cell_index)
+        sample_groups = subset.obs.iloc[positions][group_column].astype(str).unique()
+        if len(sample_groups) != 1:
+            raise SystemExit(f"Biological replicate {sample_id} contains multiple values of {group_column}; the group must be sample-level for pseudobulk DE.")
+        summed = np.asarray(counts[positions].sum(axis=0)).ravel()
+        matrices.append(summed)
+        design_row = {"sample_id": str(sample_id), "group": sample_groups[0], "cells": len(positions)}
+        for covariate in p["de_covariates"]:
+            if covariate not in subset.obs.columns:
+                raise SystemExit(f"Requested pseudobulk covariate is absent from metadata: {covariate}")
+            values = subset.obs.iloc[positions][covariate].astype(str).unique()
+            if len(values) != 1:
+                raise SystemExit(f"Pseudobulk covariate {covariate} is not constant within biological replicate {sample_id}.")
+            design_row[covariate] = values[0]
+        design_rows.append(design_row)
+    count_table = pd.DataFrame(np.vstack(matrices).T, index=subset.var_names, columns=[x["sample_id"] for x in design_rows])
+    count_table.insert(0, "gene", count_table.index.astype(str))
+    count_table.to_csv(tables_dir / "pseudobulk_counts.tsv", sep="\t", index=False)
+    pd.DataFrame(design_rows).to_csv(tables_dir / "pseudobulk_design.tsv", sep="\t", index=False)
+    if p["de_method"] in {"both", "cell", "cell_level"}:
+        sc.tl.rank_genes_groups(subset, groupby=group_column, groups=[comparison], reference=reference, method="wilcoxon", use_raw=True, pts=True)
+        result = sc.get.rank_genes_groups_df(subset, group=comparison)
+        result.insert(0, "comparison", f"{comparison}_vs_{reference}")
+        result["analysis_level"] = "cell-level exploratory Wilcoxon; cells are not biological replicates"
+        result.to_csv(tables_dir / "cell_level_differential_expression.tsv", sep="\t", index=False)
+
+
 def main():
     if len(sys.argv) not in {4, 5}:
-        raise SystemExit("Usage: scrna_pipeline_scanpy.py <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|all]")
+        raise SystemExit("Usage: scrna_pipeline_scanpy.py <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|score|differential|all]")
     samples_path, out_dir, params_path = map(Path, sys.argv[1:4])
     stage = sys.argv[4].lower() if len(sys.argv) == 5 else "all"
-    stages = {"inspect", "qc", "preprocess", "cluster", "annotate", "all"}
+    stages = {"inspect", "qc", "preprocess", "cluster", "annotate", "score", "differential", "all"}
     if stage not in stages:
         raise SystemExit("Unknown scRNA stage: " + stage)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -706,6 +844,7 @@ def main():
     qc_checkpoint = checkpoints / "02_qc_scanpy.h5ad"
     preprocess_checkpoint = checkpoints / "03_preprocessed_scanpy.h5ad"
     cluster_checkpoint = checkpoints / "04_clustered_scanpy.h5ad"
+    processed_object = objects / "processed_scanpy.h5ad"
 
     def mark_complete(name):
         (out_dir / f"_STAGE_{name.upper()}_COMPLETE").write_text("complete\n")
@@ -767,8 +906,10 @@ def main():
     elif stage == "cluster":
         adata = require_checkpoint(preprocess_checkpoint, "normalization and PCA")
     elif stage == "annotate":
-        annotation_input = cluster_checkpoint if cluster_checkpoint.exists() else objects / "processed_scanpy.h5ad"
+        annotation_input = cluster_checkpoint if cluster_checkpoint.exists() else processed_object
         adata = require_checkpoint(annotation_input, "UMAP and clustering")
+    elif stage in {"score", "differential"}:
+        adata = require_checkpoint(processed_object, "annotation")
 
     # Stage 2: filter cells/genes and handle doublets while the data is raw.
     if stage in {"qc", "all"}:
@@ -909,14 +1050,19 @@ def main():
     # Stage 5: annotation, markers, and the final portable results set.
     if stage in {"annotate", "all"}:
         integration = str(adata.uns.get("codespring_integration", p["integration"]))
+        annotation_name = safe_metadata_name(p["annotation_name"])
         if p["celltype_file"] and p["celltype_file"].lower() != "none":
-            apply_celltype_mapping(adata, Path(p["celltype_file"]).expanduser())
+            apply_celltype_mapping(adata, Path(p["celltype_file"]).expanduser(), annotation_name)
         elif p["marker_file"] and p["marker_file"].lower() != "none":
-            apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables)
+            apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables, annotation_name)
         elif not apply_existing_annotation(adata):
-            adata.obs["cell_type"] = adata.obs["cluster"].astype("category")
-            adata.obs["annotation_source"] = "cluster ID (no annotation supplied)"
-        for col, name in [("sample_id", "03_umap_sample.png"), ("cluster", "04_umap_clusters.png"), ("cell_type", "05_umap_cell_types.png")]:
+            adata.obs[annotation_name] = adata.obs["cluster"].astype("category")
+            adata.obs[f"annotation_source__{annotation_name}"] = "cluster ID (no annotation supplied)"
+            adata.obs["annotation_source"] = f"cluster ID ({annotation_name}; no annotation supplied)"
+        elif annotation_name != "cell_type" and "cell_type" in adata.obs.columns:
+            adata.obs[annotation_name] = adata.obs["cell_type"].copy()
+            adata.obs[f"annotation_source__{annotation_name}"] = adata.obs["annotation_source"].astype(str)
+        for col, name in [("sample_id", "03_umap_sample.png"), ("cluster", "04_umap_clusters.png"), (annotation_name, f"05_umap_{annotation_name}.png")]:
             save_umap(adata, col, figures / name)
         if "condition" in adata.obs.columns and adata.obs.condition.nunique() > 1:
             save_umap(adata, "condition", figures / "06_umap_condition.png")
@@ -927,16 +1073,10 @@ def main():
             markers.groupby("group", observed=True).head(10).to_csv(tables / "top10_markers_per_cluster.tsv", sep="\t", index=False)
         except Exception as exc:
             pd.DataFrame({"warning": [str(exc)]}).to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
-        cell_metadata = adata.obs.copy()
-        if "cell" in cell_metadata.columns: cell_metadata = cell_metadata.rename(columns={"cell": "input_cell"})
-        cell_metadata.insert(0, "cell", cell_metadata.index.astype(str))
-        cell_metadata.to_csv(tables / "cell_metadata.tsv", sep="\t", index=False)
-        save_umap_coordinates(adata, tables)
-        adata.obs.groupby(["cluster", "cell_type"], observed=True).size().reset_index(name="cells").to_csv(tables / "cluster_cell_type_sizes.tsv", sep="\t", index=False)
-        cell_type_by_sample = adata.obs.groupby(["sample_id", "cell_type"], observed=True).size().reset_index(name="cells")
-        cell_type_by_sample["proportion_within_sample"] = cell_type_by_sample["cells"] / cell_type_by_sample.groupby("sample_id", observed=True)["cells"].transform("sum")
-        cell_type_by_sample.to_csv(tables / "cell_type_by_sample.tsv", sep="\t", index=False)
-        write_h5ad_checkpoint(adata, objects / "processed_scanpy.h5ad")
+        write_cell_metadata_outputs(adata, tables)
+        write_composition_outputs(adata, annotation_name, tables)
+        adata.uns["codespring_active_annotation"] = annotation_name
+        write_h5ad_checkpoint(adata, processed_object)
         # The final H5AD includes the cluster representation, annotations,
         # counts, and normalized raw values, making the previous clustered
         # checkpoint unnecessary after successful annotation.
@@ -944,10 +1084,22 @@ def main():
         (out_dir / "run_summary.txt").write_text("\n".join([
             "engine: scanpy", "normalization: lognormalize", f"integration: {integration}", f"doublet_method: {p['doublet_method']}",
             f"doublets_removed: {int(adata.uns.get('codespring_doublets_removed', 0))}", "input_processing_inventory: tables/input_processing_detected.tsv",
-            f"input_samples: {samples.shape[0]}", f"cells_after_qc: {adata.n_obs}", f"clusters: {adata.obs['cluster'].nunique()}", f"annotation_source: {adata.obs['annotation_source'].iloc[0]}",
+            f"input_samples: {samples.shape[0]}", f"cells_after_qc: {adata.n_obs}", f"clusters: {adata.obs['cluster'].nunique()}", f"active_annotation: {annotation_name}", f"annotation_source: {adata.obs['annotation_source'].iloc[0]}",
         ]) + "\n")
         mark_complete("annotate")
         (out_dir / "_COMPLETE").write_text("complete\n")
+
+    if stage == "score":
+        if not p["signature_file"] or p["signature_file"].lower() == "none":
+            raise SystemExit("Choose a signature TSV with signature and gene columns.")
+        annotation_name = safe_metadata_name(str(adata.uns.get("codespring_active_annotation", p["annotation_name"])))
+        score_signatures(adata, Path(p["signature_file"]).expanduser(), tables, annotation_name)
+        write_cell_metadata_outputs(adata, tables)
+        write_h5ad_checkpoint(adata, processed_object)
+        mark_complete("score")
+
+    if stage == "differential":
+        export_differential_inputs(adata, p, tables)
 
 
 if __name__ == "__main__":

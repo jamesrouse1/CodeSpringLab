@@ -3,7 +3,7 @@
 # CodeSpringLab single-cell RNA-seq workflow (Seurat engine)
 #
 # Usage:
-#   Rscript scrna_pipeline_seurat.R <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|all]
+#   Rscript scrna_pipeline_seurat.R <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|score|differential|all]
 #
 # samples.tsv (required columns): sample_id, input_path
 # Optional sample columns (for example condition and batch) are retained as
@@ -12,13 +12,13 @@
 # params.tsv contains key/value pairs; comments and unknown keys are allowed.
 
 args <- commandArgs(trailingOnly = TRUE)
-if (!length(args) %in% c(3L, 4L)) stop("Usage: scrna_pipeline_seurat.R <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|all]")
+if (!length(args) %in% c(3L, 4L)) stop("Usage: scrna_pipeline_seurat.R <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|score|differential|all]")
 
 samples_path <- normalizePath(args[[1]], mustWork = TRUE)
 out_dir <- normalizePath(args[[2]], mustWork = FALSE)
 params_path <- normalizePath(args[[3]], mustWork = TRUE)
 stage <- tolower(if (length(args) >= 4L) args[[4]] else "all")
-if (!stage %in% c("inspect", "qc", "preprocess", "cluster", "annotate", "all")) stop("Unknown scRNA stage: ", stage)
+if (!stage %in% c("inspect", "qc", "preprocess", "cluster", "annotate", "score", "differential", "all")) stop("Unknown scRNA stage: ", stage)
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 need_pkg <- function(pkg) {
@@ -67,6 +67,15 @@ read_params <- function(path) {
     remove_doublets = get_bool("remove_doublets", TRUE),
     marker_file = get("marker_file", ""),
     celltype_file = get("celltype_file", ""),
+    annotation_name = get("annotation_name", "cell_type"),
+    signature_file = get("signature_file", ""),
+    de_group_column = get("de_group_column", "condition"),
+    de_reference = get("de_reference", ""),
+    de_comparison = get("de_comparison", ""),
+    de_annotation_column = get("de_annotation_column", ""),
+    de_annotation_value = get("de_annotation_value", ""),
+    de_method = tolower(get("de_method", "both")),
+    de_covariates = Filter(nzchar, trimws(strsplit(get("de_covariates", ""), ",", fixed = TRUE)[[1]])),
     seed = suppressWarnings(as.integer(get("seed", "1234")))
   )
 }
@@ -260,7 +269,7 @@ if (stage %in% c("inspect", "qc", "all")) {
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples), checkpoint_path("01_input"))
   stage_marker("inspect")
   if (identical(stage, "inspect")) quit(save = "no", status = 0L)
-} else {
+} else if (identical(stage, "qc")) {
   input_state <- require_checkpoint("01_input", "input inspection")
   objects <- input_state$objects
   cells_before_qc <- input_state$cells_before_qc
@@ -392,7 +401,7 @@ if (any(is.finite(doublet_calls$doublet_score))) {
 saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("02_qc"))
 stage_marker("qc")
 if (identical(stage, "qc")) quit(save = "no", status = 0L)
-} else {
+} else if (identical(stage, "preprocess")) {
   qc_state <- require_checkpoint("02_qc", "QC and doublet handling")
   objects <- qc_state$objects
   cells_before_qc <- qc_state$cells_before_qc
@@ -400,14 +409,6 @@ if (identical(stage, "qc")) quit(save = "no", status = 0L)
   doublet_summary <- qc_state$doublet_summary
 }
 
-integration <- params$integration
-batch_values <- unlist(lapply(objects, function(obj) {
-  if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
-}), use.names = FALSE)
-if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "rpca" else "none"
-if (integration %in% c("rpca", "cca") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
-  stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
-}
 if (stage %in% c("preprocess", "all")) {
   if (identical(params$normalization, "sct")) {
     objects <- lapply(objects, function(obj) Seurat::SCTransform(obj, assay = "RNA", vst.flavor = "v2", verbose = FALSE))
@@ -421,7 +422,7 @@ if (stage %in% c("preprocess", "all")) {
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("03_preprocessed"))
   stage_marker("preprocess")
   if (identical(stage, "preprocess")) quit(save = "no", status = 0L)
-} else {
+} else if (identical(stage, "cluster")) {
   pre_state <- require_checkpoint("03_preprocessed", "normalization and PCA")
   objects <- pre_state$objects
   cells_before_qc <- pre_state$cells_before_qc
@@ -431,6 +432,7 @@ if (stage %in% c("preprocess", "all")) {
 
 # Determine integration only after loading the preprocessed checkpoint, so a
 # resumed stage uses the exact same retained cells and technical metadata.
+if (stage %in% c("cluster", "all")) {
 integration <- params$integration
 batch_values <- unlist(lapply(objects, function(obj) {
   if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
@@ -440,7 +442,6 @@ if (integration %in% c("rpca", "cca") && length(unique(batch_values[nzchar(batch
   stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
 }
 
-if (stage %in% c("cluster", "all")) {
   integration_k_weight <- max(5L, min(50L, floor(min(vapply(objects, ncol, numeric(1))) / 2)))
   if (identical(params$normalization, "sct")) {
     if (integration %in% c("rpca", "cca") && length(objects) > 1L) {
@@ -479,15 +480,38 @@ if (stage %in% c("cluster", "all")) {
   saveRDS(list(object = obj, integration = integration, samples = samples, doublet_summary = doublet_summary), checkpoint_path("04_clustered"))
   stage_marker("cluster")
   if (identical(stage, "cluster")) quit(save = "no", status = 0L)
-} else {
-  cluster_state <- require_checkpoint("04_clustered", "integration and clustering")
-  obj <- cluster_state$object
-  integration <- cluster_state$integration
-  samples <- cluster_state$samples
-  doublet_summary <- cluster_state$doublet_summary
+} else if (identical(stage, "annotate")) {
+  processed_path <- file.path(objects_dir, "processed_seurat.rds")
+  clustered_path <- checkpoint_path("04_clustered")
+  use_processed <- file.exists(processed_path) && (!file.exists(clustered_path) || file.info(processed_path)$mtime >= file.info(clustered_path)$mtime)
+  if (use_processed) {
+    obj <- readRDS(processed_path)
+    integration <- attr(obj, "codespring_integration") %||% params$integration
+    doublet_summary <- data.frame(removed_doublets = attr(obj, "codespring_doublets_removed") %||% 0)
+  } else {
+    cluster_state <- require_checkpoint("04_clustered", "integration and clustering")
+    obj <- cluster_state$object
+    integration <- cluster_state$integration
+    samples <- cluster_state$samples
+    doublet_summary <- cluster_state$doublet_summary
+  }
+} else if (stage %in% c("score", "differential")) {
+  processed_path <- file.path(objects_dir, "processed_seurat.rds")
+  if (!file.exists(processed_path)) stop("The annotation stage has not completed. Run annotation before ", stage, ".")
+  obj <- readRDS(processed_path)
+  integration <- attr(obj, "codespring_integration") %||% params$integration
+  doublet_summary <- data.frame(removed_doublets = 0)
 }
 
-apply_celltype_mapping <- function(obj, path) {
+safe_metadata_name <- function(value, default = "cell_type") {
+  value <- gsub("[^A-Za-z0-9_]+", "_", trimws(as.character(value)))
+  value <- gsub("^_+|_+$", "", value)
+  if (!nzchar(value)) value <- default
+  if (grepl("^[0-9]", value)) value <- paste0("annotation_", value)
+  value
+}
+
+apply_celltype_mapping <- function(obj, path, annotation_name) {
   if (!nzchar(path) || identical(tolower(path), "none")) return(obj)
   map <- read_delim_safe(path)
   cell_col <- intersect(c("cell", "cell_id", "barcode", "Cell", "CellID"), names(map))
@@ -497,12 +521,13 @@ apply_celltype_mapping <- function(obj, path) {
   direct <- unname(labels[colnames(obj)])
   raw_barcode <- as.character(obj$source_barcode)
   direct[is.na(direct)] <- unname(labels[raw_barcode[is.na(direct)]])
-  obj$cell_type <- ifelse(is.na(direct) | !nzchar(direct), "Unassigned", direct)
-  obj$annotation_source <- "provided cell metadata"
+  obj[[annotation_name]] <- ifelse(is.na(direct) | !nzchar(direct), "Unassigned", direct)
+  obj[[paste0("annotation_source__", annotation_name)]] <- "provided cell metadata"
+  obj$annotation_source <- paste0("provided cell metadata (", annotation_name, ")")
   obj
 }
 
-apply_marker_annotation <- function(obj, path) {
+apply_marker_annotation <- function(obj, path, annotation_name) {
   if (!nzchar(path) || identical(tolower(path), "none")) return(obj)
   markers <- read_delim_safe(path)
   if (!all(c("cell_type", "gene") %in% names(markers))) stop("Marker list needs cell_type and gene columns.")
@@ -519,10 +544,12 @@ apply_marker_annotation <- function(obj, path) {
   means <- rowsum(scores, group = cluster) / as.numeric(table(cluster)[rownames(rowsum(scores, group = cluster))])
   assignment <- colnames(means)[max.col(means, ties.method = "first")]
   cluster_label <- setNames(assignment, rownames(means))
-  obj$cell_type <- unname(cluster_label[cluster])
-  obj$annotation_source <- "marker-list cluster scoring"
+  obj[[annotation_name]] <- unname(cluster_label[cluster])
+  obj[[paste0("annotation_source__", annotation_name)]] <- "marker-list cluster scoring"
+  obj$annotation_source <- paste0("marker-list cluster scoring (", annotation_name, ")")
   score_table <- data.frame(cluster = rownames(means), means, check.names = FALSE)
   utils::write.table(score_table, file.path(tables_dir, "marker_annotation_cluster_scores.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  utils::write.table(score_table, file.path(tables_dir, paste0("marker_annotation_cluster_scores__", annotation_name, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
   obj
 }
 
@@ -541,23 +568,30 @@ apply_existing_annotation <- function(obj) {
   NULL
 }
 
+if (stage %in% c("annotate", "all")) {
+annotation_name <- safe_metadata_name(params$annotation_name)
 if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "none")) {
-  obj <- apply_celltype_mapping(obj, params$celltype_file)
+  obj <- apply_celltype_mapping(obj, params$celltype_file, annotation_name)
 } else if (nzchar(params$marker_file) && !identical(tolower(params$marker_file), "none")) {
-  obj <- apply_marker_annotation(obj, params$marker_file)
+  obj <- apply_marker_annotation(obj, params$marker_file, annotation_name)
 } else {
   existing_annotation <- apply_existing_annotation(obj)
   if (is.null(existing_annotation)) {
-    obj$cell_type <- obj$cluster
-    obj$annotation_source <- "cluster ID (no annotation supplied)"
+    obj[[annotation_name]] <- obj$cluster
+    obj[[paste0("annotation_source__", annotation_name)]] <- "cluster ID (no annotation supplied)"
+    obj$annotation_source <- paste0("cluster ID (", annotation_name, "; no annotation supplied)")
   } else {
     obj <- existing_annotation
+    if (!identical(annotation_name, "cell_type")) {
+      obj[[annotation_name]] <- obj$cell_type
+      obj[[paste0("annotation_source__", annotation_name)]] <- obj$annotation_source
+    }
   }
 }
 
 save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "sample_id", shuffle = TRUE), "03_umap_sample.png", 8, 6)
 save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "cluster", label = TRUE, repel = TRUE), "04_umap_clusters.png", 8, 6)
-save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "cell_type", label = TRUE, repel = TRUE), "05_umap_cell_types.png", 9, 6)
+save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = annotation_name, label = TRUE, repel = TRUE), paste0("05_umap_", annotation_name, ".png"), 9, 6)
 if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 1L) save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "condition", shuffle = TRUE), "06_umap_condition.png", 8, 6)
 
 # Cluster markers should use the normalized SCT representation when that is
@@ -603,24 +637,129 @@ umap_metadata <- obj@meta.data
 if ("cell" %in% names(umap_metadata)) names(umap_metadata)[names(umap_metadata) == "cell"] <- "input_cell"
 umap_table <- data.frame(cell = rownames(umap_coordinates), umap_coordinates[, c("UMAP_1", "UMAP_2"), drop = FALSE], umap_metadata, check.names = FALSE)
 utils::write.table(umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-cluster_sizes <- as.data.frame(table(cluster = obj$cluster, cell_type = obj$cell_type), stringsAsFactors = FALSE)
+cluster_sizes <- as.data.frame(table(cluster = obj$cluster, annotation_label = obj[[annotation_name]][, 1]), stringsAsFactors = FALSE)
 names(cluster_sizes)[names(cluster_sizes) == "Freq"] <- "cells"
 cluster_sizes <- cluster_sizes[cluster_sizes$cells > 0, , drop = FALSE]
-utils::write.table(cluster_sizes, file.path(tables_dir, "cluster_cell_type_sizes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-cell_type_by_sample <- as.data.frame(table(sample_id = obj$sample_id, cell_type = obj$cell_type), stringsAsFactors = FALSE)
+cluster_sizes$annotation_field <- annotation_name
+utils::write.table(cluster_sizes[, c("cluster", "annotation_field", "annotation_label", "cells")], file.path(tables_dir, "cluster_annotation_sizes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+legacy_cluster <- cluster_sizes[, c("cluster", "annotation_label", "cells")]; names(legacy_cluster)[2] <- "cell_type"
+utils::write.table(legacy_cluster, file.path(tables_dir, "cluster_cell_type_sizes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+cell_type_by_sample <- as.data.frame(table(sample_id = obj$sample_id, annotation_label = obj[[annotation_name]][, 1]), stringsAsFactors = FALSE)
 names(cell_type_by_sample)[names(cell_type_by_sample) == "Freq"] <- "cells"
 cell_type_by_sample <- cell_type_by_sample[cell_type_by_sample$cells > 0, , drop = FALSE]
 cell_type_by_sample$proportion_within_sample <- cell_type_by_sample$cells / ave(cell_type_by_sample$cells, cell_type_by_sample$sample_id, FUN = sum)
-utils::write.table(cell_type_by_sample, file.path(tables_dir, "cell_type_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+cell_type_by_sample$annotation_field <- annotation_name
+composition_path <- file.path(tables_dir, "composition_by_sample.tsv")
+if (file.exists(composition_path)) {
+  previous <- read_delim_safe(composition_path)
+  if ("annotation_field" %in% names(previous)) previous <- previous[as.character(previous$annotation_field) != annotation_name, , drop = FALSE]
+  cell_type_by_sample <- rbind(previous[, names(cell_type_by_sample), drop = FALSE], cell_type_by_sample)
+}
+utils::write.table(cell_type_by_sample[, c("sample_id", "annotation_field", "annotation_label", "cells", "proportion_within_sample")], composition_path, sep = "\t", row.names = FALSE, quote = FALSE)
+legacy_composition <- cell_type_by_sample[as.character(cell_type_by_sample$annotation_field) == annotation_name, c("sample_id", "annotation_label", "cells", "proportion_within_sample")]; names(legacy_composition)[2] <- "cell_type"
+utils::write.table(legacy_composition, file.path(tables_dir, "cell_type_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 
+attr(obj, "codespring_active_annotation") <- annotation_name
+attr(obj, "codespring_integration") <- integration
+attr(obj, "codespring_doublets_removed") <- sum(doublet_summary$removed_doublets)
 saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
 summary_lines <- c(
   paste("engine: seurat"), paste("normalization:", params$normalization), paste("integration:", integration),
   paste("doublet_method:", params$doublet_method), paste("doublets_removed:", sum(doublet_summary$removed_doublets)),
   paste("input_processing_inventory:", file.path("tables", "input_processing_detected.tsv")),
-  paste("input_samples:", NROW(samples)), paste("cells_after_qc:", ncol(obj)), paste("clusters:", length(unique(obj$cluster))),
+  paste("input_samples:", NROW(samples)), paste("cells_after_qc:", ncol(obj)), paste("clusters:", length(unique(obj$cluster))), paste("active_annotation:", annotation_name),
   paste("annotation_source:", unique(obj$annotation_source)[1]), paste("generated:", as.character(Sys.time()))
 )
 writeLines(summary_lines, file.path(out_dir, "run_summary.txt"))
 stage_marker("annotate")
 writeLines(as.character(Sys.time()), file.path(out_dir, "_COMPLETE"))
+}
+
+if (identical(stage, "score")) {
+  if (!nzchar(params$signature_file) || identical(tolower(params$signature_file), "none")) stop("Choose a signature TSV with signature and gene columns.")
+  signatures <- read_delim_safe(params$signature_file)
+  if (!all(c("signature", "gene") %in% names(signatures))) stop("Signature list needs signature and gene columns.")
+  annotation_name <- safe_metadata_name(attr(obj, "codespring_active_annotation") %||% params$annotation_name)
+  DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
+  signature_names <- unique(as.character(signatures$signature))
+  coverage <- list(); score_columns <- character(0)
+  for (signature in signature_names) {
+    requested <- unique(unlist(strsplit(as.character(signatures$gene[as.character(signatures$signature) == signature]), "[,;[:space:]]+")))
+    requested <- requested[nzchar(requested)]
+    present <- intersect(requested, rownames(obj))
+    column <- paste0("signature__", safe_metadata_name(signature, "score"))
+    coverage[[length(coverage) + 1L]] <- data.frame(signature = signature, metadata_column = if (length(present)) column else "", genes_requested = length(requested), genes_found = length(present), coverage = length(present) / max(1L, length(requested)))
+    if (!length(present)) next
+    nbin <- min(24L, max(2L, floor(nrow(obj) / 5L)))
+    ctrl <- min(100L, max(1L, floor((nrow(obj) - length(present)) / nbin)))
+    obj <- Seurat::AddModuleScore(obj, features = list(present), name = paste0(column, "__tmp"), assay = DefaultAssay(obj), nbin = nbin, ctrl = ctrl, seed = params$seed)
+    generated <- grep(paste0("^", column, "__tmp"), colnames(obj@meta.data), value = TRUE)[1]
+    obj[[column]] <- obj[[generated]][, 1]
+    obj[[generated]] <- NULL
+    score_columns <- c(score_columns, column)
+  }
+  utils::write.table(do.call(rbind, coverage), file.path(tables_dir, "signature_gene_coverage.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  if (!length(score_columns)) stop("None of the supplied signature genes were found in the normalized expression object.")
+  score_metadata <- obj@meta.data[, unique(c("sample_id", annotation_name, score_columns)), drop = FALSE]
+  score_metadata <- data.frame(cell = rownames(score_metadata), score_metadata, check.names = FALSE)
+  utils::write.table(score_metadata, file.path(tables_dir, "signature_scores_per_cell.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  grouping <- interaction(obj@meta.data[, intersect(c("sample_id", annotation_name), colnames(obj@meta.data)), drop = FALSE], drop = TRUE, sep = " | ")
+  summary_rows <- do.call(rbind, lapply(split(seq_len(ncol(obj)), grouping), function(idx) {
+    base <- obj@meta.data[idx[1], intersect(c("sample_id", annotation_name), colnames(obj@meta.data)), drop = FALSE]
+    stats <- unlist(lapply(score_columns, function(column) c(mean = mean(obj@meta.data[idx, column]), median = stats::median(obj@meta.data[idx, column]), count = length(idx))))
+    names(stats) <- unlist(lapply(score_columns, function(column) paste0(column, "__", c("mean", "median", "count"))))
+    data.frame(base, as.list(stats), check.names = FALSE)
+  }))
+  utils::write.table(summary_rows, file.path(tables_dir, "signature_scores_summary.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  cell_metadata <- obj@meta.data; if ("cell" %in% names(cell_metadata)) names(cell_metadata)[names(cell_metadata) == "cell"] <- "input_cell"
+  utils::write.table(data.frame(cell = colnames(obj), cell_metadata, check.names = FALSE), file.path(tables_dir, "cell_metadata.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  umap_coordinates <- as.data.frame(Seurat::Embeddings(obj, reduction = "umap")); names(umap_coordinates)[1:2] <- c("UMAP_1", "UMAP_2")
+  utils::write.table(data.frame(cell = rownames(umap_coordinates), umap_coordinates[, 1:2], cell_metadata, check.names = FALSE), file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
+  stage_marker("score")
+}
+
+if (identical(stage, "differential")) {
+  group_column <- params$de_group_column
+  reference <- params$de_reference; comparison <- params$de_comparison
+  if (!group_column %in% colnames(obj@meta.data)) stop("Differential-expression group field is absent from cell metadata: ", group_column)
+  if (!nzchar(reference) || !nzchar(comparison) || identical(reference, comparison)) stop("Choose two different reference and comparison groups for differential expression.")
+  keep <- as.character(obj@meta.data[[group_column]]) %in% c(reference, comparison)
+  if (nzchar(params$de_annotation_column) && nzchar(params$de_annotation_value) && !tolower(params$de_annotation_value) %in% c("all", "all cells")) {
+    if (!params$de_annotation_column %in% colnames(obj@meta.data)) stop("Differential-expression annotation field is absent: ", params$de_annotation_column)
+    keep <- keep & as.character(obj@meta.data[[params$de_annotation_column]]) == params$de_annotation_value
+  }
+  subset_obj <- subset(obj, cells = colnames(obj)[keep])
+  if (!ncol(subset_obj)) stop("No cells remain for the requested differential-expression comparison.")
+  if (!all(c(reference, comparison) %in% unique(as.character(subset_obj@meta.data[[group_column]])))) stop("Both comparison groups must contain cells after annotation filtering.")
+  count_layers <- grep("^counts($|\\.)", assay_layers_safe(subset_obj, "RNA"), value = TRUE)
+  if (length(count_layers) > 1L) subset_obj <- SeuratObject::JoinLayers(subset_obj, assay = "RNA", layers = "counts", new = "counts")
+  counts <- Seurat::GetAssayData(subset_obj, assay = "RNA", layer = "counts")
+  sample_ids <- unique(as.character(subset_obj$sample_id))
+  count_columns <- list(); design_rows <- list()
+  for (sample_id in sample_ids) {
+    cells <- which(as.character(subset_obj$sample_id) == sample_id)
+    groups <- unique(as.character(subset_obj@meta.data[[group_column]][cells]))
+    if (length(groups) != 1L) stop("Biological replicate ", sample_id, " contains multiple values of ", group_column, "; the group must be sample-level for pseudobulk DE.")
+    count_columns[[sample_id]] <- Matrix::rowSums(counts[, cells, drop = FALSE])
+    design_row <- data.frame(sample_id = sample_id, group = groups[[1]], cells = length(cells), check.names = FALSE)
+    for (covariate in params$de_covariates) {
+      if (!covariate %in% colnames(subset_obj@meta.data)) stop("Requested pseudobulk covariate is absent from metadata: ", covariate)
+      values <- unique(as.character(subset_obj@meta.data[[covariate]][cells]))
+      if (length(values) != 1L) stop("Pseudobulk covariate ", covariate, " is not constant within biological replicate ", sample_id, ".")
+      design_row[[covariate]] <- values[[1]]
+    }
+    design_rows[[sample_id]] <- design_row
+  }
+  pseudobulk <- do.call(cbind, count_columns)
+  utils::write.table(data.frame(gene = rownames(pseudobulk), pseudobulk, check.names = FALSE), file.path(tables_dir, "pseudobulk_counts.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  utils::write.table(do.call(rbind, design_rows), file.path(tables_dir, "pseudobulk_design.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  if (params$de_method %in% c("both", "cell", "cell_level")) {
+    DefaultAssay(subset_obj) <- if ("SCT" %in% names(subset_obj@assays)) "SCT" else "RNA"
+    if (identical(DefaultAssay(subset_obj), "SCT") && length(subset_obj[["SCT"]]@SCTModel.list) > 1L) subset_obj <- Seurat::PrepSCTFindMarkers(subset_obj, verbose = FALSE)
+    Seurat::Idents(subset_obj) <- as.character(subset_obj@meta.data[[group_column]])
+    cell_de <- Seurat::FindMarkers(subset_obj, ident.1 = comparison, ident.2 = reference, test.use = "wilcox", logfc.threshold = 0, min.pct = 0, verbose = FALSE)
+    cell_de <- data.frame(gene = rownames(cell_de), comparison = paste0(comparison, "_vs_", reference), cell_de, analysis_level = "cell-level exploratory Wilcoxon; cells are not biological replicates", check.names = FALSE)
+    utils::write.table(cell_de, file.path(tables_dir, "cell_level_differential_expression.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  }
+}

@@ -84,6 +84,15 @@ scanpy_bind_args() {
 }
 
 engine="$(printf '%s' "$engine" | tr '[:upper:]' '[:lower:]')"
+if [[ "$stage" == "pathway" ]]; then
+  module load EBModules 2>/dev/null || true
+  module load R/4.3.2-gfbf-2023a 2>/dev/null || true
+  runtime_executable="$(command -v Rscript || true)"
+  require_executable "$runtime_executable" "pathway-analysis Rscript"
+  "$runtime_executable" "$script_dir/scrna_pathway_fgsea.R" "$out_dir" "$params"
+  printf 'complete\n' > "$out_dir/_STAGE_PATHWAY_COMPLETE"
+  exit 0
+fi
 case "$engine" in
   seurat)
     # Match CodeSpringLab's portable module setup before using R.
@@ -121,3 +130,12 @@ case "$engine" in
     exit 2
     ;;
 esac
+
+if [[ "$stage" == "differential" ]]; then
+  module load EBModules 2>/dev/null || true
+  module load R/4.3.2-gfbf-2023a 2>/dev/null || true
+  runtime_executable="$(command -v Rscript || true)"
+  require_executable "$runtime_executable" "pseudobulk DESeq2 Rscript"
+  "$runtime_executable" "$script_dir/scrna_pseudobulk_deseq2.R" "$out_dir" "$params"
+  printf 'complete\n' > "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE"
+fi
