@@ -15,11 +15,16 @@ the following raw-count inputs:
 
 - a Seurat `.rds` object (processed with the Seurat engine);
 - an AnnData `.h5ad` object (processed with the Scanpy engine); or
-- a filtered 10x matrix directory (processed with the engine selected in the app).
+- a filtered 10x matrix directory; or
+- a folder of gzipped 10x gene-expression R1/R2 FASTQs. FASTQ samples first run
+  independently through the cluster's `CellRanger/9.0.1` module and the resulting
+  `outs/filtered_feature_bc_matrix` becomes the downstream input.
 
 Additional columns such as `condition`, `batch`, and `donor` become cell
 metadata. `sample_id` must be unique. Do not mix Seurat `.rds` and AnnData
 `.h5ad` inputs in a single run; start from filtered 10x matrices instead.
+For FASTQ inputs, the optional `fastq_sample` column records the filename prefix
+passed to `cellranger count --sample`; the app infers it when one prefix is found.
 
 ## Runtime on the HPC
 
@@ -31,6 +36,11 @@ standard Anaconda module for Scanpy only inside that compute job.
 
 The job checks essential packages before loading a large object, so a missing
 cluster dependency is reported promptly in the job log.
+
+Cell Ranger jobs require a matching `refdata-gex-*` transcriptome folder. They
+run with intronic counting enabled, chemistry auto-detection, BAM creation, and
+secondary clustering disabled because CodeSpring performs QC, normalization,
+integration, clustering, and annotation in the later checkpointed stages.
 
 The Scanpy engine requires raw counts in `X`, `layers['counts']`/`layers['raw']`, or `raw`.
 It stops with an explanatory error when only normalized expression is present,
@@ -54,7 +64,8 @@ is supplied.
 
 ## Processing
 
-The app exposes five ordered stages: **Input inspection**, **QC & doublets**,
+For FASTQ-backed projects, **Cell Ranger count** appears before the standard
+stages. The app then exposes **Input inspection**, **QC & doublets**,
 **Normalize & PCA**, **Integrate & cluster**, and **Annotate & markers**. Each
 stage writes an explicit completion marker plus a checkpoint under
 `checkpoints/`; a later stage will not run until its prerequisite checkpoint
