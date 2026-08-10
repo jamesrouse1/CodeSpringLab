@@ -28,7 +28,8 @@ if (requireNamespace("ggplot2", quietly = TRUE) && NROW(result)) {
   shown <- head(result[is.finite(result$padj) & is.finite(result$NES), , drop = FALSE], 20L)
   if (NROW(shown)) {
     shown$pathway <- factor(shown$pathway, levels = rev(shown$pathway))
-    plot <- ggplot2::ggplot(shown, ggplot2::aes(x = NES, y = pathway, color = -log10(pmax(padj, 1e-300)))) + ggplot2::geom_point(size = 3) + ggplot2::scale_color_viridis_c(name = "−log10 FDR") + ggplot2::labs(x = "Normalized enrichment score", y = NULL, title = "Ranked pseudobulk pathway analysis") + ggplot2::theme_classic(base_size = 11) + ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8), plot.title = ggplot2::element_text(face = "bold"))
+    jpplot_colors <- c("#90C3DD", "#C2E4EF", "#ECF7E1", "#FEF4AF", "#FDD484", "#FBA25B", "#F0653F", "#D42D26", "#A50026")
+    plot <- ggplot2::ggplot(shown, ggplot2::aes(x = NES, y = pathway, color = -log10(pmax(padj, 1e-300)))) + ggplot2::geom_point(size = 3) + ggplot2::scale_color_gradientn(colors = jpplot_colors, name = "−log10 FDR") + ggplot2::labs(x = "Normalized enrichment score", y = NULL, title = "Ranked pseudobulk pathway analysis") + ggplot2::theme_classic(base_size = 11) + ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8), plot.title = ggplot2::element_text(face = "bold"))
     ggplot2::ggsave(file.path(out_dir, "figures", "pathway_fgsea_top20.png"), plot, width = 9, height = 6, dpi = 180)
   }
 }

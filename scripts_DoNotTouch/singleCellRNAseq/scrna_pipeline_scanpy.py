@@ -316,9 +316,9 @@ def save_pca_outputs(adata, figures: Path, recommended_pcs=None):
     if len(variance):
         fig, ax = plt.subplots(figsize=(7.2, 4.6), layout="constrained")
         pcs = np.arange(1, len(variance) + 1)
-        ax.plot(pcs, 100 * variance, marker="o", markersize=3.5, linewidth=1.5, color="#356D9C")
+        ax.plot(pcs, 100 * variance, marker="o", markersize=3.5, linewidth=1.5, color=JP_COLOR_MAP(0.12))
         if recommended_pcs and recommended_pcs <= len(variance):
-            ax.axvline(recommended_pcs, color="#b91c1c", linestyle="--", linewidth=1.3, label=f"Suggested elbow: PC{recommended_pcs}")
+            ax.axvline(recommended_pcs, color=JP_COLOR_MAP(0.92), linestyle="--", linewidth=1.3, label=f"Suggested elbow: PC{recommended_pcs}")
             ax.legend(frameon=False, loc="upper right")
         ax.set(xlabel="Principal component", ylabel="Variance explained (%)", title="PCA variance explained")
         ax.spines[["top", "right"]].set_visible(False)
@@ -457,8 +457,8 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
         elif column == "pct_counts_mt":
             lines.append((cutoffs["max_percent_mt"], "≤ maximum"))
         for value, label in lines:
-            axis.axhline(value, color="#b91c1c", linestyle="--", linewidth=1.25, zorder=4)
-            axis.text(0.99, value, f" {label}: {value:g}", color="#991b1b", fontsize=8,
+            axis.axhline(value, color=JP_COLOR_MAP(0.92), linestyle="--", linewidth=1.25, zorder=4)
+            axis.text(0.99, value, f" {label}: {value:g}", color=JP_COLOR_MAP(0.98), fontsize=8,
                       ha="right", va="bottom", transform=axis.get_yaxis_transform(),
                       bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 1.5})
     fig, axes = plt.subplots(1, len(metrics), figsize=(14, 4.8), layout="constrained")
@@ -510,10 +510,10 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
     ax.set_ylabel("Mitochondrial reads (%)")
     ax.set_title("Library size versus mitochondrial content", loc="left", fontweight="bold")
     if cutoffs:
-        ax.axvline(cutoffs["min_counts"], color="#b91c1c", linestyle="--", linewidth=1.25)
-        ax.axhline(cutoffs["max_percent_mt"], color="#b91c1c", linestyle="--", linewidth=1.25)
+        ax.axvline(cutoffs["min_counts"], color=JP_COLOR_MAP(0.92), linestyle="--", linewidth=1.25)
+        ax.axhline(cutoffs["max_percent_mt"], color=JP_COLOR_MAP(0.92), linestyle="--", linewidth=1.25)
         ax.text(0.99, 0.98, f"Applied cutoffs: counts ≥ {cutoffs['min_counts']:g}; mitochondrial reads ≤ {cutoffs['max_percent_mt']:g}%",
-                transform=ax.transAxes, ha="right", va="top", fontsize=8, color="#991b1b",
+                transform=ax.transAxes, ha="right", va="top", fontsize=8, color=JP_COLOR_MAP(0.98),
                 bbox={"facecolor": "white", "edgecolor": "#fecaca", "alpha": 0.9, "pad": 3})
     mt_values = pd.to_numeric(adata.obs["pct_counts_mt"], errors="coerce").dropna().to_numpy()
     if len(mt_values):

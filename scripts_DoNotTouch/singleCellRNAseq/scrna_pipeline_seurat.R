@@ -40,6 +40,27 @@ if (requireNamespace("future", quietly = TRUE)) {
 
 `%||%` <- function(x, y) if (is.null(x) || !length(x) || (length(x) == 1L && is.na(x))) y else x
 
+# Match jpplot.cmapjp() used by the Scanpy engine: the upper 75% of
+# RdYlBu_r, from light blue through yellow to deep red. Keeping fixed anchors
+# makes Seurat, Scanpy, static figures, and the interactive app reproducible.
+jpplot_colors <- c("#90C3DD", "#C2E4EF", "#ECF7E1", "#FEF4AF", "#FDD484", "#FBA25B", "#F0653F", "#D42D26", "#A50026")
+jpplot_discrete_palette <- function(values) {
+  levels <- sort(unique(as.character(values)))
+  levels <- levels[!is.na(levels) & nzchar(levels)]
+  if (!length(levels)) return(character(0))
+  colors <- if (length(levels) == 1L) jpplot_colors[[ceiling(length(jpplot_colors) / 2)]] else grDevices::colorRampPalette(jpplot_colors)(length(levels) + 2L)[seq.int(2L, length(levels) + 1L)]
+  stats::setNames(colors, levels)
+}
+jpplot_dimplot <- function(obj, group.by, ...) {
+  Seurat::DimPlot(obj, group.by = group.by, cols = jpplot_discrete_palette(obj[[group.by]][, 1]), ...)
+}
+jpplot_point_layer <- function(plot, color = jpplot_colors[[7]]) {
+  for (i in seq_along(plot$layers)) {
+    if (inherits(plot$layers[[i]]$geom, "GeomPoint")) plot$layers[[i]]$aes_params$colour <- color
+  }
+  plot
+}
+
 read_delim_safe <- function(path) {
   tryCatch(utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE, comment.char = "", quote = ""),
            error = function(e) stop("Could not read ", path, ": ", conditionMessage(e)))
@@ -184,7 +205,7 @@ save_input_umap <- function(obj, sample_id) {
     length(values[nzchar(values)]) > 1L && length(values[nzchar(values)]) <= 40L
   }, logical(1))]
   group_by <- if (length(candidates)) candidates[[1]] else NULL
-  plot <- Seurat::DimPlot(obj, reduction = umap_name[[1]], group.by = group_by, shuffle = TRUE) + ggplot2::ggtitle("UMAP supplied with input object")
+  plot <- jpplot_dimplot(obj, reduction = umap_name[[1]], group.by = group_by, shuffle = TRUE) + ggplot2::ggtitle("UMAP supplied with input object")
   file_name <- paste0("00_input_umap_", gsub("[^A-Za-z0-9_.-]", "_", sample_id), ".png")
   ggplot2::ggsave(file.path(figures_dir, file_name), plot = plot, width = 8, height = 6, dpi = 160)
   invisible(file_name)
@@ -264,8 +285,8 @@ if (stage %in% c("inspect", "qc", "all")) {
   utils::write.table(pre_qc_cells, file.path(tables_dir, "qc_pre_filter_cell_metrics.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   pre_qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
   Seurat::DefaultAssay(pre_qc_merged) <- "RNA"
-  save_plot(Seurat::VlnPlot(pre_qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", ncol = 3, pt.size = 0, layer = "counts"), "00_qc_pre_filter_violin.png", 14, 5)
-  save_plot(Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt") + Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"), "00_qc_pre_filter_scatter.png", 12, 5)
+  save_plot(Seurat::VlnPlot(pre_qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", cols = jpplot_discrete_palette(pre_qc_merged$sample_id), ncol = 3, pt.size = 0, layer = "counts"), "00_qc_pre_filter_violin.png", 14, 5)
+  save_plot(jpplot_point_layer(Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt")) + jpplot_point_layer(Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")), "00_qc_pre_filter_scatter.png", 12, 5)
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples), checkpoint_path("01_input"))
   stage_marker("inspect")
   if (identical(stage, "inspect")) quit(save = "no", status = 0L)
@@ -388,11 +409,11 @@ utils::write.table(qc_by_sample, file.path(tables_dir, "qc_summary_by_sample.tsv
 save_plot <- function(plot, file, width = 9, height = 6) ggplot2::ggsave(file.path(figures_dir, file), plot = plot, width = width, height = height, dpi = 160)
 qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
 DefaultAssay(qc_merged) <- "RNA"
-save_plot(Seurat::VlnPlot(qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", ncol = 3, pt.size = 0, layer = "counts"), "01_qc_violin.png", 14, 5)
-save_plot(Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt") + Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"), "02_qc_scatter.png", 12, 5)
+save_plot(Seurat::VlnPlot(qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", cols = jpplot_discrete_palette(qc_merged$sample_id), ncol = 3, pt.size = 0, layer = "counts"), "01_qc_violin.png", 14, 5)
+save_plot(jpplot_point_layer(Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt")) + jpplot_point_layer(Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")), "02_qc_scatter.png", 12, 5)
 if (any(is.finite(doublet_calls$doublet_score))) {
   doublet_plot <- ggplot2::ggplot(doublet_calls[is.finite(doublet_calls$doublet_score), , drop = FALSE], ggplot2::aes(x = doublet_score)) +
-    ggplot2::geom_histogram(bins = 40, fill = "#5b7db1", color = "white") +
+    ggplot2::geom_histogram(bins = 40, fill = jpplot_colors[[7]], color = "white") +
     ggplot2::labs(title = "Doublet-score distribution before removal", x = "Doublet score", y = "Cells") +
     ggplot2::theme_classic()
   save_plot(doublet_plot, "02b_doublet_scores.png", 7, 4.5)
@@ -589,10 +610,10 @@ if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "n
   }
 }
 
-save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "sample_id", shuffle = TRUE), "03_umap_sample.png", 8, 6)
-save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "cluster", label = TRUE, repel = TRUE), "04_umap_clusters.png", 8, 6)
-save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = annotation_name, label = TRUE, repel = TRUE), paste0("05_umap_", annotation_name, ".png"), 9, 6)
-if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 1L) save_plot(Seurat::DimPlot(obj, reduction = "umap", group.by = "condition", shuffle = TRUE), "06_umap_condition.png", 8, 6)
+save_plot(jpplot_dimplot(obj, reduction = "umap", group.by = "sample_id", shuffle = TRUE), "03_umap_sample.png", 8, 6)
+save_plot(jpplot_dimplot(obj, reduction = "umap", group.by = "cluster", label = TRUE, repel = TRUE), "04_umap_clusters.png", 8, 6)
+save_plot(jpplot_dimplot(obj, reduction = "umap", group.by = annotation_name, label = TRUE, repel = TRUE), paste0("05_umap_", annotation_name, ".png"), 9, 6)
+if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 1L) save_plot(jpplot_dimplot(obj, reduction = "umap", group.by = "condition", shuffle = TRUE), "06_umap_condition.png", 8, 6)
 
 # Cluster markers should use the normalized SCT representation when that is
 # the selected workflow; the raw RNA assay intentionally has no data layer.
