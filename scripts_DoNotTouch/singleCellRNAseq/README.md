@@ -63,7 +63,7 @@ clusters, and annotations in `tables/input_processing_detected.tsv`, while
 the downstream reproducible workflow starts from raw counts.
 
 The workflow performs initial per-sample QC, optional doublet detection,
-gene filtering, normalization, highly-variable-gene selection, scaling,
+gene filtering, normalization, highly-variable-gene selection,
 integration when a genuine technical batch column is supplied, PCA,
 neighbors/UMAP, clustering, annotation, and cluster markers. It retains raw
 counts in the processed output. Seurat defaults to SCTransform v2 and Scanpy
@@ -71,6 +71,24 @@ to log-normalization. In automatic mode, Seurat uses RPCA and Scanpy uses
 Harmony only when the
 selected batch column contains more than one value; sample count alone does
 not trigger batch correction.
+
+Scanpy keeps raw counts in `layers["counts"]`, uses count-depth normalization
+followed by `log1p`, selects batch-aware highly variable genes from the
+log-normalized expression using Scanpy's Seurat-style method, and performs implicitly centered
+sparse PCA on those genes. Seurat applies SCTransform v2 separately to each
+selected integration unit (or LogNormalize when requested). For anchor-based
+RPCA/CCA, inputs sharing the same selected technical-batch value are grouped
+before normalization and integration; Harmony instead corrects the selected
+metadata column in PCA space.
+
+The normalization/PCA stage always writes an uncorrected UMAP by sample and,
+when available, by the selected technical batch. Review that view beside the
+final corrected UMAP: a correction should reduce technical separation while
+preserving condition- and cell-type-associated structure. Seurat offers RPCA,
+CCA, and Harmony; the standard Scanpy container offers Harmony. Harmony theta, lambda, and
+iteration settings are recorded in the project parameter table. RPCA is the
+conservative automatic Seurat default; CCA is reserved for datasets with
+strong shared-state shifts where a stronger correction is justified.
 
 Doublets are detected after initial cell QC and before normalization or
 integration. Scanpy uses per-sample Scrublet and requires the Scanpy Scrublet
@@ -90,10 +108,10 @@ best-scoring label is assigned to each cluster.
 
 ## Output layout
 
-- `figures/`: QC and UMAP figures;
+- `figures/`: QC, pre-integration UMAP, and final UMAP figures;
 - `tables/`: per-cell QC, per-sample QC, doublet calls, highly-variable genes,
   PCA variance, metadata, marker, annotation, exact cell-type composition by
-  sample, and `umap_coordinates.tsv` tables;
+  sample, `preintegration_umap_coordinates.tsv`, and `umap_coordinates.tsv`;
 - `objects/`: processed Seurat RDS or AnnData H5AD;
 - `checkpoints/`: internal stage checkpoints used to resume the workflow;
 - `run_summary.txt`: processing choices and cell/cluster counts;

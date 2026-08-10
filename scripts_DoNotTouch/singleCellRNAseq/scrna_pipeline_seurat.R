@@ -102,13 +102,16 @@ read_params <- function(path) {
     de_annotation_values = Filter(nzchar, strsplit(get("de_annotation_values", get("de_annotation_value", "all")), "||", fixed = TRUE)[[1]]),
     de_method = tolower(get("de_method", "both")),
     de_covariates = Filter(nzchar, trimws(strsplit(get("de_covariates", ""), ",", fixed = TRUE)[[1]])),
+    harmony_theta = suppressWarnings(as.numeric(get("harmony_theta", "2"))),
+    harmony_lambda = suppressWarnings(as.numeric(get("harmony_lambda", "1"))),
+    harmony_max_iter = suppressWarnings(as.integer(get("harmony_max_iter", "20"))),
     seed = suppressWarnings(as.integer(get("seed", "1234")))
   )
 }
 
 params <- read_params(params_path)
 if (!params$normalization %in% c("sct", "lognormalize")) stop("normalization must be SCT or LogNormalize")
-if (!params$integration %in% c("auto", "none", "rpca", "cca")) stop("integration must be auto, none, rpca, or cca")
+if (!params$integration %in% c("auto", "none", "rpca", "cca", "harmony")) stop("integration must be auto, none, rpca, cca, or harmony")
 if (!is.finite(params$cluster_resolution) || params$cluster_resolution <= 0) params$cluster_resolution <- 0.6
 if (!is.finite(params$n_pcs) || params$n_pcs < 5) params$n_pcs <- 30L
 if (!is.finite(params$min_features) || params$min_features < 0) params$min_features <- 200L
@@ -118,6 +121,9 @@ if (!is.finite(params$max_percent_mt) || params$max_percent_mt < 0) params$max_p
 if (!is.finite(params$min_cells_per_gene) || params$min_cells_per_gene < 1) params$min_cells_per_gene <- 3L
 if (!params$doublet_method %in% c("auto", "none", "scdblfinder")) stop("doublet_method must be auto, none, or scDblFinder")
 if (!is.finite(params$doublet_rate) || params$doublet_rate < 0 || params$doublet_rate >= 1) params$doublet_rate <- 0.05
+if (!is.finite(params$harmony_theta) || params$harmony_theta < 0) params$harmony_theta <- 2
+if (!is.finite(params$harmony_lambda) || params$harmony_lambda <= 0) params$harmony_lambda <- 1
+if (!is.finite(params$harmony_max_iter) || params$harmony_max_iter < 1) params$harmony_max_iter <- 20L
 if (!is.finite(params$seed)) params$seed <- 1234L
 set.seed(params$seed)
 
@@ -435,7 +441,37 @@ if (identical(stage, "qc")) quit(save = "no", status = 0L)
   doublet_summary <- qc_state$doublet_summary
 }
 
+integration <- params$integration
+batch_values <- unlist(lapply(objects, function(obj) {
+  if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
+}), use.names = FALSE)
+if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "rpca" else "none"
+if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
+  stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
+}
 if (stage %in% c("preprocess", "all")) {
+  # Anchor-based integration treats each object as an integration unit. Group
+  # inputs by the explicitly selected technical batch first, so two biological
+  # samples from the same library/run are not incorrectly corrected apart.
+  if (integration %in% c("rpca", "cca")) {
+    batch_for_object <- vapply(objects, function(obj) {
+      values <- unique(trimws(as.character(obj[[params$batch_column]][, 1])))
+      values <- values[nzchar(values) & !is.na(values)]
+      if (length(values) != 1L) stop("Each input must have exactly one value for anchor-integration batch column ", params$batch_column, ".")
+      values[[1]]
+    }, character(1))
+    grouped <- split(names(objects), batch_for_object)
+    objects <- lapply(grouped, function(ids) {
+      grouped_object <- Reduce(function(a, b) merge(a, y = b), objects[ids])
+      # Seurat v5 merge retains one raw count layer per source sample. Within
+      # one technical-batch integration unit these are not separate datasets,
+      # so join them before normalization and anchor construction.
+      if (length(grep("^counts($|\\.)", assay_layers_safe(grouped_object, "RNA"), value = TRUE)) > 1L) {
+        grouped_object <- SeuratObject::JoinLayers(grouped_object, assay = "RNA", layers = "counts", new = "counts")
+      }
+      grouped_object
+    })
+  }
   if (identical(params$normalization, "sct")) {
     objects <- lapply(objects, function(obj) Seurat::SCTransform(obj, assay = "RNA", vst.flavor = "v2", verbose = FALSE))
   } else {
@@ -445,6 +481,27 @@ if (stage %in% c("preprocess", "all")) {
       Seurat::ScaleData(obj, verbose = FALSE)
     })
   }
+  # Diagnostic embedding before any batch correction. Raw RNA counts remain
+  # untouched and are retained for marker and differential-expression work.
+  features <- Seurat::SelectIntegrationFeatures(object.list = objects, nfeatures = 3000)
+  unintegrated <- Reduce(function(a, b) merge(a, y = b), objects)
+  DefaultAssay(unintegrated) <- if (identical(params$normalization, "sct")) "SCT" else "RNA"
+  Seurat::VariableFeatures(unintegrated) <- intersect(features, rownames(unintegrated))
+  if (!identical(params$normalization, "sct")) unintegrated <- Seurat::ScaleData(unintegrated, features = Seurat::VariableFeatures(unintegrated), verbose = FALSE)
+  pre_npcs <- max(2L, min(params$n_pcs, ncol(unintegrated) - 1L, length(Seurat::VariableFeatures(unintegrated)) - 1L))
+  unintegrated <- Seurat::RunPCA(unintegrated, features = Seurat::VariableFeatures(unintegrated), npcs = pre_npcs, verbose = FALSE)
+  pre_dims <- seq_len(min(params$n_pcs, ncol(Seurat::Embeddings(unintegrated, "pca"))))
+  unintegrated <- Seurat::FindNeighbors(unintegrated, reduction = "pca", dims = pre_dims, verbose = FALSE)
+  unintegrated <- Seurat::RunUMAP(unintegrated, reduction = "pca", dims = pre_dims, reduction.name = "umap.unintegrated", seed.use = params$seed, verbose = FALSE)
+  save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = "sample_id", shuffle = TRUE), "02_preintegration_umap_sample.png", 8, 6)
+  if (nzchar(params$batch_column) && params$batch_column %in% colnames(unintegrated@meta.data) && length(unique(as.character(unintegrated[[params$batch_column]][, 1]))) > 1L && !identical(params$batch_column, "sample_id")) {
+    save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = params$batch_column, shuffle = TRUE), "02_preintegration_umap_batch.png", 8, 6)
+  }
+  pre_coords <- as.data.frame(Seurat::Embeddings(unintegrated, "umap.unintegrated"))
+  names(pre_coords)[1:2] <- c("UMAP_1", "UMAP_2"); pre_coords$cell <- rownames(pre_coords); pre_coords$sample_id <- as.character(unintegrated$sample_id)
+  if (nzchar(params$batch_column) && params$batch_column %in% colnames(unintegrated@meta.data)) pre_coords[[params$batch_column]] <- as.character(unintegrated[[params$batch_column]][, 1])
+  utils::write.table(pre_coords[, c("cell", setdiff(names(pre_coords), "cell")), drop = FALSE], file.path(tables_dir, "preintegration_umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  rm(unintegrated); invisible(gc())
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("03_preprocessed"))
   stage_marker("preprocess")
   if (identical(stage, "preprocess")) quit(save = "no", status = 0L)
@@ -464,12 +521,24 @@ batch_values <- unlist(lapply(objects, function(obj) {
   if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
 }), use.names = FALSE)
 if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "rpca" else "none"
-if (integration %in% c("rpca", "cca") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
+if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
   stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
 }
 
   integration_k_weight <- max(5L, min(50L, floor(min(vapply(objects, ncol, numeric(1))) / 2)))
-  if (identical(params$normalization, "sct")) {
+  reduction_for_graph <- "pca"
+  if (identical(integration, "harmony")) {
+    if (!requireNamespace("harmony", quietly = TRUE)) stop("Seurat Harmony integration requires the R package harmony.")
+    features <- Seurat::SelectIntegrationFeatures(object.list = objects, nfeatures = 3000)
+    obj <- Reduce(function(a, b) merge(a, y = b), objects)
+    DefaultAssay(obj) <- if (identical(params$normalization, "sct")) "SCT" else "RNA"
+    Seurat::VariableFeatures(obj) <- intersect(features, rownames(obj))
+    if (!identical(params$normalization, "sct")) obj <- Seurat::ScaleData(obj, features = Seurat::VariableFeatures(obj), verbose = FALSE)
+    obj <- Seurat::RunPCA(obj, features = Seurat::VariableFeatures(obj), npcs = params$n_pcs, verbose = FALSE)
+    harmony_dims <- seq_len(min(params$n_pcs, ncol(Seurat::Embeddings(obj, "pca"))))
+    obj <- harmony::RunHarmony(obj, group.by.vars = params$batch_column, reduction.use = "pca", dims.use = harmony_dims, theta = params$harmony_theta, lambda = params$harmony_lambda, max_iter = params$harmony_max_iter, reduction.save = "harmony", verbose = FALSE)
+    reduction_for_graph <- "harmony"
+  } else if (identical(params$normalization, "sct")) {
     if (integration %in% c("rpca", "cca") && length(objects) > 1L) {
       features <- Seurat::SelectIntegrationFeatures(objects, nfeatures = 3000)
       objects <- Seurat::PrepSCTIntegration(objects, anchor.features = features, verbose = FALSE)
@@ -494,14 +563,14 @@ if (integration %in% c("rpca", "cca") && length(unique(batch_values[nzchar(batch
     DefaultAssay(obj) <- "RNA"; obj <- Seurat::NormalizeData(obj, verbose = FALSE); obj <- Seurat::FindVariableFeatures(obj, nfeatures = 3000, verbose = FALSE)
     obj <- Seurat::ScaleData(obj, verbose = FALSE); obj <- Seurat::RunPCA(obj, npcs = params$n_pcs, verbose = FALSE)
   }
-  n_available <- ncol(Seurat::Embeddings(obj, "pca")); dims <- seq_len(min(params$n_pcs, n_available))
+  n_available <- ncol(Seurat::Embeddings(obj, reduction_for_graph)); dims <- seq_len(min(params$n_pcs, n_available))
   pca_stdev <- Seurat::Stdev(obj, reduction = "pca"); pca_variance <- (pca_stdev ^ 2) / sum(pca_stdev ^ 2)
   utils::write.table(data.frame(PC = seq_along(pca_variance), variance_explained = pca_variance, percent_variance_explained = 100 * pca_variance), file.path(tables_dir, "pca_variance_explained.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   variable_genes <- Seurat::VariableFeatures(obj)
   utils::write.table(data.frame(gene = variable_genes, highly_variable = TRUE), file.path(tables_dir, "highly_variable_genes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-  obj <- Seurat::FindNeighbors(obj, reduction = "pca", dims = dims, verbose = FALSE)
+  obj <- Seurat::FindNeighbors(obj, reduction = reduction_for_graph, dims = dims, verbose = FALSE)
   obj <- Seurat::FindClusters(obj, resolution = params$cluster_resolution, verbose = FALSE)
-  obj <- Seurat::RunUMAP(obj, reduction = "pca", dims = dims, seed.use = params$seed, verbose = FALSE)
+  obj <- Seurat::RunUMAP(obj, reduction = reduction_for_graph, dims = dims, seed.use = params$seed, verbose = FALSE)
   obj$cluster <- as.character(Seurat::Idents(obj))
   saveRDS(list(object = obj, integration = integration, samples = samples, doublet_summary = doublet_summary), checkpoint_path("04_clustered"))
   stage_marker("cluster")
@@ -596,6 +665,11 @@ apply_existing_annotation <- function(obj) {
 
 if (stage %in% c("annotate", "all")) {
 annotation_name <- safe_metadata_name(params$annotation_name)
+# Rejoin Seurat v5 RNA layers before any annotation scoring or differential
+# expression. Values are unchanged; the final object becomes portable and its
+# raw counts remain directly accessible.
+rna_layers <- assay_layers_safe(obj, "RNA")
+if (any(grepl("^(counts|data)\\.", rna_layers))) obj <- SeuratObject::JoinLayers(obj, assay = "RNA")
 if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "none")) {
   obj <- apply_celltype_mapping(obj, params$celltype_file, annotation_name)
 } else if (nzchar(params$marker_file) && !identical(tolower(params$marker_file), "none")) {
@@ -621,16 +695,9 @@ save_plot(categorical_dimplot(obj, reduction = "umap", group.by = annotation_nam
 if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 1L) save_plot(categorical_dimplot(obj, reduction = "umap", group.by = "condition", shuffle = TRUE), "06_umap_condition.png", 8, 6)
 
 # Cluster markers should use the normalized SCT representation when that is
-# the selected workflow; the raw RNA assay intentionally has no data layer.
+# the selected workflow.
 DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
 if (ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
-  # Seurat v5 keeps a normalized data layer for each merged input. Marker
-  # testing on those unjoined layers can silently skip every cluster; join
-  # them once here without changing the raw-count provenance retained above.
-  if (identical(DefaultAssay(obj), "RNA")) {
-    rna_data_layers <- grep("^data($|\\.)", assay_layers_safe(obj, "RNA"), value = TRUE)
-    if (length(rna_data_layers) > 1L) obj <- SeuratObject::JoinLayers(obj, assay = "RNA", layers = "data", new = "data")
-  }
   # An SCT-integrated object can retain one model per input sample. Bring
   # those models to a common sequencing-depth scale before marker testing;
   # otherwise Seurat may silently return an empty marker table.

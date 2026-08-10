@@ -135,6 +135,9 @@ def params_from(path: Path):
         "de_method": get("de_method", "both").lower(),
         "de_covariates": [x.strip() for x in get("de_covariates", "").split(",") if x.strip()],
         "scvi_max_epochs": int(float(get("scvi_max_epochs", "400") or 400)),
+        "harmony_theta": float(get("harmony_theta", "2") or 2),
+        "harmony_lambda": float(get("harmony_lambda", "1") or 1),
+        "harmony_max_iter": int(float(get("harmony_max_iter", "20") or 20)),
         "seed": int(float(get("seed", "1234") or 1234)),
     }
 
@@ -1010,25 +1013,23 @@ def main():
         sc.pp.log1p(adata)
         adata.raw = adata
         hvg_batch_key = p["batch_column"] if p["batch_column"] in adata.obs.columns and adata.obs[p["batch_column"]].astype(str).nunique() > 1 else None
-        hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars), "layer": "counts"}
-        fallback_hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars)}
+        hvg_kwargs = {"n_top_genes": min(3000, adata.n_vars)}
         if hvg_batch_key is not None:
             hvg_kwargs["batch_key"] = hvg_batch_key
-            fallback_hvg_kwargs["batch_key"] = hvg_batch_key
-        try:
-            sc.pp.highly_variable_genes(adata, flavor="seurat_v3", **hvg_kwargs)
-        except Exception:
-            sc.pp.highly_variable_genes(adata, flavor="cell_ranger", **fallback_hvg_kwargs)
+        # Official Scanpy-style HVG selection on log-normalized expression is
+        # batch-aware and needs no optional compiled dependency.
+        sc.pp.highly_variable_genes(adata, flavor="seurat", **hvg_kwargs)
         hvg_table = adata.var.copy(); hvg_table.insert(0, "gene", hvg_table.index.astype(str))
         hvg_columns = [c for c in ["gene", "highly_variable", "means", "variances", "variances_norm"] if c in hvg_table.columns]
         hvg_table.loc[:, hvg_columns].to_csv(tables / "highly_variable_genes.tsv", sep="\t", index=False)
-        sc.pp.scale(adata, zero_center=False, max_value=10)
         hvg_count = int(adata.var["highly_variable"].sum()) if "highly_variable" in adata.var else 0
         use_hvg = hvg_count >= 2
         pca_features = hvg_count if use_hvg else adata.n_vars
         max_pcs = max(1, min(adata.n_obs - 1, pca_features - 1))
         n_pcs = min(p["n_pcs"], max_pcs)
-        sc.tl.pca(adata, n_comps=n_pcs, svd_solver="arpack", use_highly_variable=use_hvg, zero_center=False)
+        # Scanpy's sparse PCA supports implicit zero-centering, so this is
+        # standard centered PCA without densifying the full expression matrix.
+        sc.tl.pca(adata, n_comps=n_pcs, svd_solver="arpack", use_highly_variable=use_hvg, zero_center=True, random_state=p["seed"])
         pca_ratio = np.asarray(adata.uns["pca"]["variance_ratio"]).ravel()
         recommended_pcs = recommended_pcs_from_variance(pca_ratio)
         pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
@@ -1037,6 +1038,20 @@ def main():
         # The dashboard uses this full symbol list to request one gene at a
         # time from the post-UMAP H5AD's normalized `.raw` layer.
         pd.DataFrame({"gene": adata.raw.var_names.astype(str)}).to_csv(tables / "dashboard_all_genes.tsv", sep="\t", index=False)
+        # Diagnostic embedding before any technical-batch correction. Keep a
+        # separate copy so the integrated UMAP cannot overwrite this view.
+        pre_n_pcs = min(p["n_pcs"], adata.obsm["X_pca"].shape[1])
+        sc.pp.neighbors(adata, n_neighbors=min(15, max(2, adata.n_obs - 1)), n_pcs=pre_n_pcs, use_rep="X_pca")
+        sc.tl.umap(adata, random_state=p["seed"])
+        adata.obsm["X_umap_unintegrated"] = adata.obsm["X_umap"].copy()
+        pre = pd.DataFrame(adata.obsm["X_umap_unintegrated"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])
+        pre.insert(0, "cell", pre.index.astype(str)); pre["sample_id"] = adata.obs["sample_id"].astype(str).values
+        if p["batch_column"] in adata.obs.columns:
+            pre[p["batch_column"]] = adata.obs[p["batch_column"]].astype(str).values
+        pre.to_csv(tables / "preintegration_umap_coordinates.tsv", sep="\t", index=False)
+        save_umap(adata, "sample_id", figures / "02_preintegration_umap_sample.png", title="Before integration — sample")
+        if p["batch_column"] in adata.obs.columns and adata.obs[p["batch_column"]].astype(str).nunique() > 1 and p["batch_column"] != "sample_id":
+            save_umap(adata, p["batch_column"], figures / "02_preintegration_umap_batch.png", title=f"Before integration — {p['batch_column']}")
         write_h5ad_checkpoint(adata, preprocess_checkpoint)
         # Once normalized/PCA data are safely checkpointed, the QC object is
         # redundant.  The raw input checkpoint is retained so users can
@@ -1072,7 +1087,11 @@ def main():
         elif integration == "harmony" and batch_count > 1:
             try:
                 import scanpy.external as sce
-                sce.pp.harmony_integrate(adata, key=batch_key, basis="X_pca", adjusted_basis="X_harmony")
+                sce.pp.harmony_integrate(
+                    adata, key=batch_key, basis="X_pca", adjusted_basis="X_harmony",
+                    theta=p["harmony_theta"], lamb=p["harmony_lambda"],
+                    max_iter_harmony=p["harmony_max_iter"], random_state=p["seed"],
+                )
             except Exception as exc:
                 raise SystemExit("Harmony integration was requested but harmonypy was unavailable or failed: " + str(exc)) from exc
             representation = "X_harmony"
