@@ -57,9 +57,17 @@ except ValueError:
 sc.settings.set_figure_params(color_map=JP_COLOR_MAP_NAME, dpi=160)
 
 
-def apply_jpplot_colors(adata, *keys):
-    """Apply jpplot's palette consistently to categorical Scanpy plots."""
-    from matplotlib.colors import to_hex
+QUALITATIVE_COLORS = [
+    "#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#6A3D9A",
+    "#56B4E9", "#B15928", "#E31A1C", "#1B9E77", "#7570B3", "#E7298A",
+    "#66A61E", "#A6761D", "#1F78B4", "#FF7F00", "#33A02C", "#984EA3",
+    "#A65628", "#F781BF", "#17BECF", "#BCBD22", "#8C564B", "#4D4D4D",
+]
+
+
+def apply_categorical_colors(adata, *keys):
+    """Use stable, high-contrast colors for unordered Scanpy metadata."""
+    import colorsys
     for key in keys:
         if key not in adata.obs.columns:
             continue
@@ -73,10 +81,14 @@ def apply_jpplot_colors(adata, *keys):
         categories = [str(value) for value in values.cat.categories if str(value)]
         if not categories:
             continue
-        # Evenly spaced colors make the palette deterministic across all
-        # generated Scanpy UMAPs, violins, and sample-level scatters.
-        positions = np.linspace(0.10, 0.90, len(categories))
-        adata.uns[f"{key}_colors"] = [to_hex(JP_COLOR_MAP(position)) for position in positions]
+        colors = list(QUALITATIVE_COLORS)
+        if len(categories) > len(colors):
+            extra_n = len(categories) - len(colors)
+            colors.extend(
+                "#{:02X}{:02X}{:02X}".format(*(round(channel * 255) for channel in colorsys.hsv_to_rgb(i / max(extra_n, 1), 0.68, 0.78)))
+                for i in range(extra_n)
+            )
+        adata.uns[f"{key}_colors"] = colors[:len(categories)]
 
 
 def read_table(path: Path):
@@ -228,7 +240,7 @@ def save_input_umap(adata, sample_id: str, figures: Path):
         return
     import matplotlib.pyplot as plt
     color = categorical_plot_column(adata)
-    apply_jpplot_colors(adata, color)
+    apply_categorical_colors(adata, color)
     fig, ax = plt.subplots(figsize=(8, 6))
     sc.pl.umap(adata, color=color, ax=ax, show=False, title="UMAP supplied with input object", frameon=False, color_map=JP_COLOR_MAP_NAME)
     fig.tight_layout()
@@ -284,7 +296,7 @@ def read_one(row, figures: Path):
 
 def save_umap(adata, color, path, title=None):
     import matplotlib.pyplot as plt
-    apply_jpplot_colors(adata, color)
+    apply_categorical_colors(adata, color)
     fig, ax = plt.subplots(figsize=(7, 5.5))
     sc.pl.umap(adata, color=color, ax=ax, show=False, title=title or str(color), frameon=False, color_map=JP_COLOR_MAP_NAME)
     fig.tight_layout()
