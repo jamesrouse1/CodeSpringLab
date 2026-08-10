@@ -119,7 +119,7 @@ def params_from(path: Path):
         "de_reference": get("de_reference", ""),
         "de_comparison": get("de_comparison", ""),
         "de_annotation_column": get("de_annotation_column", ""),
-        "de_annotation_value": get("de_annotation_value", ""),
+        "de_annotation_values": [x for x in get("de_annotation_values", get("de_annotation_value", "all")).split("||") if x],
         "de_method": get("de_method", "both").lower(),
         "de_covariates": [x.strip() for x in get("de_covariates", "").split(",") if x.strip()],
         "scvi_max_epochs": int(float(get("scvi_max_epochs", "400") or 400)),
@@ -764,55 +764,87 @@ def score_signatures(adata, path: Path, tables_dir: Path, annotation_name: str):
     return score_columns
 
 
-def export_differential_inputs(adata, p, tables_dir: Path):
+def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
     group_column = p["de_group_column"]
     reference, comparison = p["de_reference"], p["de_comparison"]
     if group_column not in adata.obs.columns:
         raise SystemExit(f"Differential-expression group field is absent from cell metadata: {group_column}")
     if not reference or not comparison or reference == comparison:
         raise SystemExit("Choose two different reference and comparison groups for differential expression.")
-    keep = adata.obs[group_column].astype(str).isin([reference, comparison])
-    annotation_column, annotation_value = p["de_annotation_column"], p["de_annotation_value"]
-    if annotation_column and annotation_value and annotation_value.lower() not in {"all", "all cells"}:
-        if annotation_column not in adata.obs.columns:
-            raise SystemExit(f"Differential-expression annotation field is absent: {annotation_column}")
-        keep &= adata.obs[annotation_column].astype(str) == annotation_value
-    subset = adata[keep].copy()
-    if subset.n_obs == 0:
-        raise SystemExit("No cells remain for the requested differential-expression comparison.")
-    observed = set(subset.obs[group_column].astype(str))
-    if not {reference, comparison}.issubset(observed):
-        raise SystemExit("Both comparison groups must contain cells after annotation filtering.")
-    design_rows, matrices = [], []
-    counts = subset.layers.get("counts")
-    if counts is None:
-        raise SystemExit("Raw counts are unavailable in the processed Scanpy object; pseudobulk DE requires layers['counts'].")
-    for sample_id, cell_index in subset.obs.groupby("sample_id", observed=True).groups.items():
-        positions = subset.obs_names.get_indexer(cell_index)
-        sample_groups = subset.obs.iloc[positions][group_column].astype(str).unique()
-        if len(sample_groups) != 1:
-            raise SystemExit(f"Biological replicate {sample_id} contains multiple values of {group_column}; the group must be sample-level for pseudobulk DE.")
-        summed = np.asarray(counts[positions].sum(axis=0)).ravel()
-        matrices.append(summed)
-        design_row = {"sample_id": str(sample_id), "group": sample_groups[0], "cells": len(positions)}
-        for covariate in p["de_covariates"]:
-            if covariate not in subset.obs.columns:
-                raise SystemExit(f"Requested pseudobulk covariate is absent from metadata: {covariate}")
-            values = subset.obs.iloc[positions][covariate].astype(str).unique()
-            if len(values) != 1:
-                raise SystemExit(f"Pseudobulk covariate {covariate} is not constant within biological replicate {sample_id}.")
-            design_row[covariate] = values[0]
-        design_rows.append(design_row)
-    count_table = pd.DataFrame(np.vstack(matrices).T, index=subset.var_names, columns=[x["sample_id"] for x in design_rows])
-    count_table.insert(0, "gene", count_table.index.astype(str))
-    count_table.to_csv(tables_dir / "pseudobulk_counts.tsv", sep="\t", index=False)
-    pd.DataFrame(design_rows).to_csv(tables_dir / "pseudobulk_design.tsv", sep="\t", index=False)
-    if p["de_method"] in {"both", "cell", "cell_level"}:
-        sc.tl.rank_genes_groups(subset, groupby=group_column, groups=[comparison], reference=reference, method="wilcoxon", use_raw=True, pts=True)
-        result = sc.get.rank_genes_groups_df(subset, group=comparison)
-        result.insert(0, "comparison", f"{comparison}_vs_{reference}")
-        result["analysis_level"] = "cell-level exploratory Wilcoxon; cells are not biological replicates"
-        result.to_csv(tables_dir / "cell_level_differential_expression.tsv", sep="\t", index=False)
+    annotation_column = p["de_annotation_column"]
+    targets = p["de_annotation_values"] or ["all"]
+    targets = list(dict.fromkeys(targets))
+    if any(str(x).lower() not in {"all", "all cells"} for x in targets):
+        if not annotation_column or annotation_column not in adata.obs.columns:
+            raise SystemExit("Choose an annotation metadata field before requesting individual-population differential expression.")
+    contrast_slug = f"{safe_metadata_name(comparison, 'comparison')}_vs_{safe_metadata_name(reference, 'reference')}"
+    root = out_dir / "differential_expression" / contrast_slug
+    manifest_rows, completed = [], 0
+    for annotation_value in targets:
+        is_global = str(annotation_value).lower() in {"all", "all cells"}
+        population_slug = "global" if is_global else f"{safe_metadata_name(annotation_column, 'annotation')}__{safe_metadata_name(annotation_value, 'population')}"
+        job_dir = root / population_slug
+        job_dir.mkdir(parents=True, exist_ok=True)
+        file_slug = f"{contrast_slug}__{population_slug}"
+        row = {
+            "job_id": file_slug, "comparison": comparison, "reference": reference,
+            "annotation_column": "" if is_global else annotation_column,
+            "annotation_value": "all" if is_global else str(annotation_value),
+            "output_dir": str(job_dir), "file_slug": file_slug, "status": "prepared", "note": "",
+            "count_file": "", "design_file": "", "cell_result_file": "",
+        }
+        try:
+            keep = adata.obs[group_column].astype(str).isin([reference, comparison])
+            if not is_global:
+                keep &= adata.obs[annotation_column].astype(str) == str(annotation_value)
+            subset = adata[keep].copy()
+            if subset.n_obs == 0:
+                raise ValueError("No cells remain for this population.")
+            if not {reference, comparison}.issubset(set(subset.obs[group_column].astype(str))):
+                raise ValueError("Both comparison groups must contain cells in this population.")
+            if p["de_method"] in {"both", "pseudobulk"}:
+                counts = subset.layers.get("counts")
+                if counts is None:
+                    raise ValueError("Raw counts are unavailable in layers['counts'] for pseudobulk DE.")
+                design_rows, matrices = [], []
+                for sample_id, cell_index in subset.obs.groupby("sample_id", observed=True).groups.items():
+                    positions = subset.obs_names.get_indexer(cell_index)
+                    sample_groups = subset.obs.iloc[positions][group_column].astype(str).unique()
+                    if len(sample_groups) != 1:
+                        raise ValueError(f"Biological replicate {sample_id} contains multiple values of {group_column}.")
+                    matrices.append(np.asarray(counts[positions].sum(axis=0)).ravel())
+                    design_row = {"sample_id": str(sample_id), "group": sample_groups[0], "cells": len(positions)}
+                    for covariate in p["de_covariates"]:
+                        if covariate not in subset.obs.columns:
+                            raise ValueError(f"Requested covariate is absent: {covariate}")
+                        values = subset.obs.iloc[positions][covariate].astype(str).unique()
+                        if len(values) != 1:
+                            raise ValueError(f"Covariate {covariate} is not constant within replicate {sample_id}.")
+                        design_row[covariate] = values[0]
+                    design_rows.append(design_row)
+                count_file, design_file = job_dir / f"pseudobulk_counts__{file_slug}.tsv", job_dir / f"pseudobulk_design__{file_slug}.tsv"
+                count_table = pd.DataFrame(np.vstack(matrices).T, index=subset.var_names, columns=[x["sample_id"] for x in design_rows])
+                count_table.insert(0, "gene", count_table.index.astype(str)); count_table.to_csv(count_file, sep="\t", index=False)
+                pd.DataFrame(design_rows).to_csv(design_file, sep="\t", index=False)
+                row["count_file"], row["design_file"] = str(count_file), str(design_file)
+            if p["de_method"] in {"both", "cell", "cell_level"}:
+                sc.tl.rank_genes_groups(subset, groupby=group_column, groups=[comparison], reference=reference, method="wilcoxon", use_raw=True, pts=True)
+                result = sc.get.rank_genes_groups_df(subset, group=comparison)
+                result.insert(0, "comparison", f"{comparison}_vs_{reference}")
+                result.insert(1, "population", "global" if is_global else str(annotation_value))
+                result["analysis_level"] = "cell-level exploratory Wilcoxon; cells are not biological replicates"
+                cell_file = job_dir / f"cell_level_Wilcoxon__{file_slug}.tsv"
+                result.to_csv(cell_file, sep="\t", index=False); row["cell_result_file"] = str(cell_file)
+                if is_global:
+                    result.to_csv(tables_dir / "cell_level_differential_expression.tsv", sep="\t", index=False)
+            completed += 1
+        except Exception as exc:
+            row["status"], row["note"] = "skipped", str(exc)
+        manifest_rows.append(row)
+    manifest = pd.DataFrame(manifest_rows)
+    manifest.to_csv(tables_dir / "differential_jobs.tsv", sep="\t", index=False)
+    if completed == 0:
+        raise SystemExit("No requested differential-expression population could be prepared. Review tables/differential_jobs.tsv.")
 
 
 def main():
@@ -1099,7 +1131,7 @@ def main():
         mark_complete("score")
 
     if stage == "differential":
-        export_differential_inputs(adata, p, tables)
+        export_differential_inputs(adata, p, tables, out_dir)
 
 
 if __name__ == "__main__":

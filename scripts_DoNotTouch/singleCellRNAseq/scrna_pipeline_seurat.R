@@ -94,7 +94,7 @@ read_params <- function(path) {
     de_reference = get("de_reference", ""),
     de_comparison = get("de_comparison", ""),
     de_annotation_column = get("de_annotation_column", ""),
-    de_annotation_value = get("de_annotation_value", ""),
+    de_annotation_values = Filter(nzchar, strsplit(get("de_annotation_values", get("de_annotation_value", "all")), "||", fixed = TRUE)[[1]]),
     de_method = tolower(get("de_method", "both")),
     de_covariates = Filter(nzchar, trimws(strsplit(get("de_covariates", ""), ",", fixed = TRUE)[[1]])),
     seed = suppressWarnings(as.integer(get("seed", "1234")))
@@ -651,6 +651,9 @@ cell_metadata <- obj@meta.data
 if ("cell" %in% names(cell_metadata)) names(cell_metadata)[names(cell_metadata) == "cell"] <- "input_cell"
 cell_metadata <- data.frame(cell = colnames(obj), cell_metadata, check.names = FALSE)
 utils::write.table(cell_metadata, file.path(tables_dir, "cell_metadata.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+# The interactive dashboard requests one normalized gene at a time from the
+# processed RDS. Keep the complete symbol list small and engine-consistent.
+utils::write.table(data.frame(gene = rownames(obj)), file.path(tables_dir, "dashboard_all_genes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 umap_coordinates <- as.data.frame(Seurat::Embeddings(obj, reduction = "umap"), check.names = FALSE)
 colnames(umap_coordinates)[seq_len(min(2L, NCOL(umap_coordinates)))] <- c("UMAP_1", "UMAP_2")[seq_len(min(2L, NCOL(umap_coordinates)))]
 if (!all(c("UMAP_1", "UMAP_2") %in% names(umap_coordinates))) stop("The final UMAP does not contain two coordinates.")
@@ -745,42 +748,67 @@ if (identical(stage, "differential")) {
   reference <- params$de_reference; comparison <- params$de_comparison
   if (!group_column %in% colnames(obj@meta.data)) stop("Differential-expression group field is absent from cell metadata: ", group_column)
   if (!nzchar(reference) || !nzchar(comparison) || identical(reference, comparison)) stop("Choose two different reference and comparison groups for differential expression.")
-  keep <- as.character(obj@meta.data[[group_column]]) %in% c(reference, comparison)
-  if (nzchar(params$de_annotation_column) && nzchar(params$de_annotation_value) && !tolower(params$de_annotation_value) %in% c("all", "all cells")) {
-    if (!params$de_annotation_column %in% colnames(obj@meta.data)) stop("Differential-expression annotation field is absent: ", params$de_annotation_column)
-    keep <- keep & as.character(obj@meta.data[[params$de_annotation_column]]) == params$de_annotation_value
+  targets <- unique(params$de_annotation_values %||% "all")
+  if (any(!tolower(targets) %in% c("all", "all cells")) && (!nzchar(params$de_annotation_column) || !params$de_annotation_column %in% colnames(obj@meta.data))) stop("Choose an annotation metadata field before requesting individual-population differential expression.")
+  contrast_slug <- paste0(safe_metadata_name(comparison, "comparison"), "_vs_", safe_metadata_name(reference, "reference"))
+  root <- file.path(out_dir, "differential_expression", contrast_slug); dir.create(root, recursive = TRUE, showWarnings = FALSE)
+  manifest_rows <- list(); completed <- 0L
+  for (annotation_value in targets) {
+    is_global <- tolower(annotation_value) %in% c("all", "all cells")
+    population_slug <- if (is_global) "global" else paste0(safe_metadata_name(params$de_annotation_column, "annotation"), "__", safe_metadata_name(annotation_value, "population"))
+    job_dir <- file.path(root, population_slug); dir.create(job_dir, recursive = TRUE, showWarnings = FALSE)
+    file_slug <- paste0(contrast_slug, "__", population_slug)
+    row <- data.frame(job_id = file_slug, comparison = comparison, reference = reference, annotation_column = if (is_global) "" else params$de_annotation_column, annotation_value = if (is_global) "all" else annotation_value, output_dir = normalizePath(job_dir, winslash = "/", mustWork = FALSE), file_slug = file_slug, status = "prepared", note = "", count_file = "", design_file = "", cell_result_file = "", stringsAsFactors = FALSE)
+    error <- tryCatch({
+      keep <- as.character(obj@meta.data[[group_column]]) %in% c(reference, comparison)
+      if (!is_global) keep <- keep & as.character(obj@meta.data[[params$de_annotation_column]]) == annotation_value
+      subset_obj <- subset(obj, cells = colnames(obj)[keep])
+      if (!ncol(subset_obj)) stop("No cells remain for this population.")
+      if (!all(c(reference, comparison) %in% unique(as.character(subset_obj@meta.data[[group_column]])))) stop("Both comparison groups must contain cells in this population.")
+      if (params$de_method %in% c("both", "pseudobulk")) {
+        count_layers <- grep("^counts($|\\.)", assay_layers_safe(subset_obj, "RNA"), value = TRUE)
+        if (length(count_layers) > 1L) subset_obj <- SeuratObject::JoinLayers(subset_obj, assay = "RNA", layers = "counts", new = "counts")
+        counts <- Seurat::GetAssayData(subset_obj, assay = "RNA", layer = "counts")
+        count_columns <- list(); design_rows <- list()
+        for (sample_id in unique(as.character(subset_obj$sample_id))) {
+          cells <- which(as.character(subset_obj$sample_id) == sample_id)
+          groups <- unique(as.character(subset_obj@meta.data[[group_column]][cells]))
+          if (length(groups) != 1L) stop("Biological replicate ", sample_id, " contains multiple comparison-group values.")
+          count_columns[[sample_id]] <- Matrix::rowSums(counts[, cells, drop = FALSE])
+          design_row <- data.frame(sample_id = sample_id, group = groups[[1]], cells = length(cells), check.names = FALSE)
+          for (covariate in params$de_covariates) {
+            if (!covariate %in% colnames(subset_obj@meta.data)) stop("Requested covariate is absent: ", covariate)
+            values <- unique(as.character(subset_obj@meta.data[[covariate]][cells]))
+            if (length(values) != 1L) stop("Covariate ", covariate, " is not constant within replicate ", sample_id, ".")
+            design_row[[covariate]] <- values[[1]]
+          }
+          design_rows[[sample_id]] <- design_row
+        }
+        pseudobulk <- do.call(cbind, count_columns)
+        count_file <- file.path(job_dir, paste0("pseudobulk_counts__", file_slug, ".tsv")); design_file <- file.path(job_dir, paste0("pseudobulk_design__", file_slug, ".tsv"))
+        utils::write.table(data.frame(gene = rownames(pseudobulk), pseudobulk, check.names = FALSE), count_file, sep = "\t", row.names = FALSE, quote = FALSE)
+        utils::write.table(do.call(rbind, design_rows), design_file, sep = "\t", row.names = FALSE, quote = FALSE)
+        row$count_file <- count_file; row$design_file <- design_file
+      }
+      if (params$de_method %in% c("both", "cell", "cell_level")) {
+        cell_error <- tryCatch({
+          DefaultAssay(subset_obj) <- if ("SCT" %in% names(subset_obj@assays)) "SCT" else "RNA"
+          if (identical(DefaultAssay(subset_obj), "SCT") && length(subset_obj[["SCT"]]@SCTModel.list) > 1L) subset_obj <- Seurat::PrepSCTFindMarkers(subset_obj, verbose = FALSE)
+          Seurat::Idents(subset_obj) <- as.character(subset_obj@meta.data[[group_column]])
+          cell_de <- Seurat::FindMarkers(subset_obj, ident.1 = comparison, ident.2 = reference, test.use = "wilcox", logfc.threshold = 0, min.pct = 0, verbose = FALSE)
+          cell_de <- data.frame(gene = rownames(cell_de), comparison = paste0(comparison, "_vs_", reference), population = if (is_global) "global" else annotation_value, cell_de, analysis_level = "cell-level exploratory Wilcoxon; cells are not biological replicates", check.names = FALSE)
+          cell_file <- file.path(job_dir, paste0("cell_level_Wilcoxon__", file_slug, ".tsv")); utils::write.table(cell_de, cell_file, sep = "\t", row.names = FALSE, quote = FALSE); row$cell_result_file <- cell_file
+          if (is_global) utils::write.table(cell_de, file.path(tables_dir, "cell_level_differential_expression.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+          ""
+        }, error = function(e) conditionMessage(e))
+        if (nzchar(cell_error)) row$note <- paste0("Cell-level test skipped: ", cell_error)
+      }
+      completed <- completed + 1L
+      ""
+    }, error = function(e) conditionMessage(e))
+    if (nzchar(error)) { row$status <- "skipped"; row$note <- error }
+    manifest_rows[[length(manifest_rows) + 1L]] <- row
   }
-  subset_obj <- subset(obj, cells = colnames(obj)[keep])
-  if (!ncol(subset_obj)) stop("No cells remain for the requested differential-expression comparison.")
-  if (!all(c(reference, comparison) %in% unique(as.character(subset_obj@meta.data[[group_column]])))) stop("Both comparison groups must contain cells after annotation filtering.")
-  count_layers <- grep("^counts($|\\.)", assay_layers_safe(subset_obj, "RNA"), value = TRUE)
-  if (length(count_layers) > 1L) subset_obj <- SeuratObject::JoinLayers(subset_obj, assay = "RNA", layers = "counts", new = "counts")
-  counts <- Seurat::GetAssayData(subset_obj, assay = "RNA", layer = "counts")
-  sample_ids <- unique(as.character(subset_obj$sample_id))
-  count_columns <- list(); design_rows <- list()
-  for (sample_id in sample_ids) {
-    cells <- which(as.character(subset_obj$sample_id) == sample_id)
-    groups <- unique(as.character(subset_obj@meta.data[[group_column]][cells]))
-    if (length(groups) != 1L) stop("Biological replicate ", sample_id, " contains multiple values of ", group_column, "; the group must be sample-level for pseudobulk DE.")
-    count_columns[[sample_id]] <- Matrix::rowSums(counts[, cells, drop = FALSE])
-    design_row <- data.frame(sample_id = sample_id, group = groups[[1]], cells = length(cells), check.names = FALSE)
-    for (covariate in params$de_covariates) {
-      if (!covariate %in% colnames(subset_obj@meta.data)) stop("Requested pseudobulk covariate is absent from metadata: ", covariate)
-      values <- unique(as.character(subset_obj@meta.data[[covariate]][cells]))
-      if (length(values) != 1L) stop("Pseudobulk covariate ", covariate, " is not constant within biological replicate ", sample_id, ".")
-      design_row[[covariate]] <- values[[1]]
-    }
-    design_rows[[sample_id]] <- design_row
-  }
-  pseudobulk <- do.call(cbind, count_columns)
-  utils::write.table(data.frame(gene = rownames(pseudobulk), pseudobulk, check.names = FALSE), file.path(tables_dir, "pseudobulk_counts.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-  utils::write.table(do.call(rbind, design_rows), file.path(tables_dir, "pseudobulk_design.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-  if (params$de_method %in% c("both", "cell", "cell_level")) {
-    DefaultAssay(subset_obj) <- if ("SCT" %in% names(subset_obj@assays)) "SCT" else "RNA"
-    if (identical(DefaultAssay(subset_obj), "SCT") && length(subset_obj[["SCT"]]@SCTModel.list) > 1L) subset_obj <- Seurat::PrepSCTFindMarkers(subset_obj, verbose = FALSE)
-    Seurat::Idents(subset_obj) <- as.character(subset_obj@meta.data[[group_column]])
-    cell_de <- Seurat::FindMarkers(subset_obj, ident.1 = comparison, ident.2 = reference, test.use = "wilcox", logfc.threshold = 0, min.pct = 0, verbose = FALSE)
-    cell_de <- data.frame(gene = rownames(cell_de), comparison = paste0(comparison, "_vs_", reference), cell_de, analysis_level = "cell-level exploratory Wilcoxon; cells are not biological replicates", check.names = FALSE)
-    utils::write.table(cell_de, file.path(tables_dir, "cell_level_differential_expression.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-  }
+  utils::write.table(do.call(rbind, manifest_rows), file.path(tables_dir, "differential_jobs.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  if (!completed) stop("No requested differential-expression population could be prepared. Review tables/differential_jobs.tsv.")
 }

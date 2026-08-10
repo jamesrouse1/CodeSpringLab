@@ -62,7 +62,10 @@ case "$stage" in
   preprocess) rm -f "$out_dir/_STAGE_CLUSTER_COMPLETE" "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
   cluster) rm -f "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
   annotate) rm -f "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" ;;
-  differential) rm -f "$out_dir/_STAGE_PATHWAY_COMPLETE" ;;
+  differential)
+    rm -f "$out_dir/_STAGE_PATHWAY_COMPLETE"
+    rm -f "$out_dir/tables/pseudobulk_differential_expression.tsv" "$out_dir/tables/pseudobulk_normalized_counts.tsv" "$out_dir/tables/cell_level_differential_expression.tsv"
+    ;;
 esac
 date '+%Y-%m-%dT%H:%M:%S%z' > "$out_dir/_RUN_STARTED_${stage}"
 trap 'rm -f "$out_dir/_RUN_STARTED_${stage}"' EXIT
