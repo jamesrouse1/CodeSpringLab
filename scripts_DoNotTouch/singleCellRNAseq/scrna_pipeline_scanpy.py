@@ -942,6 +942,25 @@ def main():
         global_recommendation = recommendations[recommendations["sample_id"] == "Recommended global"]
         suggested_cutoffs = global_recommendation.iloc[0][["min_features", "min_counts", "max_features", "max_percent_mt"]].to_dict() if len(global_recommendation) else None
         save_qc_plots(adata, figures, prefix="00_qc_pre_filter", cutoffs=suggested_cutoffs, state_label="Unfiltered cells — suggested cutoffs")
+        # Continue a single processed AnnData object without rebuilding a
+        # valid embedding. This writes only a project-local copy; the source
+        # H5AD remains read-only and unchanged.
+        detected = pd.DataFrame([item[1] for item in inputs])
+        reusable_processed_input = (
+            len(samples) == 1
+            and str(detected.iloc[0].get("input_kind", "")) == "scanpy_h5ad"
+            and bool(detected.iloc[0].get("umap_detected", False))
+            and bool(detected.iloc[0].get("clusters_detected", False))
+        )
+        if reusable_processed_input:
+            if "cluster" not in adata.obs.columns:
+                for cluster_source in ("leiden", "louvain", "seurat_clusters"):
+                    if cluster_source in adata.obs.columns:
+                        adata.obs["cluster"] = adata.obs[cluster_source].astype(str)
+                        break
+            adata.uns["codespring_integration"] = "existing input object"
+            adata.uns["codespring_doublets_removed"] = 0
+            write_h5ad_checkpoint(adata, processed_object)
         write_h5ad_checkpoint(adata, input_checkpoint)
         mark_complete("inspect")
         if stage == "inspect":

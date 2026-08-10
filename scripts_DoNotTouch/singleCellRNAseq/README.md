@@ -37,7 +37,12 @@ standard Anaconda module for Scanpy only inside that compute job.
 The job checks essential packages before loading a large object, so a missing
 cluster dependency is reported promptly in the job log.
 
-Cell Ranger jobs require a matching `refdata-gex-*` transcriptome folder. They
+Cell Ranger alignment/counting jobs require a matching `refdata-gex-*`
+transcriptome folder. CodeSpringApp automatically looks for the current human
+and mouse references below
+`/grid/bsr/data/data/bsr_readable_data/references/cellranger` and passes the
+selected path to the maintained runner; the runner does not hardcode a species.
+They
 run with intronic counting enabled, chemistry auto-detection, BAM creation, and
 secondary clustering disabled because CodeSpring performs QC, normalization,
 integration, clustering, and annotation in the later checkpointed stages.
@@ -64,14 +69,17 @@ is supplied.
 
 ## Processing
 
-For FASTQ-backed projects, **Cell Ranger count** appears before the standard
+For FASTQ-backed projects, **Alignment & counting** appears before the standard
 stages. The app then exposes **Input inspection**, **QC & doublets**,
 **Normalize & PCA**, **Integrate & cluster**, and **Annotate & markers**. Each
 stage writes an explicit completion marker plus a checkpoint under
 `checkpoints/`; a later stage will not run until its prerequisite checkpoint
 exists. Input inspection records pre-existing normalization, reductions,
 clusters, and annotations in `tables/input_processing_detected.tsv`, while
-the downstream reproducible workflow starts from raw counts.
+the downstream reproducible workflow starts from raw counts. A single RDS or
+H5AD that already contains both a UMAP and clusters is also copied into the
+project as a reusable continuation object; the source file remains read-only,
+and optional reconstruction controls remain available in the app.
 
 The workflow performs initial per-sample QC, optional doublet detection,
 gene filtering, normalization, highly-variable-gene selection,

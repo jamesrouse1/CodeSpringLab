@@ -57,7 +57,13 @@ categorical_palette <- function(values) {
   stats::setNames(colors, levels)
 }
 categorical_dimplot <- function(obj, group.by, ...) {
-  Seurat::DimPlot(obj, group.by = group.by, cols = categorical_palette(obj[[group.by]][, 1]), ...)
+  object <- obj
+  grouping <- group.by
+  dots <- list(...)
+  values <- if (!is.null(grouping) && nzchar(grouping) && grouping %in% colnames(object@meta.data)) object[[grouping]][, 1] else Seurat::Idents(object)
+  colors <- categorical_palette(values)
+  args <- c(list(object = object, group.by = grouping), if (length(colors)) list(cols = colors) else list(), dots)
+  do.call(Seurat::DimPlot, args)
 }
 jpplot_point_layer <- function(plot, color = jpplot_colors[[7]]) {
   for (i in seq_along(plot$layers)) {
@@ -199,7 +205,7 @@ input_status_one <- function(obj, sample_id, kind) {
     umap_detected = any(tolower(names(obj@reductions)) == "umap"),
     clusters_detected = any(c("seurat_clusters", "cluster") %in% colnames(obj@meta.data)),
     annotation_columns_detected = paste(annotation_columns, collapse = "; "),
-    workflow_action = "Raw RNA counts retained; CodeSpring reruns selected QC and downstream processing reproducibly.",
+    workflow_action = "Raw RNA counts retained; a complete existing UMAP and cluster assignment can be continued directly, while reconstruction remains optional.",
     stringsAsFactors = FALSE
   )
 }
@@ -298,6 +304,22 @@ if (stage %in% c("inspect", "qc", "all")) {
   Seurat::DefaultAssay(pre_qc_merged) <- "RNA"
   save_plot(Seurat::VlnPlot(pre_qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", cols = categorical_palette(pre_qc_merged$sample_id), ncol = 3, pt.size = 0, layer = "counts"), "00_qc_pre_filter_violin.png", 14, 5)
   save_plot(jpplot_point_layer(Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt")) + jpplot_point_layer(Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")), "00_qc_pre_filter_scatter.png", 12, 5)
+  # A single processed Seurat object can be continued without rebuilding its
+  # existing embedding. Preserve a project-local copy only when both UMAP and
+  # clusters were detected; source data remain read-only and unchanged.
+  reusable_processed_input <- NROW(samples) == 1L &&
+    identical(input_processing_status$input_kind[[1]], "seurat_rds") &&
+    isTRUE(input_processing_status$umap_detected[[1]]) &&
+    isTRUE(input_processing_status$clusters_detected[[1]])
+  if (reusable_processed_input) {
+    if (!"cluster" %in% colnames(pre_qc_merged@meta.data)) {
+      cluster_source <- intersect(c("seurat_clusters", "cluster"), colnames(pre_qc_merged@meta.data))
+      if (length(cluster_source)) pre_qc_merged$cluster <- as.character(pre_qc_merged[[cluster_source[[1]]]][, 1])
+    }
+    attr(pre_qc_merged, "codespring_integration") <- "existing input object"
+    attr(pre_qc_merged, "codespring_doublets_removed") <- 0
+    saveRDS(pre_qc_merged, file.path(objects_dir, "processed_seurat.rds"), compress = FALSE)
+  }
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples), checkpoint_path("01_input"))
   stage_marker("inspect")
   if (identical(stage, "inspect")) quit(save = "no", status = 0L)
@@ -441,6 +463,7 @@ if (identical(stage, "qc")) quit(save = "no", status = 0L)
   doublet_summary <- qc_state$doublet_summary
 }
 
+if (stage %in% c("preprocess", "all")) {
 integration <- params$integration
 batch_values <- unlist(lapply(objects, function(obj) {
   if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
@@ -449,7 +472,6 @@ if (identical(integration, "auto")) integration <- if (length(unique(batch_value
 if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
   stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
 }
-if (stage %in% c("preprocess", "all")) {
   # Anchor-based integration treats each object as an integration unit. Group
   # inputs by the explicitly selected technical batch first, so two biological
   # samples from the same library/run are not incorrectly corrected apart.
@@ -581,6 +603,7 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   use_processed <- file.exists(processed_path) && (!file.exists(clustered_path) || file.info(processed_path)$mtime >= file.info(clustered_path)$mtime)
   if (use_processed) {
     obj <- readRDS(processed_path)
+    message("Loaded existing processed Seurat object for annotation.")
     integration <- attr(obj, "codespring_integration") %||% params$integration
     doublet_summary <- data.frame(removed_doublets = attr(obj, "codespring_doublets_removed") %||% 0)
   } else {
@@ -664,12 +687,14 @@ apply_existing_annotation <- function(obj) {
 }
 
 if (stage %in% c("annotate", "all")) {
+if (!inherits(obj, "Seurat")) stop("Annotation input is not a Seurat object; detected class: ", paste(class(obj), collapse = ", "))
 annotation_name <- safe_metadata_name(params$annotation_name)
 # Rejoin Seurat v5 RNA layers before any annotation scoring or differential
 # expression. Values are unchanged; the final object becomes portable and its
 # raw counts remain directly accessible.
 rna_layers <- assay_layers_safe(obj, "RNA")
 if (any(grepl("^(counts|data)\\.", rna_layers))) obj <- SeuratObject::JoinLayers(obj, assay = "RNA")
+message("Annotation input loaded: ", ncol(obj), " cells; reductions: ", paste(names(obj@reductions), collapse = ", "))
 if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "none")) {
   obj <- apply_celltype_mapping(obj, params$celltype_file, annotation_name)
 } else if (nzchar(params$marker_file) && !identical(tolower(params$marker_file), "none")) {
@@ -689,8 +714,11 @@ if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "n
   }
 }
 
+message("Annotation labels prepared; rendering UMAP summaries.")
 save_plot(categorical_dimplot(obj, reduction = "umap", group.by = "sample_id", shuffle = TRUE), "03_umap_sample.png", 8, 6)
+message("Rendered sample UMAP.")
 save_plot(categorical_dimplot(obj, reduction = "umap", group.by = "cluster", label = TRUE, repel = TRUE), "04_umap_clusters.png", 8, 6)
+message("Rendered cluster UMAP.")
 save_plot(categorical_dimplot(obj, reduction = "umap", group.by = annotation_name, label = TRUE, repel = TRUE), paste0("05_umap_", annotation_name, ".png"), 9, 6)
 if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 1L) save_plot(categorical_dimplot(obj, reduction = "umap", group.by = "condition", shuffle = TRUE), "06_umap_condition.png", 8, 6)
 
