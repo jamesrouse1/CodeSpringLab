@@ -21,7 +21,12 @@ the following raw-count inputs:
   `outs/filtered_feature_bc_matrix` becomes the downstream input.
 
 Additional columns such as `condition`, `batch`, and `donor` become cell
-metadata. `sample_id` must be unique. Do not mix Seurat `.rds` and AnnData
+metadata. `sample_id` must be unique. `capture_id` identifies the independent
+droplet capture/library used for doublet detection and defaults to `sample_id`.
+When multiple hashed or multiplexed biological samples came from the same 10x
+channel, give those rows the same `capture_id`. An optional
+`expected_doublet_rate` can override automatic rate estimation and must be
+constant within a capture. Do not mix Seurat `.rds` and AnnData
 `.h5ad` inputs in a single run; start from filtered 10x matrices instead.
 For FASTQ inputs, the optional `fastq_sample` column records the filename prefix
 passed to `cellranger count --sample`; the app infers it when one prefix is found.
@@ -114,12 +119,22 @@ iteration settings are recorded in the project parameter table. RPCA is the
 conservative automatic Seurat default; CCA is reserved for datasets with
 strong shared-state shifts where a stronger correction is justified.
 
-Doublets are detected after initial cell QC and before normalization or
-integration. Scanpy uses per-sample Scrublet and requires the Scanpy Scrublet
+Doublets are detected after only a minimal 200-count prefilter and before the
+complete mitochondrial/count/feature QC, normalization, or integration. They
+are modeled independently per `capture_id`, not blindly per biological sample.
+Scanpy uses capture-aware Scrublet and requires the Scanpy Scrublet
 dependencies (including `scikit-image`). Seurat uses `scDblFinder`, which must
 be installed in the R environment (for example, with
-`BiocManager::install("scDblFinder")`). Every run writes a per-cell call table,
-a per-sample summary, and a score distribution when scores are available.
+`BiocManager::install("scDblFinder")`). Doublet rates are estimated per capture
+by default; a global manual override remains available. Every run writes a
+per-cell call table, a per-capture summary, and a score distribution when scores
+are available. Full QC is then applied independently to each sample using the
+user-reviewed thresholds.
+
+Mitochondrial percentages remain uncapped in per-cell tables and during
+filtering. The mitochondrial axes in QC figures alone use the 99th percentile,
+with a 50% maximum display limit, so extreme droplets do not compress the
+visible distribution.
 
 For annotation, use either:
 

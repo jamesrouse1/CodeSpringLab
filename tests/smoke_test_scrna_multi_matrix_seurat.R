@@ -30,13 +30,13 @@ write_10x <- function(sample_id, batch_shift) {
 }
 
 paths <- c(write_10x("sample_A", 0), write_10x("sample_B", 0), write_10x("sample_C", 1))
-manifest <- data.frame(sample_id = c("sample_A", "sample_B", "sample_C"), input_path = paths, condition = c("control", "treated", "treated"), technical_batch = c("run_1", "run_1", "run_2"))
+manifest <- data.frame(sample_id = c("sample_A", "sample_B", "sample_C"), capture_id = c("capture_1", "capture_1", "capture_2"), input_path = paths, condition = c("control", "treated", "treated"), technical_batch = c("run_1", "run_1", "run_2"))
 manifest_path <- file.path(work, "samples.tsv")
 utils::write.table(manifest, manifest_path, sep = "\t", row.names = FALSE, quote = FALSE)
 
 params <- data.frame(
   key = c("normalization", "integration", "batch_column", "cluster_resolution", "min_features", "min_counts", "max_features", "max_percent_mt", "n_pcs", "min_cells_per_gene", "doublet_method", "doublet_rate", "remove_doublets", "seed", "harmony_theta", "harmony_lambda", "harmony_max_iter"),
-  value = c("lognormalize", "harmony", "technical_batch", "0.4", "10", "0", "0", "100", "10", "1", "none", "0.05", "false", "1234", "2", "1", "20")
+  value = c("lognormalize", "harmony", "technical_batch", "0.4", "10", "0", "0", "100", "10", "1", "none", "0", "false", "1234", "2", "1", "20")
 )
 params_path <- file.path(work, "params.tsv")
 utils::write.table(params, params_path, sep = "\t", row.names = FALSE, quote = FALSE)
@@ -54,6 +54,8 @@ stopifnot(all(file.exists(file.path(out, expected))))
 pre <- utils::read.delim(file.path(out, "tables", "preintegration_umap_coordinates.tsv"), check.names = FALSE)
 final <- utils::read.delim(file.path(out, "tables", "umap_coordinates.tsv"), check.names = FALSE)
 stopifnot(NROW(pre) == 360L, NROW(final) == 360L, all(c("sample_id", "technical_batch") %in% names(pre)))
+doublets <- utils::read.delim(file.path(out, "tables", "doublet_summary_by_capture.tsv"), check.names = FALSE)
+stopifnot(NROW(doublets) == 2L, identical(sort(doublets$capture_id), c("capture_1", "capture_2")), is.na(doublets$expected_doublet_rate[doublets$capture_id == "capture_1"]))
 obj <- readRDS(file.path(out, "objects", "processed_seurat.rds"))
 stopifnot("harmony" %in% names(obj@reductions), "umap" %in% names(obj@reductions), NROW(obj) == length(genes))
 
@@ -68,4 +70,20 @@ pre_state <- readRDS(file.path(out_rpca, "checkpoints", "03_preprocessed_seurat.
 stopifnot(length(pre_state$objects) == 2L, identical(sort(names(pre_state$objects)), c("run_1", "run_2")))
 rpca_obj <- readRDS(file.path(out_rpca, "objects", "processed_seurat.rds"))
 stopifnot(all(c("counts", "data") %in% SeuratObject::Layers(rpca_obj[["RNA"]])))
+
+# Exercise the real capture-aware automatic-rate path when scDblFinder is
+# available (the official cluster Seurat module includes it).
+if (requireNamespace("scDblFinder", quietly = TRUE)) {
+  params$value[params$key == "doublet_method"] <- "scdblfinder"
+  params$value[params$key == "doublet_rate"] <- "0"
+  params$value[params$key == "remove_doublets"] <- "false"
+  utils::write.table(params, params_path, sep = "\t", row.names = FALSE, quote = FALSE)
+  out_doublet <- file.path(work, "output_doublet")
+  inspect_status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(pipeline, manifest_path, out_doublet, params_path, "inspect")))
+  qc_status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(pipeline, manifest_path, out_doublet, params_path, "qc")))
+  stopifnot(inspect_status == 0L, qc_status == 0L)
+  capture_summary <- utils::read.delim(file.path(out_doublet, "tables", "doublet_summary_by_capture.tsv"), check.names = FALSE)
+  capture_calls <- utils::read.delim(file.path(out_doublet, "tables", "doublet_calls.tsv"), check.names = FALSE)
+  stopifnot(NROW(capture_summary) == 2L, all(capture_summary$rate_source == "automatic"), all(c("sample_id", "capture_id") %in% names(capture_calls)))
+}
 cat("MULTI_MATRIX_SEURAT_HARMONY_OK\n")

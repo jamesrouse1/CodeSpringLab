@@ -163,7 +163,9 @@ def params_from(path: Path):
         "max_percent_mt": float(get("max_percent_mt", "20") or 20),
         "min_cells_per_gene": int(float(get("min_cells_per_gene", "3") or 3)),
         "doublet_method": get("doublet_method", "auto").lower(),
-        "doublet_rate": float(get("doublet_rate", "0.05") or 0.05),
+        # Zero requests a capture-specific automatic estimate. Positive values
+        # are explicit global overrides.
+        "doublet_rate": float(get("doublet_rate", "0") or 0),
         "remove_doublets": get_bool("remove_doublets", True),
         "marker_file": get("marker_file", ""),
         "celltype_file": get("celltype_file", ""),
@@ -542,14 +544,16 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
         cutoff_lines(axis, column)
         if column == "pct_counts_mt":
             values = np.concatenate(groups)
-            suggested_max = float(cutoffs["max_percent_mt"]) if cutoffs else 0.0
             # A handful of all-mitochondrial droplets can stretch this axis to
             # 100% and hide the biologically useful part of the distribution.
-            # Show the central 99% plus the cutoff, while keeping the plot
-            # explicitly focused on the QC decision range.
-            display_max = max(10.0, suggested_max, float(np.nanquantile(values, 0.99)))
-            display_max = min(100.0, np.ceil(display_max / 5.0) * 5.0)
+            # Show the central 99%, capped at 50%. The underlying observations,
+            # exported tables, and filtering values remain completely uncapped.
+            display_max = max(10.0, float(np.nanquantile(values, 0.99)))
+            display_max = min(50.0, np.ceil(display_max / 5.0) * 5.0)
             axis.set_ylim(bottom=0, top=display_max)
+            axis.text(0.01, 0.98, f"Display cap: {display_max:g}%",
+                      transform=axis.transAxes, ha="left", va="top", fontsize=8,
+                      color="#4b5563", bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 1.5})
         axis.grid(axis="y", color="#d1d5db", linewidth=0.7, alpha=0.8)
         axis.spines[["top", "right"]].set_visible(False)
         axis.tick_params(axis="x", length=0)
@@ -578,10 +582,12 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
                 bbox={"facecolor": "white", "edgecolor": "#fecaca", "alpha": 0.9, "pad": 3})
     mt_values = pd.to_numeric(adata.obs["pct_counts_mt"], errors="coerce").dropna().to_numpy()
     if len(mt_values):
-        suggested_max = float(cutoffs["max_percent_mt"]) if cutoffs else 0.0
-        display_max = max(10.0, suggested_max, float(np.nanquantile(mt_values, 0.99)))
-        display_max = min(100.0, np.ceil(display_max / 5.0) * 5.0)
+        display_max = max(10.0, float(np.nanquantile(mt_values, 0.99)))
+        display_max = min(50.0, np.ceil(display_max / 5.0) * 5.0)
         ax.set_ylim(bottom=0, top=display_max)
+        ax.text(0.01, 0.98, f"Mitochondrial display cap: {display_max:g}%",
+                transform=ax.transAxes, ha="left", va="top", fontsize=8, color="#4b5563",
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 1.5})
     ax.grid(color="#d1d5db", linewidth=0.7, alpha=0.8)
     ax.spines[["top", "right"]].set_visible(False)
     if len(samples) > 1:
@@ -629,7 +635,7 @@ def save_doublet_plot(adata, figures: Path):
 
 
 def run_scrublet(adata, p, tables: Path, figures: Path):
-    """Run Scrublet on raw counts, separately by sample when available."""
+    """Run Scrublet on raw counts, independently for each droplet capture."""
     method = p["doublet_method"]
     if method not in {"auto", "none", "scrublet"}:
         raise SystemExit("Scanpy doublet_method must be auto, none, or scrublet.")
@@ -637,31 +643,36 @@ def run_scrublet(adata, p, tables: Path, figures: Path):
     adata.obs["predicted_doublet"] = False
     report = []
     if method == "none":
-        report.append({"sample_id": "all", "method": "none", "expected_doublet_rate": p["doublet_rate"], "cells_before": adata.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Doublet removal disabled"})
+        report.append({"capture_id": "all", "sample_ids": ",".join(sorted(adata.obs["sample_id"].astype(str).unique())), "method": "none", "expected_doublet_rate": np.nan if p["doublet_rate"] <= 0 else p["doublet_rate"], "rate_source": "automatic" if p["doublet_rate"] <= 0 else "global override", "cells_before": adata.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Doublet removal disabled"})
         pd.DataFrame(report).to_csv(tables / "doublet_summary_by_sample.tsv", sep="\t", index=False)
-        calls = adata.obs[["sample_id", "doublet_score", "predicted_doublet"]].copy()
+        pd.DataFrame(report).to_csv(tables / "doublet_summary_by_capture.tsv", sep="\t", index=False)
+        calls = adata.obs[["sample_id", "capture_id", "doublet_score", "predicted_doublet"]].copy()
         calls.insert(0, "cell", adata.obs_names)
         calls["removed_as_doublet"] = False
         calls.to_csv(tables / "doublet_calls.tsv", sep="\t", index=False)
         adata.uns["codespring_doublets_removed"] = 0
         return adata
-    sample_col = "sample_id" if "sample_id" in adata.obs else None
-    groups = [(str(name), list(idx)) for name, idx in adata.obs.groupby(sample_col, observed=True).groups.items()] if sample_col else [("all", list(adata.obs_names))]
-    for sample_id, cells in groups:
+    capture_col = "capture_id" if "capture_id" in adata.obs else "sample_id" if "sample_id" in adata.obs else None
+    groups = [(str(name), list(idx)) for name, idx in adata.obs.groupby(capture_col, observed=True).groups.items()] if capture_col else [("all", list(adata.obs_names))]
+    for capture_id, cells in groups:
         sub = adata[cells].copy()
-        expected_rate = p["doublet_rate"]
+        sample_ids = ",".join(sorted(sub.obs["sample_id"].astype(str).unique()))
+        expected_rate = p["doublet_rate"] if p["doublet_rate"] > 0 else min(0.15, max(0.008, 0.008 * sub.n_obs / 1000.0))
+        rate_source = "global override" if p["doublet_rate"] > 0 else "automatic 10x estimate"
         if "expected_doublet_rate" in sub.obs.columns:
-            rates = pd.to_numeric(sub.obs["expected_doublet_rate"], errors="coerce").dropna().unique()
+            raw_rates = sub.obs["expected_doublet_rate"].replace({"": np.nan, "nan": np.nan, "NA": np.nan, "None": np.nan})
+            rates = pd.to_numeric(raw_rates, errors="coerce").dropna().unique()
             if len(rates) > 1:
-                raise SystemExit(f"expected_doublet_rate must have one value per sample ({sample_id}).")
+                raise SystemExit(f"expected_doublet_rate must have one value per capture ({capture_id}).")
             if len(rates) == 1:
                 expected_rate = float(rates[0])
+                rate_source = "manifest"
                 if not 0 < expected_rate < 1:
-                    raise SystemExit(f"expected_doublet_rate must be greater than 0 and less than 1 for {sample_id}.")
+                    raise SystemExit(f"expected_doublet_rate must be greater than 0 and less than 1 for {capture_id}.")
         # Scrublet is not informative on very small partitions. Do not invent
         # calls; retain these cells and record why in the summary.
         if sub.n_obs < 100 or sub.n_vars < 20:
-            report.append({"sample_id": sample_id, "method": "scrublet", "expected_doublet_rate": expected_rate, "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Skipped: fewer than 100 cells or 20 genes"})
+            report.append({"capture_id": capture_id, "sample_ids": sample_ids, "method": "scrublet", "expected_doublet_rate": expected_rate, "rate_source": rate_source, "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": "Skipped: fewer than 100 cells or 20 genes"})
             continue
         try:
             # The internal Scrublet feature filter can leave fewer than 30
@@ -672,15 +683,16 @@ def run_scrublet(adata, p, tables: Path, figures: Path):
             predicted = sub.obs["predicted_doublet"].astype(bool)
             adata.obs.loc[sub.obs_names, "predicted_doublet"] = predicted.values
             predicted_n = int(predicted.sum())
-            report.append({"sample_id": sample_id, "method": "scrublet", "expected_doublet_rate": expected_rate, "cells_before": sub.n_obs, "predicted_doublets": predicted_n, "removed_doublets": predicted_n if p["remove_doublets"] else 0, "note": ""})
+            report.append({"capture_id": capture_id, "sample_ids": sample_ids, "method": "scrublet", "expected_doublet_rate": expected_rate, "rate_source": rate_source, "cells_before": sub.n_obs, "predicted_doublets": predicted_n, "removed_doublets": predicted_n if p["remove_doublets"] else 0, "note": ""})
         except Exception as exc:
             if method == "scrublet":
-                raise SystemExit(f"Scrublet failed for {sample_id}: {exc}") from exc
-            report.append({"sample_id": sample_id, "method": "scrublet", "expected_doublet_rate": expected_rate, "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": f"Automatic Scrublet skipped after error: {exc}"})
+                raise SystemExit(f"Scrublet failed for {capture_id}: {exc}") from exc
+            report.append({"capture_id": capture_id, "sample_ids": sample_ids, "method": "scrublet", "expected_doublet_rate": expected_rate, "rate_source": rate_source, "cells_before": sub.n_obs, "predicted_doublets": 0, "removed_doublets": 0, "note": f"Automatic Scrublet skipped after error: {exc}"})
     adata.obs["predicted_doublet"] = adata.obs["predicted_doublet"].astype(bool)
     save_doublet_plot(adata, figures)
     pd.DataFrame(report).to_csv(tables / "doublet_summary_by_sample.tsv", sep="\t", index=False)
-    calls = adata.obs[["sample_id", "doublet_score", "predicted_doublet"]].copy()
+    pd.DataFrame(report).to_csv(tables / "doublet_summary_by_capture.tsv", sep="\t", index=False)
+    calls = adata.obs[["sample_id", "capture_id", "doublet_score", "predicted_doublet"]].copy()
     calls.insert(0, "cell", adata.obs_names)
     calls["removed_as_doublet"] = calls["predicted_doublet"] & p["remove_doublets"]
     calls.to_csv(tables / "doublet_calls.tsv", sep="\t", index=False)
@@ -982,6 +994,19 @@ def main():
     if samples["sample_id"].duplicated().any():
         duplicates = ", ".join(samples.loc[samples["sample_id"].duplicated(), "sample_id"].unique())
         raise SystemExit(f"sample_id values must be unique in the input manifest: {duplicates}")
+    if "capture_id" not in samples.columns:
+        samples["capture_id"] = samples["sample_id"]
+    samples["capture_id"] = samples["capture_id"].fillna("").astype(str).str.strip()
+    samples.loc[samples["capture_id"] == "", "capture_id"] = samples.loc[samples["capture_id"] == "", "sample_id"]
+    if "expected_doublet_rate" in samples.columns:
+        raw_rates = samples["expected_doublet_rate"].replace({"": np.nan, "nan": np.nan, "NA": np.nan, "None": np.nan})
+        rates = pd.to_numeric(raw_rates, errors="coerce")
+        supplied = raw_rates.notna()
+        if ((supplied & (rates.isna() | (rates <= 0) | (rates >= 1))).any()):
+            raise SystemExit("expected_doublet_rate must be blank for automatic estimation or greater than 0 and less than 1.")
+        for capture_id, values in rates[supplied].groupby(samples.loc[supplied, "capture_id"]):
+            if values.nunique() > 1:
+                raise SystemExit(f"expected_doublet_rate must be constant within capture_id: {capture_id}")
 
     # Stage 1: inspect each source object and preserve a raw-count checkpoint.
     if stage in {"inspect", "all"}:
@@ -1038,7 +1063,8 @@ def main():
     elif stage in {"score", "differential"}:
         adata = require_checkpoint(processed_object, "annotation")
 
-    # Stage 2: filter cells/genes and handle doublets while the data is raw.
+    # Stage 2: minimally prefilter, call doublets per capture, then perform the
+    # complete user-reviewed QC while the data are still raw.
     if stage in {"qc", "all"}:
         adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
         sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], inplace=True, percent_top=None, log1p=False)
@@ -1051,13 +1077,17 @@ def main():
             "remove_predicted_doublets": p["remove_doublets"],
         }]).to_csv(tables / "qc_cutoffs_applied.tsv", sep="\t", index=False)
         cells_before_qc = adata.obs.groupby("sample_id", observed=True).size().rename("cells_input")
+        minimal_keep = adata.obs["total_counts"] >= 200
+        adata = adata[minimal_keep].copy()
+        if adata.n_obs == 0:
+            raise SystemExit("The minimal 200-count prefilter removed every cell.")
+        adata = run_scrublet(adata, p, tables, figures)
         keep = (adata.obs["n_genes_by_counts"] >= p["min_features"]) & (adata.obs["total_counts"] >= p["min_counts"]) & (adata.obs["pct_counts_mt"] <= p["max_percent_mt"])
         if p["max_features"] > 0:
             keep &= adata.obs["n_genes_by_counts"] <= p["max_features"]
         adata = adata[keep].copy()
         if adata.n_obs == 0:
             raise SystemExit("QC thresholds removed every cell.")
-        adata = run_scrublet(adata, p, tables, figures)
         gene_keep = np.zeros(adata.n_vars, dtype=bool)
         feature_reports = []
         for sample_id, cells in adata.obs.groupby("sample_id", observed=True).groups.items():
@@ -1070,7 +1100,7 @@ def main():
             raise SystemExit("Minimum cells per retained gene removed every gene.")
         adata = adata[:, gene_keep].copy()
         pd.DataFrame(feature_reports).to_csv(tables / "feature_filtering_by_sample.tsv", sep="\t", index=False)
-        qc = adata.obs[["sample_id", "n_genes_by_counts", "total_counts", "pct_counts_mt", "doublet_score", "predicted_doublet"]].copy()
+        qc = adata.obs[["sample_id", "capture_id", "n_genes_by_counts", "total_counts", "pct_counts_mt", "doublet_score", "predicted_doublet"]].copy()
         qc.insert(0, "cell", adata.obs_names)
         qc.to_csv(tables / "qc_cell_metrics.tsv", sep="\t", index=False)
         qc_summary = qc.groupby("sample_id", observed=True).agg(cells_after_qc_and_doublets=("total_counts", "size"), median_umis=("total_counts", "median"), median_genes=("n_genes_by_counts", "median"), median_percent_mt=("pct_counts_mt", "median")).reset_index()

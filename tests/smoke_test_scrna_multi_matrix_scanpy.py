@@ -38,6 +38,7 @@ try:
     paths = [write_10x("sample_A", 0), write_10x("sample_B", 1)]
     manifest = pd.DataFrame({
         "sample_id": ["sample_A", "sample_B"],
+        "capture_id": ["capture_1", "capture_1"],
         "input_path": [str(path) for path in paths],
         "condition": ["control", "treated"],
         "technical_batch": ["run_1", "run_2"],
@@ -48,7 +49,7 @@ try:
         "normalization": "lognormalize", "integration": "harmony", "batch_column": "technical_batch",
         "cluster_resolution": "0.4", "min_features": "10", "min_counts": "0", "max_features": "0",
         "max_percent_mt": "100", "n_pcs": "10", "min_cells_per_gene": "1", "doublet_method": "none",
-        "doublet_rate": "0.05", "remove_doublets": "false", "seed": "1234",
+        "doublet_rate": "0", "remove_doublets": "false", "seed": "1234",
         "harmony_theta": "2", "harmony_lambda": "1", "harmony_max_iter": "20",
     }
     params_path = work / "params.tsv"
@@ -66,6 +67,8 @@ try:
     final = pd.read_csv(out / "tables/umap_coordinates.tsv", sep="\t")
     assert len(pre) == len(final) == 240
     assert {"sample_id", "technical_batch"}.issubset(pre.columns)
+    doublets = pd.read_csv(out / "tables/doublet_summary_by_capture.tsv", sep="\t")
+    assert len(doublets) == 1 and doublets.loc[0, "capture_id"] == "capture_1"
     print("MULTI_MATRIX_SCANPY_HARMONY_OK")
 finally:
     shutil.rmtree(work, ignore_errors=True)

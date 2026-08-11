@@ -136,7 +136,9 @@ read_params <- function(path) {
     max_percent_mt = suppressWarnings(as.numeric(get("max_percent_mt", "20"))),
     min_cells_per_gene = suppressWarnings(as.integer(get("min_cells_per_gene", "3"))),
     doublet_method = tolower(get("doublet_method", "none")),
-    doublet_rate = suppressWarnings(as.numeric(get("doublet_rate", "0.05"))),
+    # Zero means that scDblFinder should estimate the rate independently for
+    # each capture. A positive value is an explicit global override.
+    doublet_rate = suppressWarnings(as.numeric(get("doublet_rate", "0"))),
     remove_doublets = get_bool("remove_doublets", TRUE),
     marker_file = get("marker_file", ""),
     celltype_file = get("celltype_file", ""),
@@ -171,7 +173,7 @@ if (!is.finite(params$max_features) || params$max_features < 0) params$max_featu
 if (!is.finite(params$max_percent_mt) || params$max_percent_mt < 0) params$max_percent_mt <- 20
 if (!is.finite(params$min_cells_per_gene) || params$min_cells_per_gene < 1) params$min_cells_per_gene <- 3L
 if (!params$doublet_method %in% c("auto", "none", "scdblfinder")) stop("doublet_method must be auto, none, or scDblFinder")
-if (!is.finite(params$doublet_rate) || params$doublet_rate < 0 || params$doublet_rate >= 1) params$doublet_rate <- 0.05
+if (!is.finite(params$doublet_rate) || params$doublet_rate < 0 || params$doublet_rate >= 1) params$doublet_rate <- 0
 if (!is.finite(params$harmony_theta) || params$harmony_theta < 0) params$harmony_theta <- 2
 if (!is.finite(params$harmony_lambda) || params$harmony_lambda <= 0) params$harmony_lambda <- 1
 if (!is.finite(params$harmony_max_iter) || params$harmony_max_iter < 1) params$harmony_max_iter <- 20L
@@ -187,6 +189,19 @@ if (!NROW(samples)) stop("No sample rows were supplied.")
 if (any(!nzchar(samples$sample_id))) stop("Every sample manifest row needs a sample_id.")
 if (any(!nzchar(samples$input_path))) stop("Every sample manifest row needs an input_path.")
 if (anyDuplicated(samples$sample_id)) stop("sample_id values must be unique in the input manifest.")
+if (!"capture_id" %in% names(samples)) samples$capture_id <- samples$sample_id
+samples$capture_id <- trimws(as.character(samples$capture_id))
+samples$capture_id[!nzchar(samples$capture_id)] <- samples$sample_id[!nzchar(samples$capture_id)]
+if (any(!nzchar(samples$capture_id))) stop("Every sample needs a capture_id or sample_id.")
+if ("expected_doublet_rate" %in% names(samples)) {
+  raw_rate <- trimws(as.character(samples$expected_doublet_rate))
+  supplied <- nzchar(raw_rate) & !is.na(raw_rate)
+  parsed <- suppressWarnings(as.numeric(raw_rate))
+  if (any(supplied & (!is.finite(parsed) | parsed <= 0 | parsed >= 1))) stop("expected_doublet_rate must be blank for automatic estimation or greater than 0 and less than 1.")
+  rates_by_capture <- split(parsed[supplied], samples$capture_id[supplied])
+  inconsistent <- names(Filter(function(x) length(unique(x)) > 1L, rates_by_capture))
+  if (length(inconsistent)) stop("expected_doublet_rate must be constant within capture_id: ", inconsistent[[1]])
+}
 samples$input_path <- normalizePath(path.expand(as.character(samples$input_path)), winslash = "/", mustWork = FALSE)
 missing <- samples$input_path[!file.exists(samples$input_path)]
 if (length(missing)) stop("Missing unreadable input path(s): ", paste(missing, collapse = ", "))
@@ -325,6 +340,38 @@ save_plot <- function(plot, file, width = 9, height = 6) {
   ggplot2::ggsave(file.path(figures_dir, file), plot = plot, width = width, height = height, dpi = 160)
 }
 
+# Keep extreme mitochondrial-content droplets from flattening the useful QC
+# range. This affects only the displayed axis; exported values and filtering
+# always use the original, uncapped percent.mt measurements.
+mt_display_limit <- function(values) {
+  values <- as.numeric(values)
+  values <- values[is.finite(values)]
+  percentile_99 <- if (length(values)) stats::quantile(values, 0.99, names = FALSE, na.rm = TRUE) else 10
+  max(10, min(50, ceiling(percentile_99 / 5) * 5))
+}
+
+qc_violin_plot <- function(obj) {
+  plots <- Seurat::VlnPlot(
+    obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+    group.by = "sample_id", cols = categorical_palette(obj$sample_id),
+    ncol = 3, pt.size = 0, layer = "counts", combine = FALSE
+  )
+  mt_cap <- mt_display_limit(obj$percent.mt)
+  plots[[3]] <- plots[[3]] +
+    ggplot2::coord_cartesian(ylim = c(0, mt_cap)) +
+    ggplot2::labs(caption = paste0("Display capped at ", mt_cap, "% (99th-percentile rule; maximum 50%)."))
+  patchwork::wrap_plots(plots, ncol = 3)
+}
+
+qc_scatter_plot <- function(obj) {
+  mt_cap <- mt_display_limit(obj$percent.mt)
+  counts_mt <- jpplot_point_layer(Seurat::FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "percent.mt")) +
+    ggplot2::coord_cartesian(ylim = c(0, mt_cap)) +
+    ggplot2::labs(caption = paste0("Mitochondrial axis capped at ", mt_cap, "% for display only."))
+  counts_features <- jpplot_point_layer(Seurat::FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"))
+  patchwork::wrap_plots(counts_mt, counts_features, ncol = 2)
+}
+
 if (stage %in% c("inspect", "qc", "all")) {
   objects <- lapply(seq_len(NROW(samples)), function(i) read_one(as.list(samples[i, , drop = FALSE])))
   names(objects) <- samples$sample_id
@@ -347,8 +394,8 @@ if (stage %in% c("inspect", "qc", "all")) {
   utils::write.table(pre_qc_cells, file.path(tables_dir, "qc_pre_filter_cell_metrics.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   pre_qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
   Seurat::DefaultAssay(pre_qc_merged) <- "RNA"
-  save_plot(Seurat::VlnPlot(pre_qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", cols = categorical_palette(pre_qc_merged$sample_id), ncol = 3, pt.size = 0, layer = "counts"), "00_qc_pre_filter_violin.png", 14, 5)
-  save_plot(jpplot_point_layer(Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt")) + jpplot_point_layer(Seurat::FeatureScatter(pre_qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")), "00_qc_pre_filter_scatter.png", 12, 5)
+  save_plot(qc_violin_plot(pre_qc_merged), "00_qc_pre_filter_violin.png", 14, 5)
+  save_plot(qc_scatter_plot(pre_qc_merged), "00_qc_pre_filter_scatter.png", 12, 5)
   # A single processed Seurat object can be continued without rebuilding its
   # existing embedding. Preserve a project-local copy only when both UMAP and
   # clusters were detected; source data remain read-only and unchanged.
@@ -385,49 +432,48 @@ qc_one <- function(obj) {
   if (!any(keep)) stop("QC thresholds removed every cell in sample ", unique(obj$sample_id)[1], ".")
   subset(obj, cells = colnames(obj)[keep])
 }
-objects <- lapply(objects, qc_one)
-
-filter_genes_one <- function(obj) {
-  counts <- Seurat::GetAssayData(obj, assay = "RNA", layer = "counts")
-  detected_cells <- Matrix::rowSums(counts > 0)
-  keep <- detected_cells >= params$min_cells_per_gene
-  if (!any(keep)) stop("Minimum cells per retained gene removed every gene in sample ", unique(obj$sample_id)[1], ".")
-  summary <- data.frame(
-    sample_id = unique(as.character(obj$sample_id))[[1]],
-    genes_before_filtering = nrow(obj),
-    min_cells_per_gene = params$min_cells_per_gene,
-    genes_retained = sum(keep),
-    stringsAsFactors = FALSE
-  )
-  list(object = subset(obj, features = rownames(obj)[keep]), summary = summary)
-}
-
-feature_filter_runs <- lapply(objects, filter_genes_one)
-objects <- lapply(feature_filter_runs, `[[`, "object")
-feature_filter_summary <- do.call(rbind, lapply(feature_filter_runs, `[[`, "summary"))
-utils::write.table(feature_filter_summary, file.path(tables_dir, "feature_filtering_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-
-sample_doublet_rate <- function(obj) {
-  if (!"expected_doublet_rate" %in% colnames(obj@meta.data)) return(params$doublet_rate)
+capture_doublet_rate <- function(obj) {
+  if (!"expected_doublet_rate" %in% colnames(obj@meta.data)) return(if (params$doublet_rate > 0) params$doublet_rate else NULL)
   raw <- unique(trimws(as.character(obj$expected_doublet_rate)))
   raw <- raw[nzchar(raw) & !is.na(raw)]
-  if (!length(raw)) return(params$doublet_rate)
-  if (length(raw) != 1L) stop("expected_doublet_rate must have one value per sample.")
+  if (!length(raw)) return(if (params$doublet_rate > 0) params$doublet_rate else NULL)
+  if (length(raw) != 1L) stop("expected_doublet_rate must have one value per capture.")
   value <- suppressWarnings(as.numeric(raw[[1]]))
-  if (!is.finite(value) || value <= 0 || value >= 1) stop("expected_doublet_rate must be greater than 0 and less than 1 for each sample.")
+  if (!is.finite(value) || value <= 0 || value >= 1) stop("expected_doublet_rate must be greater than 0 and less than 1 for each capture.")
   value
 }
 
 run_doublet_one <- function(obj) {
-  sample_id <- unique(as.character(obj$sample_id))[[1]]
-  expected_rate <- if (identical(params$doublet_method, "none")) params$doublet_rate else sample_doublet_rate(obj)
+  capture_id <- unique(as.character(obj$capture_id))
+  if (length(capture_id) != 1L) stop("A doublet partition contains multiple capture_id values.")
+  capture_id <- capture_id[[1]]
+  sample_ids <- paste(sort(unique(as.character(obj$sample_id))), collapse = ",")
+  expected_rate <- capture_doublet_rate(obj)
+  manifest_rate_supplied <- FALSE
+  if ("expected_doublet_rate" %in% colnames(obj@meta.data)) {
+    manifest_values <- trimws(as.character(obj$expected_doublet_rate))
+    manifest_rate_supplied <- any(!is.na(manifest_values) & nzchar(manifest_values))
+  }
+  rate_source <- if (is.null(expected_rate)) "automatic" else if (manifest_rate_supplied) "manifest" else "global override"
+  reported_rate <- if (is.null(expected_rate)) NA_real_ else expected_rate
   obj$doublet_score <- NA_real_
   obj$predicted_doublet <- FALSE
+  calls_frame <- function(score, call, removed) data.frame(
+    cell = colnames(obj), sample_id = as.character(obj$sample_id), capture_id = capture_id,
+    doublet_score = score, predicted_doublet = call, removed_as_doublet = removed,
+    stringsAsFactors = FALSE
+  )
+  summary_frame <- function(method, predicted = 0L, removed = 0L, note = "") data.frame(
+    capture_id = capture_id, sample_ids = sample_ids, method = method,
+    expected_doublet_rate = reported_rate, rate_source = rate_source,
+    cells_before = ncol(obj), predicted_doublets = predicted,
+    removed_doublets = removed, note = note, stringsAsFactors = FALSE
+  )
   if (identical(params$doublet_method, "none")) {
     return(list(
       object = obj,
-      calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
-      summary = data.frame(sample_id = sample_id, method = "none", expected_doublet_rate = expected_rate, cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Doublet removal disabled")
+      calls = calls_frame(NA_real_, FALSE, FALSE),
+      summary = summary_frame("none", note = "Doublet removal disabled")
     ))
   }
   if (!requireNamespace("scDblFinder", quietly = TRUE)) {
@@ -436,44 +482,89 @@ run_doublet_one <- function(obj) {
     }
     return(list(
       object = obj,
-      calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
-      summary = data.frame(sample_id = sample_id, method = "scDblFinder", expected_doublet_rate = expected_rate, cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Automatic scDblFinder skipped: package unavailable")
+      calls = calls_frame(NA_real_, FALSE, FALSE),
+      summary = summary_frame("scDblFinder", note = "Automatic scDblFinder skipped: package unavailable")
     ))
   }
   if (ncol(obj) < 100L || nrow(obj) < 20L) {
     return(list(
       object = obj,
-      calls = data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = NA_real_, predicted_doublet = FALSE, removed_as_doublet = FALSE),
-      summary = data.frame(sample_id = sample_id, method = "scDblFinder", expected_doublet_rate = expected_rate, cells_before = ncol(obj), predicted_doublets = 0L, removed_doublets = 0L, note = "Skipped: fewer than 100 cells or 20 genes")
+      calls = calls_frame(NA_real_, FALSE, FALSE),
+      summary = summary_frame("scDblFinder", note = "Skipped: fewer than 100 cells or 20 genes")
     ))
   }
   sce <- Seurat::as.SingleCellExperiment(obj, assay = "RNA")
-  sce <- scDblFinder::scDblFinder(sce, dbr = expected_rate)
+  sce <- if (is.null(expected_rate)) scDblFinder::scDblFinder(sce) else scDblFinder::scDblFinder(sce, dbr = expected_rate)
   score <- as.numeric(SummarizedExperiment::colData(sce)[["scDblFinder.score"]])
   call <- as.character(SummarizedExperiment::colData(sce)[["scDblFinder.class"]]) == "doublet"
   obj$doublet_score <- score
   obj$predicted_doublet <- call
-  calls <- data.frame(cell = colnames(obj), sample_id = sample_id, doublet_score = score, predicted_doublet = call,
-                      removed_as_doublet = call & params$remove_doublets, stringsAsFactors = FALSE)
-  summary <- data.frame(sample_id = sample_id, method = "scDblFinder", expected_doublet_rate = expected_rate, cells_before = ncol(obj),
-                        predicted_doublets = sum(call), removed_doublets = if (params$remove_doublets) sum(call) else 0L, note = "", stringsAsFactors = FALSE)
+  calls <- calls_frame(score, call, call & params$remove_doublets)
+  summary <- summary_frame("scDblFinder", sum(call), if (params$remove_doublets) sum(call) else 0L)
   if (params$remove_doublets) obj <- subset(obj, cells = colnames(obj)[!call])
-  if (!ncol(obj)) stop("Doublet removal removed every cell in sample ", sample_id, ".")
+  if (!ncol(obj)) stop("Doublet removal removed every cell in capture ", capture_id, ".")
   list(object = obj, calls = calls, summary = summary)
 }
 
-# Doublet detection is deliberately placed after initial per-sample QC and
-# before normalization, feature selection, integration, and clustering.
-doublet_runs <- lapply(objects, run_doublet_one)
-objects <- lapply(doublet_runs, `[[`, "object")
+# Remove only extremely low-coverage barcodes before doublet detection. Full
+# mitochondrial/count/feature QC is deliberately performed afterward, per the
+# scDblFinder guidance, so potential low-quality members of true doublets are
+# still available to the classifier.
+minimal_prefilter_one <- function(obj) {
+  keep <- obj$nCount_RNA >= 200
+  if (!any(keep)) stop("The minimal 200-count prefilter removed every cell in sample ", unique(obj$sample_id)[1], ".")
+  subset(obj, cells = colnames(obj)[keep])
+}
+objects <- lapply(objects, minimal_prefilter_one)
+capture_for_object <- vapply(objects, function(obj) unique(as.character(obj$capture_id))[[1]], character(1))
+capture_objects <- lapply(split(objects, capture_for_object), function(parts) {
+  obj <- if (length(parts) == 1L) parts[[1]] else Reduce(function(a, b) merge(a, y = b), parts)
+  count_layers <- grep("^counts($|\\.)", SeuratObject::Layers(obj[["RNA"]]), value = TRUE)
+  if (length(count_layers) > 1L) obj <- SeuratObject::JoinLayers(obj, assay = "RNA", layers = "counts", new = "counts")
+  obj
+})
+
+# Each independent droplet capture is processed separately. Biological samples
+# multiplexed in the same capture therefore share one realistic doublet model.
+doublet_runs <- lapply(capture_objects, run_doublet_one)
+clean_capture_objects <- lapply(doublet_runs, `[[`, "object")
 doublet_calls <- do.call(rbind, lapply(doublet_runs, `[[`, "calls"))
 doublet_summary <- do.call(rbind, lapply(doublet_runs, `[[`, "summary"))
 utils::write.table(doublet_calls, file.path(tables_dir, "doublet_calls.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 utils::write.table(doublet_summary, file.path(tables_dir, "doublet_summary_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+utils::write.table(doublet_summary, file.path(tables_dir, "doublet_summary_by_capture.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+
+# Split multiplexed captures back into biological samples, then apply the full
+# user-reviewed QC thresholds independently to every sample.
+objects <- lapply(samples$sample_id, function(sample_id) {
+  capture_id <- samples$capture_id[match(sample_id, samples$sample_id)]
+  obj <- clean_capture_objects[[capture_id]]
+  keep <- as.character(obj$sample_id) == sample_id
+  if (!any(keep)) stop("No cells remain for sample ", sample_id, " after doublet detection.")
+  subset(obj, cells = colnames(obj)[keep])
+})
+names(objects) <- samples$sample_id
+objects <- lapply(objects, qc_one)
+
+filter_genes_one <- function(obj) {
+  counts <- Seurat::GetAssayData(obj, assay = "RNA", layer = "counts")
+  detected_cells <- Matrix::rowSums(counts > 0)
+  keep <- detected_cells >= params$min_cells_per_gene
+  if (!any(keep)) stop("Minimum cells per retained gene removed every gene in sample ", unique(obj$sample_id)[1], ".")
+  summary <- data.frame(
+    sample_id = unique(as.character(obj$sample_id))[[1]], genes_before_filtering = nrow(obj),
+    min_cells_per_gene = params$min_cells_per_gene, genes_retained = sum(keep), stringsAsFactors = FALSE
+  )
+  list(object = subset(obj, features = rownames(obj)[keep]), summary = summary)
+}
+feature_filter_runs <- lapply(objects, filter_genes_one)
+objects <- lapply(feature_filter_runs, `[[`, "object")
+feature_filter_summary <- do.call(rbind, lapply(feature_filter_runs, `[[`, "summary"))
+utils::write.table(feature_filter_summary, file.path(tables_dir, "feature_filtering_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 
 qc_cells <- do.call(rbind, lapply(objects, function(obj) {
   condition_value <- if ("condition" %in% colnames(obj@meta.data)) as.character(obj[["condition"]][, 1]) else rep("", ncol(obj))
-  data.frame(cell = colnames(obj), sample_id = as.character(obj$sample_id), condition = condition_value,
+  data.frame(cell = colnames(obj), sample_id = as.character(obj$sample_id), capture_id = as.character(obj$capture_id), condition = condition_value,
              nCount_RNA = obj$nCount_RNA, nFeature_RNA = obj$nFeature_RNA, percent.mt = obj$percent.mt,
              doublet_score = obj$doublet_score, predicted_doublet = obj$predicted_doublet, stringsAsFactors = FALSE)
 }))
@@ -487,8 +578,8 @@ utils::write.table(qc_by_sample, file.path(tables_dir, "qc_summary_by_sample.tsv
 save_plot <- function(plot, file, width = 9, height = 6) ggplot2::ggsave(file.path(figures_dir, file), plot = plot, width = width, height = height, dpi = 160)
 qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
 DefaultAssay(qc_merged) <- "RNA"
-save_plot(Seurat::VlnPlot(qc_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample_id", cols = categorical_palette(qc_merged$sample_id), ncol = 3, pt.size = 0, layer = "counts"), "01_qc_violin.png", 14, 5)
-save_plot(jpplot_point_layer(Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "percent.mt")) + jpplot_point_layer(Seurat::FeatureScatter(qc_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")), "02_qc_scatter.png", 12, 5)
+save_plot(qc_violin_plot(qc_merged), "01_qc_violin.png", 14, 5)
+save_plot(qc_scatter_plot(qc_merged), "02_qc_scatter.png", 12, 5)
 if (any(is.finite(doublet_calls$doublet_score))) {
   doublet_plot <- ggplot2::ggplot(doublet_calls[is.finite(doublet_calls$doublet_score), , drop = FALSE], ggplot2::aes(x = doublet_score)) +
     ggplot2::geom_histogram(bins = 40, fill = jpplot_colors[[7]], color = "white") +
