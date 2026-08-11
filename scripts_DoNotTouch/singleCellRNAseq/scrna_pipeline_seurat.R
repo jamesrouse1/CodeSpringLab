@@ -422,7 +422,9 @@ qc_violin_plot <- function(obj, cutoffs = NULL, state_label = "") {
   mt_cap <- mt_display_limit(obj$percent.mt)
   panel_titles <- c("Genes per cell", "Counts per cell", "Mitochondrial reads (%)")
   for (i in seq_along(plots)) {
-    plots[[i]] <- plots[[i]] + ggplot2::labs(title = panel_titles[[i]], x = "Sample", y = panel_titles[[i]])
+    plots[[i]] <- plots[[i]] +
+      ggplot2::labs(title = panel_titles[[i]], x = "Sample", y = panel_titles[[i]]) +
+      ggplot2::theme(legend.position = "none")
   }
   if (!is.null(cutoffs)) {
     plots[[1]] <- qc_cutoff_lines(plots[[1]], c(cutoffs$min_features, cutoffs$max_features))
