@@ -350,26 +350,111 @@ mt_display_limit <- function(values) {
   max(10, min(50, ceiling(percentile_99 / 5) * 5))
 }
 
-qc_violin_plot <- function(obj) {
+round_qc_threshold <- function(value, direction = c("down", "up"), minimum = 0) {
+  direction <- match.arg(direction)
+  value <- as.numeric(value)
+  if (!is.finite(value)) return(as.integer(minimum))
+  increment <- if (abs(value) >= 100) 100 else 10
+  rounded <- if (identical(direction, "down")) floor(value / increment) * increment else ceiling(value / increment) * increment
+  as.integer(max(minimum, rounded))
+}
+
+qc_recommendations <- function(metrics) {
+  robust_tail <- function(values, direction = c("lower", "upper"), log_scale = FALSE) {
+    direction <- match.arg(direction)
+    values <- as.numeric(values)
+    values <- values[is.finite(values)]
+    if (!length(values)) return(NA_real_)
+    working <- if (log_scale) log1p(values) else values
+    center <- stats::median(working)
+    spread <- stats::mad(working, center = center, constant = 1.4826)
+    sign <- if (identical(direction, "lower")) -1 else 1
+    threshold <- center + sign * 3 * spread
+    if (!is.finite(threshold) || spread == 0) {
+      threshold <- stats::quantile(working, if (identical(direction, "lower")) 0.01 else 0.99, names = FALSE, na.rm = TRUE)
+    }
+    if (log_scale) exp(threshold) - 1 else threshold
+  }
+  rows <- lapply(split(metrics, metrics$sample_id), function(sample) {
+    low_genes <- robust_tail(sample$nFeature_RNA, "lower", log_scale = TRUE)
+    low_counts <- robust_tail(sample$nCount_RNA, "lower", log_scale = TRUE)
+    high_genes <- robust_tail(sample$nFeature_RNA, "upper", log_scale = TRUE)
+    high_mt <- robust_tail(sample$percent.mt, "upper", log_scale = FALSE)
+    data.frame(
+      sample_id = as.character(sample$sample_id[[1]]),
+      cells_before_qc = NROW(sample),
+      min_features = round_qc_threshold(low_genes, "down", minimum = 200),
+      min_counts = round_qc_threshold(low_counts, "down", minimum = 0),
+      max_features = round_qc_threshold(high_genes, "up", minimum = 0),
+      max_percent_mt = as.integer(max(5, min(50, ceiling(high_mt)))),
+      recommendation_basis = "Per-sample 3-MAD outlier thresholds; counts and genes calculated on log1p scale; mitochondrial percentage on original scale; editable starting values",
+      stringsAsFactors = FALSE
+    )
+  })
+  recommendations <- do.call(rbind, rows)
+  if (is.null(recommendations) || !NROW(recommendations)) return(data.frame())
+  global <- data.frame(
+    sample_id = "Recommended global",
+    cells_before_qc = sum(recommendations$cells_before_qc),
+    min_features = min(recommendations$min_features),
+    min_counts = min(recommendations$min_counts),
+    max_features = max(recommendations$max_features),
+    max_percent_mt = max(recommendations$max_percent_mt),
+    recommendation_basis = "Conservative shared starting values across samples; inspect per-sample distributions before applying",
+    stringsAsFactors = FALSE
+  )
+  rbind(global, recommendations)
+}
+
+qc_cutoff_lines <- function(plot, values) {
+  values <- as.numeric(values)
+  values <- values[is.finite(values) & values > 0]
+  if (!length(values)) return(plot)
+  plot + ggplot2::geom_hline(yintercept = values, color = "#C62828", linetype = "dashed", linewidth = 0.55)
+}
+
+qc_violin_plot <- function(obj, cutoffs = NULL, state_label = "") {
   plots <- Seurat::VlnPlot(
     obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
     group.by = "sample_id", cols = categorical_palette(obj$sample_id),
     ncol = 3, pt.size = 0, layer = "counts", combine = FALSE
   )
   mt_cap <- mt_display_limit(obj$percent.mt)
+  panel_titles <- c("Genes per cell", "Counts per cell", "Mitochondrial reads (%)")
+  for (i in seq_along(plots)) {
+    plots[[i]] <- plots[[i]] + ggplot2::labs(title = panel_titles[[i]], x = "Sample", y = panel_titles[[i]])
+  }
+  if (!is.null(cutoffs)) {
+    plots[[1]] <- qc_cutoff_lines(plots[[1]], c(cutoffs$min_features, cutoffs$max_features))
+    plots[[2]] <- qc_cutoff_lines(plots[[2]], cutoffs$min_counts)
+    plots[[3]] <- qc_cutoff_lines(plots[[3]], cutoffs$max_percent_mt)
+  }
   plots[[3]] <- plots[[3]] +
     ggplot2::coord_cartesian(ylim = c(0, mt_cap)) +
     ggplot2::labs(caption = paste0("Display capped at ", mt_cap, "% (99th-percentile rule; maximum 50%)."))
-  patchwork::wrap_plots(plots, ncol = 3)
+  combined <- patchwork::wrap_plots(plots, ncol = 3)
+  if (nzchar(state_label)) combined <- combined + patchwork::plot_annotation(title = state_label)
+  combined
 }
 
-qc_scatter_plot <- function(obj) {
+qc_scatter_plot <- function(obj, cutoffs = NULL, state_label = "") {
   mt_cap <- mt_display_limit(obj$percent.mt)
   counts_mt <- jpplot_point_layer(Seurat::FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "percent.mt")) +
     ggplot2::coord_cartesian(ylim = c(0, mt_cap)) +
-    ggplot2::labs(caption = paste0("Mitochondrial axis capped at ", mt_cap, "% for display only."))
-  counts_features <- jpplot_point_layer(Seurat::FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"))
-  patchwork::wrap_plots(counts_mt, counts_features, ncol = 2)
+    ggplot2::labs(title = "Counts versus mitochondrial reads", x = "Counts per cell", y = "Mitochondrial reads (%)", caption = paste0("Mitochondrial axis capped at ", mt_cap, "% for display only."))
+  counts_features <- jpplot_point_layer(Seurat::FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")) +
+    ggplot2::labs(title = "Counts versus detected genes", x = "Counts per cell", y = "Genes per cell")
+  if (!is.null(cutoffs)) {
+    if (is.finite(as.numeric(cutoffs$min_counts)) && as.numeric(cutoffs$min_counts) > 0) {
+      counts_mt <- counts_mt + ggplot2::geom_vline(xintercept = as.numeric(cutoffs$min_counts), color = "#C62828", linetype = "dashed", linewidth = 0.55)
+      counts_features <- counts_features + ggplot2::geom_vline(xintercept = as.numeric(cutoffs$min_counts), color = "#C62828", linetype = "dashed", linewidth = 0.55)
+    }
+    counts_mt <- qc_cutoff_lines(counts_mt, cutoffs$max_percent_mt)
+    counts_features <- qc_cutoff_lines(counts_features, c(cutoffs$min_features, cutoffs$max_features))
+  }
+  combined <- patchwork::wrap_plots(counts_mt, counts_features, ncol = 2)
+  if (nzchar(state_label)) combined <- combined + patchwork::plot_annotation(title = state_label)
+  combined
 }
 
 if (stage %in% c("inspect", "qc", "all")) {
@@ -392,10 +477,14 @@ if (stage %in% c("inspect", "qc", "all")) {
     stringsAsFactors = FALSE
   )))
   utils::write.table(pre_qc_cells, file.path(tables_dir, "qc_pre_filter_cell_metrics.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  recommended_qc <- qc_recommendations(pre_qc_cells)
+  utils::write.table(recommended_qc, file.path(tables_dir, "qc_recommended_thresholds.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  global_qc <- recommended_qc[recommended_qc$sample_id == "Recommended global", , drop = FALSE]
+  suggested_cutoffs <- if (NROW(global_qc)) as.list(global_qc[1, c("min_features", "min_counts", "max_features", "max_percent_mt")]) else NULL
   pre_qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
   Seurat::DefaultAssay(pre_qc_merged) <- "RNA"
-  save_plot(qc_violin_plot(pre_qc_merged), "00_qc_pre_filter_violin.png", 14, 5)
-  save_plot(qc_scatter_plot(pre_qc_merged), "00_qc_pre_filter_scatter.png", 12, 5)
+  save_plot(qc_violin_plot(pre_qc_merged, suggested_cutoffs, "Unfiltered cells — suggested starting cutoffs"), "00_qc_pre_filter_violin.png", 14, 5)
+  save_plot(qc_scatter_plot(pre_qc_merged, suggested_cutoffs, "Unfiltered cells — suggested starting cutoffs"), "00_qc_pre_filter_scatter.png", 12, 5)
   # A single processed Seurat object can be continued without rebuilding its
   # existing embedding. Preserve a project-local copy only when both UMAP and
   # clusters were detected; source data remain read-only and unchanged.
@@ -578,8 +667,9 @@ utils::write.table(qc_by_sample, file.path(tables_dir, "qc_summary_by_sample.tsv
 save_plot <- function(plot, file, width = 9, height = 6) ggplot2::ggsave(file.path(figures_dir, file), plot = plot, width = width, height = height, dpi = 160)
 qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
 DefaultAssay(qc_merged) <- "RNA"
-save_plot(qc_violin_plot(qc_merged), "01_qc_violin.png", 14, 5)
-save_plot(qc_scatter_plot(qc_merged), "02_qc_scatter.png", 12, 5)
+applied_cutoffs <- list(min_features = params$min_features, min_counts = params$min_counts, max_features = params$max_features, max_percent_mt = params$max_percent_mt)
+save_plot(qc_violin_plot(qc_merged, applied_cutoffs, "Retained cells — applied QC cutoffs"), "01_qc_violin.png", 14, 5)
+save_plot(qc_scatter_plot(qc_merged, applied_cutoffs, "Retained cells — applied QC cutoffs"), "02_qc_scatter.png", 12, 5)
 if (any(is.finite(doublet_calls$doublet_score))) {
   doublet_plot <- ggplot2::ggplot(doublet_calls[is.finite(doublet_calls$doublet_score), , drop = FALSE], ggplot2::aes(x = doublet_score)) +
     ggplot2::geom_histogram(bins = 40, fill = jpplot_colors[[7]], color = "white") +

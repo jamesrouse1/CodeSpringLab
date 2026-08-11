@@ -47,10 +47,17 @@ stopifnot(status == 0L)
 expected <- c(
   "_COMPLETE", "_STAGE_PREPROCESS_COMPLETE", "_STAGE_CLUSTER_COMPLETE",
   "figures/02_preintegration_umap_sample.png", "figures/02_preintegration_umap_batch.png",
-  "tables/preintegration_umap_coordinates.tsv", "tables/umap_coordinates.tsv",
+  "tables/preintegration_umap_coordinates.tsv", "tables/umap_coordinates.tsv", "tables/qc_recommended_thresholds.tsv",
   "objects/processed_seurat.rds"
 )
 stopifnot(all(file.exists(file.path(out, expected))))
+qc_recommended <- utils::read.delim(file.path(out, "tables", "qc_recommended_thresholds.tsv"), check.names = FALSE)
+stopifnot(
+  NROW(qc_recommended) == 4L,
+  identical(qc_recommended$sample_id[[1]], "Recommended global"),
+  all(c("min_features", "min_counts", "max_features", "max_percent_mt", "recommendation_basis") %in% names(qc_recommended)),
+  all(qc_recommended$max_percent_mt >= 5 & qc_recommended$max_percent_mt <= 50)
+)
 pre <- utils::read.delim(file.path(out, "tables", "preintegration_umap_coordinates.tsv"), check.names = FALSE)
 final <- utils::read.delim(file.path(out, "tables", "umap_coordinates.tsv"), check.names = FALSE)
 stopifnot(NROW(pre) == 360L, NROW(final) == 360L, all(c("sample_id", "technical_batch") %in% names(pre)))

@@ -136,6 +136,14 @@ filtering. The mitochondrial axes in QC figures alone use the 99th percentile,
 with a 50% maximum display limit, so extreme droplets do not compress the
 visible distribution.
 
+Input inspection writes editable QC starting values for each sample. Lower and
+upper outliers are estimated with three median absolute deviations (3 MAD),
+using log-transformed total counts and detected genes and the original scale for
+mitochondrial percentage. The shared app defaults use the most permissive
+sample-specific values to reduce the risk of discarding an entire lower-RNA or
+higher-mitochondrial population. These remain suggestions: the unfiltered plots,
+sample biology, and retained-cell counts should be reviewed before QC is run.
+
 For annotation, use either:
 
 - a marker file with `cell_type` and `gene` columns; or
