@@ -31,8 +31,10 @@ passed to `cellranger count --sample`; the app infers it when one prefix is foun
 Starting `./run_codespringweb.sh` only starts the lightweight web interface;
 it does **not** load Scanpy or Seurat into the app process. Each scRNA run is
 submitted as a SLURM job and the selected engine is passed explicitly to its
-job wrapper. The wrapper loads the standard cluster R module for Seurat or the
-standard Anaconda module for Scanpy only inside that compute job.
+job wrapper. The wrapper loads the versioned cluster Seurat module for Seurat
+jobs or the shared versioned container for Scanpy only inside that compute
+job. Seurat jobs ignore personal R startup files and user libraries so older
+packages cannot override the compatible packages in the tested module.
 
 The job checks essential packages before loading a large object, so a missing
 cluster dependency is reported promptly in the job log.

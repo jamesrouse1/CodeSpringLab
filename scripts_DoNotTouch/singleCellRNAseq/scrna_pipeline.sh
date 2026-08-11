@@ -5,13 +5,15 @@ set -euo pipefail
 # from a clean SLURM batch environment.
 export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
-# Arguments: engine samples.tsv output_dir params.tsv [stage] [scanpy_container.sif]
+# Arguments: engine samples.tsv output_dir params.tsv [stage]
+#            [scanpy_container.sif] [seurat_container.sif]
 engine="$1"
 samples="$2"
 out_dir="$3"
 params="$4"
 stage="${5:-all}"
 scanpy_container_path="${6:-${CSL_SCANPY_SIF:-}}"
+seurat_container_path="${7:-${CSL_SEURAT_SIF:-}}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # This script is executed as a new shell by the SLURM wrapper. Shell functions
@@ -40,6 +42,60 @@ require_executable() {
     echo "ERROR: The requested $label runtime is not executable: $executable" >&2
     exit 2
   fi
+}
+
+load_seurat_runtime() {
+  # Use the cluster-maintained Seurat stack instead of a bare R module. The
+  # latter provides R itself but does not install Seurat. Purging first also
+  # prevents an older EasyBuild toolchain from being mixed with EB5 modules.
+  local seurat_module="${CSL_SEURAT_MODULE:-Seurat/5.4.0-foss-2024a-R-4.4.2}"
+  module purge >/dev/null 2>&1 || true
+  if ! module load EB5Modules >/dev/null 2>&1; then
+    echo "ERROR: Could not load the cluster EB5Modules environment required by $seurat_module." >&2
+    return 2
+  fi
+  if ! module load "$seurat_module" >/dev/null 2>&1; then
+    echo "ERROR: Could not load the cluster Seurat runtime: $seurat_module" >&2
+    return 2
+  fi
+
+  # A user's older R packages can otherwise shadow compatible packages from
+  # the tested module (for example, an old parallelly can prevent SeuratObject
+  # from loading). These settings affect only this submitted CodeSpring job.
+  export R_LIBS_USER="${CSL_R_LIBS_USER:-$out_dir/.codespring_unused_user_library}"
+  export R_ENVIRON_USER="${CSL_R_ENVIRON_USER:-/dev/null}"
+  export R_PROFILE_USER="${CSL_R_PROFILE_USER:-/dev/null}"
+}
+
+run_seurat_r() {
+  local default_container="$script_dir/containers/codespring-seurat_1.0.0.sif"
+  local container="${seurat_container_path:-$default_container}"
+  if [[ -r "$container" ]]; then
+    module load EBModules >/dev/null 2>&1 || true
+    module load singularity/3.6.3 >/dev/null 2>&1 || true
+    local singularity_executable
+    singularity_executable="$(command -v singularity || true)"
+    require_executable "$singularity_executable" "Seurat Singularity"
+    local -a bind_args=()
+    local bind_arg
+    while IFS= read -r bind_arg; do
+      bind_args+=("$bind_arg")
+    done < <(scanpy_bind_args)
+    echo "Seurat container ready: $(basename "$container")"
+    SINGULARITYENV_TMPDIR="${TMPDIR:-$out_dir/tmp}" \
+      SINGULARITYENV_R_ENVIRON_USER=/dev/null \
+      SINGULARITYENV_R_PROFILE_USER=/dev/null \
+      "$singularity_executable" exec --cleanenv "${bind_args[@]}" "$container" Rscript "$@"
+    return
+  fi
+
+  # Keep the official cluster module as a functional fallback during initial
+  # deployment or planned container maintenance.
+  load_seurat_runtime
+  local runtime_executable
+  runtime_executable="$(command -v Rscript || true)"
+  require_executable "$runtime_executable" "Seurat Rscript"
+  "$runtime_executable" "$@"
 }
 
 scanpy_container() {
@@ -85,23 +141,15 @@ scanpy_bind_args() {
 
 engine="$(printf '%s' "$engine" | tr '[:upper:]' '[:lower:]')"
 if [[ "$stage" == "pathway" ]]; then
-  module load EBModules 2>/dev/null || true
-  module load R/4.3.2-gfbf-2023a 2>/dev/null || true
-  runtime_executable="$(command -v Rscript || true)"
-  require_executable "$runtime_executable" "pathway-analysis Rscript"
-  "$runtime_executable" "$script_dir/scrna_pathway_fgsea.R" "$out_dir" "$params"
+  run_seurat_r -e 'for (pkg in c("fgsea", "ggplot2")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
+  run_seurat_r "$script_dir/scrna_pathway_fgsea.R" "$out_dir" "$params"
   printf 'complete\n' > "$out_dir/_STAGE_PATHWAY_COMPLETE"
   exit 0
 fi
 case "$engine" in
   seurat)
-    # Match CodeSpringLab's portable module setup before using R.
-    module load EBModules 2>/dev/null || true
-    module load R/4.3.2-gfbf-2023a 2>/dev/null || true
-    runtime_executable="$(command -v Rscript || true)"
-    require_executable "$runtime_executable" "Seurat Rscript"
-    "$runtime_executable" -e 'for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
-    "$runtime_executable" "$script_dir/scrna_pipeline_seurat.R" "$samples" "$out_dir" "$params" "$stage"
+    run_seurat_r -e 'for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
+    run_seurat_r "$script_dir/scrna_pipeline_seurat.R" "$samples" "$out_dir" "$params" "$stage"
     ;;
   scanpy)
     module load EBModules 2>/dev/null || true
@@ -132,10 +180,7 @@ case "$engine" in
 esac
 
 if [[ "$stage" == "differential" ]]; then
-  module load EBModules 2>/dev/null || true
-  module load R/4.3.2-gfbf-2023a 2>/dev/null || true
-  runtime_executable="$(command -v Rscript || true)"
-  require_executable "$runtime_executable" "pseudobulk DESeq2 Rscript"
-  "$runtime_executable" "$script_dir/scrna_pseudobulk_deseq2.R" "$out_dir" "$params"
+  run_seurat_r -e 'if (!requireNamespace("DESeq2", quietly=TRUE)) stop("Missing R package: DESeq2")'
+  run_seurat_r "$script_dir/scrna_pseudobulk_deseq2.R" "$out_dir" "$params"
   printf 'complete\n' > "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE"
 fi

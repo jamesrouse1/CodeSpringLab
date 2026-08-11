@@ -38,6 +38,7 @@ out_dir="$4"
 params="$5"
 stage="${6:-all}"
 scanpy_container="${7:-}"
+seurat_container="${8:-}"
 
 mkdir -p "$out_dir"
 # Keep large R/Python temporary files in project storage, not a shared node
@@ -74,7 +75,7 @@ if [[ ! -x "$runner" ]]; then
   echo "ERROR: scRNA-seq runner is missing or not executable: $runner" >&2
   exit 2
 fi
-"$runner" "$engine" "$samples" "$out_dir" "$params" "$stage" "$scanpy_container"
+"$runner" "$engine" "$samples" "$out_dir" "$params" "$stage" "$scanpy_container" "$seurat_container"
 # Preserve job-local temporary files on failure for diagnosis, but remove them
 # after a successful run so a completed large analysis does not leave a second
 # copy of its intermediate data in the project results directory.
