@@ -5,15 +5,13 @@ set -euo pipefail
 # from a clean SLURM batch environment.
 export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
-# Arguments: engine samples.tsv output_dir params.tsv [stage]
-#            [scanpy_container.sif] [seurat_container.sif]
+# Arguments: engine samples.tsv output_dir params.tsv [stage] [scanpy_container.sif]
 engine="$1"
 samples="$2"
 out_dir="$3"
 params="$4"
 stage="${5:-all}"
 scanpy_container_path="${6:-${CSL_SCANPY_SIF:-}}"
-seurat_container_path="${7:-${CSL_SEURAT_SIF:-}}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # This script is executed as a new shell by the SLURM wrapper. Shell functions
@@ -68,29 +66,6 @@ load_seurat_runtime() {
 }
 
 run_seurat_r() {
-  local default_container="$script_dir/containers/codespring-seurat_1.0.0.sif"
-  local container="${seurat_container_path:-$default_container}"
-  if [[ -r "$container" ]]; then
-    module load EBModules >/dev/null 2>&1 || true
-    module load singularity/3.6.3 >/dev/null 2>&1 || true
-    local singularity_executable
-    singularity_executable="$(command -v singularity || true)"
-    require_executable "$singularity_executable" "Seurat Singularity"
-    local -a bind_args=()
-    local bind_arg
-    while IFS= read -r bind_arg; do
-      bind_args+=("$bind_arg")
-    done < <(scanpy_bind_args)
-    echo "Seurat container ready: $(basename "$container")"
-    SINGULARITYENV_TMPDIR="${TMPDIR:-$out_dir/tmp}" \
-      SINGULARITYENV_R_ENVIRON_USER=/dev/null \
-      SINGULARITYENV_R_PROFILE_USER=/dev/null \
-      "$singularity_executable" exec --cleanenv "${bind_args[@]}" "$container" Rscript "$@"
-    return
-  fi
-
-  # Keep the official cluster module as a functional fallback during initial
-  # deployment or planned container maintenance.
   load_seurat_runtime
   local runtime_executable
   runtime_executable="$(command -v Rscript || true)"
