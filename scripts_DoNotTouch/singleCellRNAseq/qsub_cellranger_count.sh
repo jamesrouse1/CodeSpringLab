@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cellranger
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=96G
 #SBATCH --time=2-00:00:00
 #SBATCH --export=NONE
 
@@ -22,7 +22,15 @@ if ! type module >/dev/null 2>&1; then
     fi
   done
 fi
-runner="${7:-}"
+stage_parent="${7:-}"
+runner="${8:-}"
+# Backward compatibility for direct calls that used argument 7 for the runner
+# before a separate staging filesystem became configurable.
+if [[ -z "$runner" && -s "$stage_parent" ]]; then
+  runner="$stage_parent"
+  stage_parent="$5"
+fi
 [[ -s "$runner" ]] || { echo "ERROR: Cell Ranger runner was not found: $runner" >&2; exit 2; }
-export CELLRANGER_LOCALMEM_GB=60
-exec bash "$runner" "$1" "$2" "$3" "$4" "$5" "$6"
+export CELLRANGER_LOCALMEM_GB=90
+export CELLRANGER_MIN_FREE_GB="${CELLRANGER_MIN_FREE_GB:-150}"
+exec bash "$runner" "$1" "$2" "$3" "$4" "$5" "$6" "$stage_parent"
