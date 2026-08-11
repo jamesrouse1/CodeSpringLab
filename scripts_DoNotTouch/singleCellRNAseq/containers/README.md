@@ -34,7 +34,9 @@ By default this installs the completed, tested image at:
 The job builds to a temporary filename, runs the definition's `%test` section,
 prints the installed Seurat, DESeq2, and fgsea versions, and only then moves the
 read-only image to its final name. It also records a SHA-256 checksum and
-refuses to overwrite an existing version.
+refuses to overwrite an existing version. It uses local fakeroot when the HPC
+account has subordinate-user mappings; otherwise it uses the configured Sylabs
+remote builder. A remote build requires a one-time `singularity remote login`.
 
 If the cluster does not permit `--fakeroot`, build the image in a CI runner or
 ask the cluster administrator to build this single SIF from the supplied

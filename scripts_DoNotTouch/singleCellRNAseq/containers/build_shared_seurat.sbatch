@@ -31,7 +31,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-singularity build --fakeroot "$building" "$definition"
+if grep -q "^${USER}:" /etc/subuid 2>/dev/null && grep -q "^${USER}:" /etc/subgid 2>/dev/null; then
+  echo "Building with the cluster's local fakeroot configuration."
+  singularity build --fakeroot "$building" "$definition"
+else
+  echo "No local fakeroot mapping is configured for ${USER}; using the configured Sylabs remote builder."
+  if ! singularity remote get-login-password >/dev/null 2>&1; then
+    echo "ERROR: Singularity remote-build credentials are unavailable. Run 'singularity remote login' once, then resubmit this job." >&2
+    exit 2
+  fi
+  singularity build --remote "$building" "$definition"
+fi
 singularity test "$building"
 singularity exec --cleanenv "$building" Rscript -e 'cat("Seurat", as.character(packageVersion("Seurat")), "\n"); cat("DESeq2", as.character(packageVersion("DESeq2")), "\n"); cat("fgsea", as.character(packageVersion("fgsea")), "\n")'
 chmod 444 "$building"
