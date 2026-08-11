@@ -32,10 +32,12 @@ suppressPackageStartupMessages(library(Seurat))
 # failures and can duplicate the full expression matrix in memory.
 if (requireNamespace("future", quietly = TRUE)) {
   future::plan("sequential")
-  # SCTransform still validates globals under a sequential plan. Large RDS
-  # inputs can legitimately exceed the interactive 500 MiB default without
-  # transferring data to another worker, so raise only this job-local ceiling.
-  options(future.globals.maxSize = 8 * 1024^3)
+  # Seurat's integration helpers still inventory future globals under a
+  # sequential plan. For large inputs, the same object can be counted once as
+  # object.list and again inside FUN even though it is not exported to another
+  # process. Disable that validation ceiling only for this sequential job; this
+  # does not create workers or duplicate the expression matrix in worker RAM.
+  options(future.globals.maxSize = Inf)
 }
 
 `%||%` <- function(x, y) if (is.null(x) || !length(x) || (length(x) == 1L && is.na(x))) y else x
