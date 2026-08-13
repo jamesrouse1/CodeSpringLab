@@ -842,6 +842,20 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
                          metric = params$umap_metric,
                          seed.use = params$seed, verbose = FALSE)
   obj$cluster <- as.character(Seurat::Idents(obj))
+  # Publish the final/integrated embedding immediately after clustering so it
+  # is visible in both Run Pipeline and the interactive Results Explorer. Cell
+  # type annotations can be joined later without recomputing the coordinates.
+  save_plot(categorical_dimplot(obj, reduction = "umap", group.by = "cluster", label = TRUE, repel = TRUE), "04_umap_clusters_pre_annotation.png", 8, 6)
+  if (length(unique(as.character(obj$sample_id))) > 1L) {
+    save_plot(categorical_dimplot(obj, reduction = "umap", group.by = "sample_id", shuffle = TRUE), "04_umap_samples_pre_annotation.png", 8, 6)
+  }
+  cluster_umap <- as.data.frame(Seurat::Embeddings(obj, reduction = "umap"), check.names = FALSE)
+  colnames(cluster_umap)[seq_len(min(2L, NCOL(cluster_umap)))] <- c("UMAP_1", "UMAP_2")[seq_len(min(2L, NCOL(cluster_umap)))]
+  if (!all(c("UMAP_1", "UMAP_2") %in% names(cluster_umap))) stop("The final UMAP does not contain two coordinates.")
+  cluster_metadata <- obj@meta.data
+  if ("cell" %in% names(cluster_metadata)) names(cluster_metadata)[names(cluster_metadata) == "cell"] <- "input_cell"
+  cluster_umap_table <- data.frame(cell = rownames(cluster_umap), cluster_umap[, c("UMAP_1", "UMAP_2"), drop = FALSE], cluster_metadata, check.names = FALSE)
+  utils::write.table(cluster_umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   saveRDS(list(object = obj, integration = integration, samples = samples, doublet_summary = doublet_summary), checkpoint_path("04_clustered"))
   stage_marker("cluster")
   if (identical(stage, "cluster")) quit(save = "no", status = 0L)
