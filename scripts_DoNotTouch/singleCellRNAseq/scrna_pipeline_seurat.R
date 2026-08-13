@@ -982,7 +982,14 @@ apply_reference_annotation <- function(obj, path, annotation_name, label_column 
   reference <- loaded$object
   label_column <- trimws(as.character(label_column %||% ""))
   reference_labels <- if (nzchar(label_column)) {
-    if (!label_column %in% colnames(reference@meta.data)) stop("Reference label column was not found: ", label_column)
+    if (!label_column %in% colnames(reference@meta.data)) {
+      available <- colnames(reference@meta.data)
+      stop(
+        "Reference label column was not found: ", label_column, ". ",
+        "Leave the label selection on Active identities or choose a column reported by Inspect reference. ",
+        "Available metadata columns: ", if (length(available)) paste(available, collapse = ", ") else "none"
+      )
+    }
     as.character(reference[[label_column]][, 1])
   } else {
     as.character(Seurat::Idents(reference))

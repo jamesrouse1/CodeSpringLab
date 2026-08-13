@@ -78,6 +78,16 @@ NicheData10x <- RunPCA(NicheData10x, npcs = 8L, verbose = FALSE)
 Idents(NicheData10x) <- factor(rep(c("Reference A", "Reference B"), each = 40L))
 reference_file <- file.path(work, "NicheData10x.rda")
 save(NicheData10x, file = reference_file)
+reference_choices_file <- file.path(work, "reference_label_choices.tsv")
+inspection_script <- file.path(repo, "scripts_DoNotTouch", "singleCellRNAseq", "inspect_seurat_reference.R")
+inspection_status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(inspection_script, reference_file, reference_choices_file)))
+stopifnot(inspection_status == 0L, file.exists(reference_choices_file))
+reference_choices <- utils::read.delim(reference_choices_file, check.names = FALSE, stringsAsFactors = FALSE)
+stopifnot(
+  NROW(reference_choices) >= 1L,
+  identical(reference_choices$source[[1]], "Active identities"),
+  reference_choices$label_count[[1]] == 2L
+)
 utils::write.table(
   data.frame(
     key = c("normalization", "integration", "n_pcs", "min_features", "min_cells_per_gene", "doublet_method", "annotation_name", "reference_file", "reference_label_column"),
