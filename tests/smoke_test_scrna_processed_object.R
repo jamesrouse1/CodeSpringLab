@@ -63,4 +63,36 @@ stopifnot(
   file.exists(file.path(output, "tables", "marker_ortholog_mapping.tsv")),
   all(utils::read.delim(file.path(output, "tables", "marker_ortholog_mapping.tsv"))$status == "mapped")
 )
+
+# A saved .rda reference, including the large Baccin-style distribution
+# format, can be used directly for normalized-RNA anchor label transfer.
+reference_counts <- counts
+reference_counts[9:30, 1:40] <- reference_counts[9:30, 1:40] + 4L
+reference_counts[31:52, 41:80] <- reference_counts[31:52, 41:80] + 4L
+colnames(reference_counts) <- paste0("reference_cell", seq_len(ncol(reference_counts)))
+NicheData10x <- CreateSeuratObject(reference_counts)
+NicheData10x <- NormalizeData(NicheData10x, verbose = FALSE)
+NicheData10x <- FindVariableFeatures(NicheData10x, nfeatures = 120L, verbose = FALSE)
+NicheData10x <- ScaleData(NicheData10x, verbose = FALSE)
+NicheData10x <- RunPCA(NicheData10x, npcs = 8L, verbose = FALSE)
+Idents(NicheData10x) <- factor(rep(c("Reference A", "Reference B"), each = 40L))
+reference_file <- file.path(work, "NicheData10x.rda")
+save(NicheData10x, file = reference_file)
+utils::write.table(
+  data.frame(
+    key = c("normalization", "integration", "n_pcs", "min_features", "min_cells_per_gene", "doublet_method", "annotation_name", "reference_file", "reference_label_column"),
+    value = c("lognormalize", "none", "8", "0", "1", "none", "baccin_cell_type", reference_file, "")
+  ),
+  params, sep = "\t", row.names = FALSE, quote = FALSE
+)
+run("annotate")
+transferred <- readRDS(file.path(output, "objects", "processed_seurat.rds"))
+stopifnot(
+  "baccin_cell_type" %in% colnames(transferred@meta.data),
+  "baccin_cell_type_prediction_score" %in% colnames(transferred@meta.data),
+  all(is.finite(transferred$baccin_cell_type_prediction_score)),
+  file.exists(file.path(output, "tables", "reference_transfer_per_cell__baccin_cell_type.tsv")),
+  file.exists(file.path(output, "tables", "reference_transfer_label_summary__baccin_cell_type.tsv")),
+  file.exists(file.path(output, "tables", "reference_transfer_audit__baccin_cell_type.tsv"))
+)
 message("Processed Seurat object continuation smoke test passed.")

@@ -148,6 +148,8 @@ read_params <- function(path) {
     remove_doublets = get_bool("remove_doublets", TRUE),
     marker_file = get("marker_file", ""),
     celltype_file = get("celltype_file", ""),
+    reference_file = get("reference_file", ""),
+    reference_label_column = get("reference_label_column", ""),
     marker_species = tolower(get("marker_species", "same")),
     marker_ortholog_file = get("marker_ortholog_file", ""),
     annotation_name = get("annotation_name", "cell_type"),
@@ -942,6 +944,117 @@ apply_marker_annotation <- function(obj, path, annotation_name) {
   obj
 }
 
+load_seurat_reference <- function(path) {
+  extension <- tolower(tools::file_ext(path))
+  if (identical(extension, "rds")) {
+    reference <- readRDS(path)
+    source_name <- basename(path)
+  } else if (identical(extension, "rda")) {
+    reference_environment <- new.env(parent = emptyenv())
+    loaded_names <- load(path, envir = reference_environment)
+    seurat_names <- loaded_names[vapply(loaded_names, function(name) inherits(reference_environment[[name]], "Seurat"), logical(1))]
+    if (!length(seurat_names)) stop("The .rda file does not contain a Seurat object.")
+    if (length(seurat_names) > 1L) message("The reference .rda contains multiple Seurat objects; using: ", seurat_names[[1]])
+    source_name <- seurat_names[[1]]
+    reference <- reference_environment[[source_name]]
+  } else {
+    stop("Seurat reference transfer accepts only .rda or .rds files.")
+  }
+  if (!inherits(reference, "Seurat")) stop("The selected reference is not a Seurat object; detected class: ", paste(class(reference), collapse = ", "))
+  list(object = SeuratObject::UpdateSeuratObject(reference), source_name = source_name)
+}
+
+ensure_log_normalized_rna <- function(object, label) {
+  if (!"RNA" %in% names(object@assays)) stop(label, " does not contain an RNA assay required for reference transfer.")
+  object <- SeuratObject::JoinLayers(object, assay = "RNA")
+  DefaultAssay(object) <- "RNA"
+  layers <- assay_layers_safe(object, "RNA")
+  if (!"data" %in% layers) {
+    if (!"counts" %in% layers) stop(label, " RNA assay has neither a normalized data layer nor a counts layer.")
+    object <- Seurat::NormalizeData(object, assay = "RNA", normalization.method = "LogNormalize", verbose = FALSE)
+  }
+  object
+}
+
+apply_reference_annotation <- function(obj, path, annotation_name, label_column = "") {
+  if (!file.exists(path)) stop("Seurat reference file was not found: ", path)
+  loaded <- load_seurat_reference(path)
+  reference <- loaded$object
+  label_column <- trimws(as.character(label_column %||% ""))
+  reference_labels <- if (nzchar(label_column)) {
+    if (!label_column %in% colnames(reference@meta.data)) stop("Reference label column was not found: ", label_column)
+    as.character(reference[[label_column]][, 1])
+  } else {
+    as.character(Seurat::Idents(reference))
+  }
+  names(reference_labels) <- colnames(reference)
+  valid_labels <- !is.na(reference_labels) & nzchar(trimws(reference_labels))
+  if (!all(valid_labels)) {
+    reference <- subset(reference, cells = names(reference_labels)[valid_labels])
+    reference_labels <- reference_labels[valid_labels]
+  }
+  if (ncol(reference) < 20L || length(unique(reference_labels)) < 2L) stop("Reference transfer needs at least 20 labeled cells spanning at least two labels.")
+  reference <- ensure_log_normalized_rna(reference, "Reference")
+  obj <- ensure_log_normalized_rna(obj, "Query")
+
+  reduction_name <- "pca"
+  usable_pca <- reduction_name %in% names(reference@reductions) &&
+    ncol(Seurat::Embeddings(reference, reduction = reduction_name)) >= 5L &&
+    identical(reference[[reduction_name]]@assay.used, "RNA")
+  if (!usable_pca) {
+    reference <- Seurat::FindVariableFeatures(reference, assay = "RNA", selection.method = "vst", nfeatures = 3000, verbose = FALSE)
+    variable_genes <- intersect(Seurat::VariableFeatures(reference, assay = "RNA"), rownames(reference))
+    if (length(variable_genes) < 50L) stop("The reference has too few variable RNA genes for label transfer.")
+    reference <- Seurat::ScaleData(reference, assay = "RNA", features = variable_genes, verbose = FALSE)
+    reference <- Seurat::RunPCA(reference, assay = "RNA", features = variable_genes, npcs = min(50L, params$n_pcs), reduction.name = "codespring_reference_pca", verbose = FALSE)
+    reduction_name <- "codespring_reference_pca"
+  }
+  transfer_features <- intersect(Seurat::VariableFeatures(reference, assay = "RNA"), rownames(obj))
+  if (length(transfer_features) < 50L) {
+    transfer_features <- intersect(rownames(reference), rownames(obj))
+    transfer_features <- utils::head(transfer_features, 3000L)
+  }
+  if (length(transfer_features) < 50L) stop("Reference and query share too few RNA genes for reliable label transfer (", length(transfer_features), " shared).")
+  available_pcs <- ncol(Seurat::Embeddings(reference, reduction = reduction_name))
+  dims <- seq_len(min(30L, params$n_pcs, available_pcs))
+  if (length(dims) < 5L) stop("Reference PCA has fewer than five usable dimensions.")
+  message("Transferring ", length(unique(reference_labels)), " reference labels using ", length(transfer_features), " shared RNA features and ", length(dims), " PCs.")
+  anchors <- Seurat::FindTransferAnchors(
+    reference = reference,
+    query = obj,
+    normalization.method = "LogNormalize",
+    reference.assay = "RNA",
+    query.assay = "RNA",
+    reference.reduction = reduction_name,
+    features = transfer_features,
+    dims = dims,
+    verbose = FALSE
+  )
+  predictions <- Seurat::TransferData(anchorset = anchors, refdata = reference_labels, dims = dims, verbose = FALSE)
+  labels <- as.character(predictions$predicted.id)
+  scores <- as.numeric(predictions$prediction.score.max)
+  names(labels) <- rownames(predictions); names(scores) <- rownames(predictions)
+  labels <- labels[colnames(obj)]; scores <- scores[colnames(obj)]
+  if (any(is.na(labels) | !nzchar(labels))) stop("Reference transfer did not return a label for every query cell.")
+  score_column <- paste0(annotation_name, "_prediction_score")
+  obj[[annotation_name]] <- unname(labels)
+  obj[[score_column]] <- unname(scores)
+  obj[[paste0("annotation_source__", annotation_name)]] <- "Seurat RNA anchor label transfer"
+  obj$annotation_source <- paste0("Seurat RNA anchor label transfer (", annotation_name, ")")
+  per_cell <- data.frame(cell = colnames(obj), transferred_label = unname(labels), prediction_score_max = unname(scores), stringsAsFactors = FALSE)
+  names(per_cell)[[2]] <- annotation_name
+  utils::write.table(per_cell, file.path(tables_dir, paste0("reference_transfer_per_cell__", annotation_name, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
+  score_groups <- split(unname(scores), unname(labels))
+  label_summary <- do.call(rbind, lapply(names(score_groups), function(label) {
+    values <- score_groups[[label]]
+    data.frame(label = label, cells = length(values), median_score = stats::median(values), mean_score = mean(values), stringsAsFactors = FALSE)
+  }))
+  utils::write.table(label_summary, file.path(tables_dir, paste0("reference_transfer_label_summary__", annotation_name, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
+  audit <- data.frame(reference_file = normalizePath(path, winslash = "/", mustWork = TRUE), reference_object = loaded$source_name, label_source = if (nzchar(label_column)) label_column else "active identities", reference_cells = ncol(reference), reference_labels = length(unique(reference_labels)), query_cells = ncol(obj), shared_features_used = length(transfer_features), pcs_used = length(dims), stringsAsFactors = FALSE)
+  utils::write.table(audit, file.path(tables_dir, paste0("reference_transfer_audit__", annotation_name, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
+  obj
+}
+
 apply_existing_annotation <- function(obj) {
   candidates <- c("cell_type", "celltype", "CellType", "annotation", "annotated_cell_type", "predicted.celltype")
   candidates <- candidates[candidates %in% colnames(obj@meta.data)]
@@ -966,7 +1079,9 @@ annotation_name <- safe_metadata_name(params$annotation_name)
 rna_layers <- assay_layers_safe(obj, "RNA")
 if (any(grepl("^(counts|data)\\.", rna_layers))) obj <- SeuratObject::JoinLayers(obj, assay = "RNA")
 message("Annotation input loaded: ", ncol(obj), " cells; reductions: ", paste(names(obj@reductions), collapse = ", "))
-if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "none")) {
+if (nzchar(params$reference_file) && !identical(tolower(params$reference_file), "none")) {
+  obj <- apply_reference_annotation(obj, params$reference_file, annotation_name, params$reference_label_column)
+} else if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "none")) {
   obj <- apply_celltype_mapping(obj, params$celltype_file, annotation_name)
 } else if (nzchar(params$marker_file) && !identical(tolower(params$marker_file), "none")) {
   obj <- apply_marker_annotation(obj, params$marker_file, annotation_name)
