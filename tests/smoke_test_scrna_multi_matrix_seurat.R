@@ -60,7 +60,7 @@ stopifnot(
 )
 pre <- utils::read.delim(file.path(out, "tables", "preintegration_umap_coordinates.tsv"), check.names = FALSE)
 final <- utils::read.delim(file.path(out, "tables", "umap_coordinates.tsv"), check.names = FALSE)
-stopifnot(NROW(pre) == 360L, NROW(final) == 360L, all(c("sample_id", "technical_batch") %in% names(pre)))
+stopifnot(NROW(pre) == 360L, NROW(final) == 360L, all(c("sample_id", "condition", "technical_batch") %in% names(pre)))
 doublets <- utils::read.delim(file.path(out, "tables", "doublet_summary_by_capture.tsv"), check.names = FALSE)
 stopifnot(NROW(doublets) == 2L, identical(sort(doublets$capture_id), c("capture_1", "capture_2")), is.na(doublets$expected_doublet_rate[doublets$capture_id == "capture_1"]))
 obj <- readRDS(file.path(out, "objects", "processed_seurat.rds"))

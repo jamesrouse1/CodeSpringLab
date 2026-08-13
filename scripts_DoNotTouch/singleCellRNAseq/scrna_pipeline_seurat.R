@@ -750,9 +750,11 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
     save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = params$batch_column, shuffle = TRUE), "02_preintegration_umap_batch.png", 8, 6)
   }
   pre_coords <- as.data.frame(Seurat::Embeddings(unintegrated, "umap.unintegrated"))
-  names(pre_coords)[1:2] <- c("UMAP_1", "UMAP_2"); pre_coords$cell <- rownames(pre_coords); pre_coords$sample_id <- as.character(unintegrated$sample_id)
-  if (nzchar(params$batch_column) && params$batch_column %in% colnames(unintegrated@meta.data)) pre_coords[[params$batch_column]] <- as.character(unintegrated[[params$batch_column]][, 1])
-  utils::write.table(pre_coords[, c("cell", setdiff(names(pre_coords), "cell")), drop = FALSE], file.path(tables_dir, "preintegration_umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  names(pre_coords)[1:2] <- c("UMAP_1", "UMAP_2")
+  pre_metadata <- unintegrated@meta.data
+  if ("cell" %in% names(pre_metadata)) names(pre_metadata)[names(pre_metadata) == "cell"] <- "input_cell"
+  pre_table <- data.frame(cell = rownames(pre_coords), pre_coords[, c("UMAP_1", "UMAP_2"), drop = FALSE], pre_metadata, check.names = FALSE)
+  utils::write.table(pre_table, file.path(tables_dir, "preintegration_umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   rm(unintegrated); invisible(gc())
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("03_preprocessed"))
   stage_marker("preprocess")

@@ -1155,9 +1155,11 @@ def main():
         sc.tl.umap(adata, random_state=p["seed"])
         adata.obsm["X_umap_unintegrated"] = adata.obsm["X_umap"].copy()
         pre = pd.DataFrame(adata.obsm["X_umap_unintegrated"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])
-        pre.insert(0, "cell", pre.index.astype(str)); pre["sample_id"] = adata.obs["sample_id"].astype(str).values
-        if p["batch_column"] in adata.obs.columns:
-            pre[p["batch_column"]] = adata.obs[p["batch_column"]].astype(str).values
+        pre_metadata = adata.obs.copy()
+        if "cell" in pre_metadata.columns:
+            pre_metadata = pre_metadata.rename(columns={"cell": "input_cell"})
+        pre = pd.concat([pre, pre_metadata], axis=1)
+        pre.insert(0, "cell", pre.index.astype(str))
         pre.to_csv(tables / "preintegration_umap_coordinates.tsv", sep="\t", index=False)
         save_umap(adata, "sample_id", figures / "02_preintegration_umap_sample.png", title="Before integration — sample")
         if p["batch_column"] in adata.obs.columns and adata.obs[p["batch_column"]].astype(str).nunique() > 1 and p["batch_column"] != "sample_id":

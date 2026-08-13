@@ -66,7 +66,7 @@ try:
     pre = pd.read_csv(out / "tables/preintegration_umap_coordinates.tsv", sep="\t")
     final = pd.read_csv(out / "tables/umap_coordinates.tsv", sep="\t")
     assert len(pre) == len(final) == 240
-    assert {"sample_id", "technical_batch"}.issubset(pre.columns)
+    assert {"sample_id", "condition", "technical_batch"}.issubset(pre.columns)
     doublets = pd.read_csv(out / "tables/doublet_summary_by_capture.tsv", sep="\t")
     assert len(doublets) == 1 and doublets.loc[0, "capture_id"] == "capture_1"
     print("MULTI_MATRIX_SCANPY_HARMONY_OK")
