@@ -1151,8 +1151,8 @@ def main():
         # Diagnostic embedding before any technical-batch correction. Keep a
         # separate copy so the integrated UMAP cannot overwrite this view.
         pre_n_pcs = min(p["n_pcs"], adata.obsm["X_pca"].shape[1])
-        sc.pp.neighbors(adata, n_neighbors=min(15, max(2, adata.n_obs - 1)), n_pcs=pre_n_pcs, use_rep="X_pca")
-        sc.tl.umap(adata, random_state=p["seed"])
+        sc.pp.neighbors(adata, n_neighbors=min(p["n_neighbors"], max(2, adata.n_obs - 1)), n_pcs=pre_n_pcs, use_rep="X_pca", metric=p["umap_metric"])
+        sc.tl.umap(adata, min_dist=p["umap_min_dist"], spread=p["umap_spread"], init_pos=p["umap_init_pos"], random_state=p["seed"])
         adata.obsm["X_umap_unintegrated"] = adata.obsm["X_umap"].copy()
         pre = pd.DataFrame(adata.obsm["X_umap_unintegrated"][:, :2], index=adata.obs_names, columns=["UMAP_1", "UMAP_2"])
         pre_metadata = adata.obs.copy()

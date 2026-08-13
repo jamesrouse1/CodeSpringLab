@@ -132,6 +132,10 @@ read_params <- function(path) {
     batch_column = get("batch_column", "sample_id"),
     cluster_resolution = suppressWarnings(as.numeric(get("cluster_resolution", "0.6"))),
     n_pcs = suppressWarnings(as.integer(get("n_pcs", "30"))),
+    n_neighbors = suppressWarnings(as.integer(get("n_neighbors", "15"))),
+    umap_min_dist = suppressWarnings(as.numeric(get("umap_min_dist", "0.5"))),
+    umap_spread = suppressWarnings(as.numeric(get("umap_spread", "1"))),
+    umap_metric = tolower(get("umap_metric", "euclidean")),
     min_features = suppressWarnings(as.integer(get("min_features", "200"))),
     min_counts = suppressWarnings(as.integer(get("min_counts", "0"))),
     max_features = suppressWarnings(as.integer(get("max_features", "0"))),
@@ -169,6 +173,10 @@ if (!params$normalization %in% c("sct", "lognormalize")) stop("normalization mus
 if (!params$integration %in% c("auto", "none", "rpca", "cca", "harmony")) stop("integration must be auto, none, rpca, cca, or harmony")
 if (!is.finite(params$cluster_resolution) || params$cluster_resolution <= 0) params$cluster_resolution <- 0.6
 if (!is.finite(params$n_pcs) || params$n_pcs < 5) params$n_pcs <- 30L
+if (!is.finite(params$n_neighbors) || params$n_neighbors < 2L || params$n_neighbors > 200L) params$n_neighbors <- 15L
+if (!is.finite(params$umap_min_dist) || params$umap_min_dist < 0 || params$umap_min_dist > 2) params$umap_min_dist <- 0.5
+if (!is.finite(params$umap_spread) || params$umap_spread < 0.1 || params$umap_spread > 10) params$umap_spread <- 1
+if (!params$umap_metric %in% c("euclidean", "cosine", "manhattan", "correlation")) params$umap_metric <- "euclidean"
 if (!is.finite(params$min_features) || params$min_features < 0) params$min_features <- 200L
 if (!is.finite(params$min_counts) || params$min_counts < 0) params$min_counts <- 0L
 if (!is.finite(params$max_features) || params$max_features < 0) params$max_features <- 0L
@@ -743,8 +751,12 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   pre_npcs <- max(2L, min(params$n_pcs, ncol(unintegrated) - 1L, length(Seurat::VariableFeatures(unintegrated)) - 1L))
   unintegrated <- Seurat::RunPCA(unintegrated, features = Seurat::VariableFeatures(unintegrated), npcs = pre_npcs, verbose = FALSE)
   pre_dims <- seq_len(min(params$n_pcs, ncol(Seurat::Embeddings(unintegrated, "pca"))))
-  unintegrated <- Seurat::FindNeighbors(unintegrated, reduction = "pca", dims = pre_dims, verbose = FALSE)
-  unintegrated <- Seurat::RunUMAP(unintegrated, reduction = "pca", dims = pre_dims, reduction.name = "umap.unintegrated", seed.use = params$seed, verbose = FALSE)
+  pre_neighbors <- min(params$n_neighbors, max(2L, ncol(unintegrated) - 1L))
+  unintegrated <- Seurat::FindNeighbors(unintegrated, reduction = "pca", dims = pre_dims, k.param = pre_neighbors, verbose = FALSE)
+  unintegrated <- Seurat::RunUMAP(unintegrated, reduction = "pca", dims = pre_dims, reduction.name = "umap.unintegrated",
+                                  n.neighbors = pre_neighbors, min.dist = params$umap_min_dist, spread = params$umap_spread,
+                                  metric = params$umap_metric,
+                                  seed.use = params$seed, verbose = FALSE)
   save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = "sample_id", shuffle = TRUE), "02_preintegration_umap_sample.png", 8, 6)
   if (nzchar(params$batch_column) && params$batch_column %in% colnames(unintegrated@meta.data) && length(unique(as.character(unintegrated[[params$batch_column]][, 1]))) > 1L && !identical(params$batch_column, "sample_id")) {
     save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = params$batch_column, shuffle = TRUE), "02_preintegration_umap_batch.png", 8, 6)
@@ -822,9 +834,13 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   utils::write.table(data.frame(PC = seq_along(pca_variance), variance_explained = pca_variance, percent_variance_explained = 100 * pca_variance), file.path(tables_dir, "pca_variance_explained.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   variable_genes <- Seurat::VariableFeatures(obj)
   utils::write.table(data.frame(gene = variable_genes, highly_variable = TRUE), file.path(tables_dir, "highly_variable_genes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-  obj <- Seurat::FindNeighbors(obj, reduction = reduction_for_graph, dims = dims, verbose = FALSE)
+  graph_neighbors <- min(params$n_neighbors, max(2L, ncol(obj) - 1L))
+  obj <- Seurat::FindNeighbors(obj, reduction = reduction_for_graph, dims = dims, k.param = graph_neighbors, verbose = FALSE)
   obj <- Seurat::FindClusters(obj, resolution = params$cluster_resolution, verbose = FALSE)
-  obj <- Seurat::RunUMAP(obj, reduction = reduction_for_graph, dims = dims, seed.use = params$seed, verbose = FALSE)
+  obj <- Seurat::RunUMAP(obj, reduction = reduction_for_graph, dims = dims,
+                         n.neighbors = graph_neighbors, min.dist = params$umap_min_dist, spread = params$umap_spread,
+                         metric = params$umap_metric,
+                         seed.use = params$seed, verbose = FALSE)
   obj$cluster <- as.character(Seurat::Idents(obj))
   saveRDS(list(object = obj, integration = integration, samples = samples, doublet_summary = doublet_summary), checkpoint_path("04_clustered"))
   stage_marker("cluster")
