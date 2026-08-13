@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=64G
-#SBATCH --time=01:00:00
+#SBATCH --mem=16G
+#SBATCH --time=00:30:00
 #SBATCH --export=NONE
 
 set -euo pipefail
@@ -33,4 +33,7 @@ export R_LIBS_USER="${CSL_R_LIBS_USER:-$(dirname "$output_path")/.codespring_unu
 export R_ENVIRON_USER="${CSL_R_ENVIRON_USER:-/dev/null}"
 export R_PROFILE_USER="${CSL_R_PROFILE_USER:-/dev/null}"
 mkdir -p "$(dirname "$output_path")"
+printf 'Reference inspection started: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+printf 'Reference: %s\n' "$reference_path"
 Rscript "$runner" "$reference_path" "$output_path"
+printf 'Reference inspection finished: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"

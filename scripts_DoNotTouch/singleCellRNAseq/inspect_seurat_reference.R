@@ -4,6 +4,7 @@ if (length(args) != 2L) stop("Usage: inspect_seurat_reference.R reference.rda|rd
 reference_path <- args[[1]]
 output_path <- args[[2]]
 if (!file.exists(reference_path)) stop("Seurat reference file was not found: ", reference_path)
+message("Loading reference (", format(file.info(reference_path)$size / 1024^3, digits = 3), " GiB): ", reference_path)
 
 extension <- tolower(tools::file_ext(reference_path))
 if (identical(extension, "rds")) {
@@ -21,7 +22,18 @@ if (identical(extension, "rds")) {
 }
 
 if (!inherits(reference, "Seurat")) stop("The selected file is not a Seurat object.")
-reference <- SeuratObject::UpdateSeuratObject(reference)
+message("Reference loaded; reading identities and metadata without rewriting the object")
+
+# Inspection only needs cell labels. Updating a legacy Seurat object here can
+# traverse and rewrite every assay/reduction, which is both slow and unrelated
+# to listing labels. The annotation job performs any compatibility work it
+# actually needs later.
+metadata <- tryCatch(reference@meta.data, error = function(e) NULL)
+if (is.null(metadata) || !is.data.frame(metadata)) stop("The Seurat reference has no readable meta.data table.")
+active_ident <- tryCatch(reference@active.ident, error = function(e) NULL)
+if (is.null(active_ident) || length(active_ident) != nrow(metadata)) {
+  active_ident <- tryCatch(SeuratObject::Idents(reference), error = function(e) rep(NA_character_, nrow(metadata)))
+}
 
 summarize_labels <- function(values) {
   values <- trimws(as.character(values))
@@ -30,7 +42,7 @@ summarize_labels <- function(values) {
   list(labels = labels, non_missing = sum(valid), usable = sum(valid) >= 20L && length(labels) >= 2L && length(labels) <= 500L)
 }
 
-active <- summarize_labels(SeuratObject::Idents(reference))
+active <- summarize_labels(active_ident)
 rows <- list(data.frame(
   value = "",
   source = "Active identities",
@@ -40,8 +52,8 @@ rows <- list(data.frame(
   stringsAsFactors = FALSE
 ))
 
-for (column in colnames(reference@meta.data)) {
-  summary <- summarize_labels(reference@meta.data[[column]])
+for (column in colnames(metadata)) {
+  summary <- summarize_labels(metadata[[column]])
   if (!summary$usable) next
   rows[[length(rows) + 1L]] <- data.frame(
     value = column,
@@ -55,7 +67,7 @@ for (column in colnames(reference@meta.data)) {
 
 result <- do.call(rbind, rows)
 result$reference_object <- object_name
-result$reference_cells <- ncol(reference)
+result$reference_cells <- nrow(metadata)
 dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
 temporary <- paste0(output_path, ".tmp.", Sys.getpid())
 utils::write.table(result, temporary, sep = "\t", row.names = FALSE, quote = FALSE)
