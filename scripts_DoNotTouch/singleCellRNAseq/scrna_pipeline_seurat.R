@@ -1145,7 +1145,12 @@ apply_reference_annotation <- function(obj, path, annotation_name, label_column 
   available_pcs <- ncol(Seurat::Embeddings(reference, reduction = reduction_name))
   dims <- seq_len(min(30L, params$n_pcs, available_pcs))
   if (length(dims) < 5L) stop("Reference PCA has fewer than five usable dimensions.")
-  message("Transferring ", length(unique(reference_labels)), " reference labels using ", length(transfer_features), " shared RNA features and ", length(dims), " PCs.")
+  transfer_started <- Sys.time()
+  message(
+    "Phase 1/3: finding reference-query anchors for ", ncol(obj), " query cells using ",
+    length(transfer_features), " shared RNA features and ", length(dims), " PCs."
+  )
+  flush.console()
   anchors <- Seurat::FindTransferAnchors(
     reference = reference,
     query = obj,
@@ -1155,9 +1160,15 @@ apply_reference_annotation <- function(obj, path, annotation_name, label_column 
     reference.reduction = reduction_name,
     features = transfer_features,
     dims = dims,
-    verbose = FALSE
+    verbose = TRUE
   )
-  predictions <- Seurat::TransferData(anchorset = anchors, refdata = reference_labels, dims = dims, verbose = FALSE)
+  message("Phase 1/3 complete after ", round(as.numeric(difftime(Sys.time(), transfer_started, units = "mins")), 1), " minutes.")
+  message("Phase 2/3: transferring ", length(unique(reference_labels)), " reference labels to all query cells.")
+  flush.console()
+  prediction_started <- Sys.time()
+  predictions <- Seurat::TransferData(anchorset = anchors, refdata = reference_labels, dims = dims, verbose = TRUE)
+  message("Phase 2/3 complete after ", round(as.numeric(difftime(Sys.time(), prediction_started, units = "mins")), 1), " minutes; preparing metadata outputs.")
+  flush.console()
   labels <- as.character(predictions$predicted.id)
   scores <- as.numeric(predictions$prediction.score.max)
   names(labels) <- rownames(predictions); names(scores) <- rownames(predictions)
@@ -1201,6 +1212,8 @@ apply_reference_annotation <- function(obj, path, annotation_name, label_column 
     stringsAsFactors = FALSE
   )
   utils::write.table(audit, file.path(tables_dir, paste0("reference_transfer_audit__", annotation_name, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
+  message("Phase 3/3: transferred-label metadata and audit tables are ready.")
+  flush.console()
   obj
 }
 
@@ -1258,6 +1271,8 @@ if (isTRUE(reference_annotation_only)) {
   attr(obj, "codespring_active_annotation") <- annotation_name
   attr(obj, "codespring_integration") <- integration
   attr(obj, "codespring_doublets_removed") <- sum(doublet_summary$removed_doublets)
+  message("Saving the updated Seurat object; this final write can take several minutes for a large object.")
+  flush.console()
   saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
   summary_lines <- c(
     paste("engine: seurat"), paste("normalization:", params$normalization), paste("integration:", integration),
