@@ -150,6 +150,7 @@ read_params <- function(path) {
     celltype_file = get("celltype_file", ""),
     reference_file = get("reference_file", ""),
     reference_label_column = get("reference_label_column", ""),
+    reference_ortholog_file = get("reference_ortholog_file", ""),
     marker_species = tolower(get("marker_species", "same")),
     marker_ortholog_file = get("marker_ortholog_file", ""),
     annotation_name = get("annotation_name", "cell_type"),
@@ -985,6 +986,73 @@ ensure_log_normalized_rna <- function(object, label) {
   object
 }
 
+infer_rna_symbol_species <- function(genes, orthologs) {
+  genes <- unique(trimws(as.character(genes)))
+  genes <- genes[nzchar(genes) & !is.na(genes)]
+  mouse_symbols <- unique(orthologs$mouse)
+  human_symbols <- unique(orthologs$human)
+  # Symbols that are identical in both species provide no directional
+  # evidence. Restricting detection to species-specific exact symbols avoids
+  # classifying a mixed or Ensembl-ID feature set from capitalization alone.
+  mouse_only <- setdiff(mouse_symbols, human_symbols)
+  human_only <- setdiff(human_symbols, mouse_symbols)
+  mouse_hits <- sum(genes %in% mouse_only)
+  human_hits <- sum(genes %in% human_only)
+  minimum_hits <- max(10L, min(100L, ceiling(length(genes) * 0.005)))
+  species <- if (mouse_hits >= minimum_hits && mouse_hits >= 1.5 * max(1L, human_hits)) {
+    "mouse"
+  } else if (human_hits >= minimum_hits && human_hits >= 1.5 * max(1L, mouse_hits)) {
+    "human"
+  } else {
+    "unknown"
+  }
+  list(species = species, mouse_hits = mouse_hits, human_hits = human_hits, minimum_hits = minimum_hits)
+}
+
+convert_reference_rna_species <- function(reference, reference_labels, source_species, target_species, orthologs, annotation_name) {
+  if (!source_species %in% c("mouse", "human") || !target_species %in% c("mouse", "human") || identical(source_species, target_species)) {
+    stop("Reference conversion requires two different recognized species.")
+  }
+  source_counts <- table(orthologs[[source_species]])
+  target_counts <- table(orthologs[[target_species]])
+  one_to_one <- orthologs[
+    source_counts[orthologs[[source_species]]] == 1L & target_counts[orthologs[[target_species]]] == 1L,
+    , drop = FALSE
+  ]
+  lookup <- stats::setNames(one_to_one[[target_species]], one_to_one[[source_species]])
+  original_genes <- rownames(reference)
+  mapped_genes <- unname(lookup[original_genes])
+  mapped <- !is.na(mapped_genes) & nzchar(mapped_genes)
+  mapping_audit <- data.frame(
+    original_reference_gene = original_genes,
+    converted_reference_gene = ifelse(mapped, mapped_genes, ""),
+    status = ifelse(mapped, "mapped_one_to_one", "unmapped_or_ambiguous"),
+    reference_species = source_species,
+    query_species = target_species,
+    stringsAsFactors = FALSE
+  )
+  mapping_path <- file.path(tables_dir, paste0("reference_transfer_ortholog_mapping__", annotation_name, ".tsv"))
+  utils::write.table(mapping_audit, mapping_path, sep = "\t", row.names = FALSE, quote = FALSE)
+  if (sum(mapped) < 50L) {
+    stop("Only ", sum(mapped), " one-to-one ", source_species, "-to-", target_species, " orthologs were available for the reference; at least 50 are required.")
+  }
+  counts <- tryCatch(Seurat::GetAssayData(reference, assay = "RNA", layer = "counts"), error = function(e) NULL)
+  if (is.null(counts) || !nrow(counts) || !ncol(counts)) {
+    stop("Cross-species reference conversion requires the reference RNA counts layer; normalized values alone are not converted as counts.")
+  }
+  converted_counts <- counts[mapped, , drop = FALSE]
+  rownames(converted_counts) <- mapped_genes[mapped]
+  converted <- Seurat::CreateSeuratObject(
+    counts = converted_counts,
+    assay = "RNA",
+    project = paste0("reference_", target_species),
+    meta.data = reference@meta.data[colnames(converted_counts), , drop = FALSE]
+  )
+  reference_labels <- reference_labels[colnames(converted)]
+  Seurat::Idents(converted) <- factor(reference_labels)
+  list(object = converted, labels = reference_labels, mapped_genes = sum(mapped), total_genes = length(original_genes), mapping_path = mapping_path)
+}
+
 apply_reference_annotation <- function(obj, path, annotation_name, label_column = "") {
   if (!file.exists(path)) stop("Seurat reference file was not found: ", path)
   loaded <- load_seurat_reference(path)
@@ -1013,8 +1081,50 @@ apply_reference_annotation <- function(obj, path, annotation_name, label_column 
   reference <- ensure_log_normalized_rna(reference, "Reference")
   obj <- ensure_log_normalized_rna(obj, "Query")
 
+  ortholog_path <- trimws(as.character(params$reference_ortholog_file %||% ""))
+  if (!nzchar(ortholog_path)) {
+    script_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+    script_file <- if (length(script_arg)) sub("^--file=", "", script_arg[[1]]) else ""
+    if (nzchar(script_file)) {
+      ortholog_path <- file.path(dirname(dirname(normalizePath(script_file, winslash = "/", mustWork = FALSE))), "reference", "mouse_human_orthologs_MGI.tsv")
+    }
+  }
+  if (!nzchar(ortholog_path) || !file.exists(ortholog_path)) {
+    stop("Reference transfer requires the bundled readable mouse-human ortholog table: ", ortholog_path)
+  }
+  orthologs <- read_ortholog_symbols(ortholog_path)
+  reference_species_info <- infer_rna_symbol_species(rownames(reference), orthologs)
+  query_species_info <- infer_rna_symbol_species(rownames(obj), orthologs)
+  reference_species <- reference_species_info$species
+  query_species <- query_species_info$species
+  shared_before_conversion <- length(intersect(rownames(reference), rownames(obj)))
+  converted_reference <- FALSE
+  converted_genes <- 0L
+  reference_genes_before_conversion <- nrow(reference)
+  force_reference_pca <- FALSE
+  if (reference_species %in% c("mouse", "human") && query_species %in% c("mouse", "human") && !identical(reference_species, query_species)) {
+    message("Detected ", reference_species, " reference and ", query_species, " query; converting the reference with one-to-one MGI orthologs.")
+    conversion <- convert_reference_rna_species(reference, reference_labels, reference_species, query_species, orthologs, annotation_name)
+    reference <- conversion$object
+    reference_labels <- conversion$labels
+    converted_reference <- TRUE
+    converted_genes <- conversion$mapped_genes
+    force_reference_pca <- TRUE
+    reference <- ensure_log_normalized_rna(reference, "Converted reference")
+  } else if (identical(reference_species, "unknown") || identical(query_species, "unknown")) {
+    if (shared_before_conversion < 50L) {
+      stop(
+        "Could not confidently detect reference/query species from gene symbols, and they share only ", shared_before_conversion, " exact RNA features. ",
+        "Use mouse or human gene symbols (not mixed identifiers) so automatic ortholog conversion can be applied."
+      )
+    }
+    message("Species detection was inconclusive, but reference and query share ", shared_before_conversion, " exact RNA features; proceeding without conversion.")
+  } else {
+    message("Detected matching ", reference_species, " reference and query; no ortholog conversion is needed.")
+  }
+
   reduction_name <- "pca"
-  usable_pca <- reduction_name %in% names(reference@reductions) &&
+  usable_pca <- !force_reference_pca && reduction_name %in% names(reference@reductions) &&
     ncol(Seurat::Embeddings(reference, reduction = reduction_name)) >= 5L &&
     identical(reference[[reduction_name]]@assay.used, "RNA")
   if (!usable_pca) {
@@ -1066,7 +1176,29 @@ apply_reference_annotation <- function(obj, path, annotation_name, label_column 
     data.frame(label = label, cells = length(values), median_score = stats::median(values), mean_score = mean(values), stringsAsFactors = FALSE)
   }))
   utils::write.table(label_summary, file.path(tables_dir, paste0("reference_transfer_label_summary__", annotation_name, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
-  audit <- data.frame(reference_file = normalizePath(path, winslash = "/", mustWork = TRUE), reference_object = loaded$source_name, label_source = if (nzchar(label_column)) label_column else "active identities", reference_cells = ncol(reference), reference_labels = length(unique(reference_labels)), query_cells = ncol(obj), shared_features_used = length(transfer_features), pcs_used = length(dims), stringsAsFactors = FALSE)
+  audit <- data.frame(
+    reference_file = normalizePath(path, winslash = "/", mustWork = TRUE),
+    reference_object = loaded$source_name,
+    label_source = if (nzchar(label_column)) label_column else "active identities",
+    reference_species_detected = reference_species,
+    query_species_detected = query_species,
+    reference_mouse_symbol_hits = reference_species_info$mouse_hits,
+    reference_human_symbol_hits = reference_species_info$human_hits,
+    query_mouse_symbol_hits = query_species_info$mouse_hits,
+    query_human_symbol_hits = query_species_info$human_hits,
+    reference_converted_to_query_species = converted_reference,
+    ortholog_method = if (converted_reference) "MGI one-to-one reference RNA count conversion" else "none",
+    reference_genes_before_conversion = reference_genes_before_conversion,
+    reference_genes_after_conversion = nrow(reference),
+    one_to_one_reference_genes_mapped = converted_genes,
+    exact_shared_features_before_conversion = shared_before_conversion,
+    reference_cells = ncol(reference),
+    reference_labels = length(unique(reference_labels)),
+    query_cells = ncol(obj),
+    shared_features_used = length(transfer_features),
+    pcs_used = length(dims),
+    stringsAsFactors = FALSE
+  )
   utils::write.table(audit, file.path(tables_dir, paste0("reference_transfer_audit__", annotation_name, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
   obj
 }

@@ -93,8 +93,8 @@ stopifnot(
 )
 utils::write.table(
   data.frame(
-    key = c("normalization", "integration", "n_pcs", "min_features", "min_cells_per_gene", "doublet_method", "annotation_name", "reference_file", "reference_label_column"),
-    value = c("lognormalize", "none", "8", "0", "1", "none", "baccin_cell_type", reference_file, "")
+    key = c("normalization", "integration", "n_pcs", "min_features", "min_cells_per_gene", "doublet_method", "annotation_name", "reference_file", "reference_label_column", "reference_ortholog_file"),
+    value = c("lognormalize", "none", "8", "0", "1", "none", "baccin_cell_type", reference_file, "", file.path(repo, "scripts_DoNotTouch", "reference", "mouse_human_orthologs_MGI.tsv"))
   ),
   params, sep = "\t", row.names = FALSE, quote = FALSE
 )
@@ -107,5 +107,38 @@ stopifnot(
   file.exists(file.path(output, "tables", "reference_transfer_per_cell__baccin_cell_type.tsv")),
   file.exists(file.path(output, "tables", "reference_transfer_label_summary__baccin_cell_type.tsv")),
   file.exists(file.path(output, "tables", "reference_transfer_audit__baccin_cell_type.tsv"))
+)
+
+# A synthetic opposite-species reference verifies automatic detection,
+# one-to-one feature conversion, PCA rebuilding, and the saved audit fields.
+cross_species_orthologs <- data.frame(
+  mouse_gene_symbol = paste0("MouseGene", seq_len(nrow(reference_counts))),
+  human_gene_symbol = rownames(reference_counts),
+  stringsAsFactors = FALSE
+)
+cross_species_ortholog_file <- file.path(work, "synthetic_mouse_human_orthologs.tsv")
+utils::write.table(cross_species_orthologs, cross_species_ortholog_file, sep = "\t", row.names = FALSE, quote = FALSE)
+mouse_reference_counts <- reference_counts
+rownames(mouse_reference_counts) <- cross_species_orthologs$mouse_gene_symbol
+MouseReference <- CreateSeuratObject(mouse_reference_counts)
+Idents(MouseReference) <- factor(rep(c("Mouse Reference A", "Mouse Reference B"), each = 40L))
+mouse_reference_file <- file.path(work, "MouseReference.rds")
+saveRDS(MouseReference, mouse_reference_file)
+utils::write.table(
+  data.frame(
+    key = c("normalization", "integration", "n_pcs", "min_features", "min_cells_per_gene", "doublet_method", "annotation_name", "reference_file", "reference_label_column", "reference_ortholog_file"),
+    value = c("lognormalize", "none", "8", "0", "1", "none", "cross_species_cell_type", mouse_reference_file, "", cross_species_ortholog_file)
+  ),
+  params, sep = "\t", row.names = FALSE, quote = FALSE
+)
+run("annotate")
+cross_species_audit <- utils::read.delim(file.path(output, "tables", "reference_transfer_audit__cross_species_cell_type.tsv"), check.names = FALSE)
+cross_species_mapping <- utils::read.delim(file.path(output, "tables", "reference_transfer_ortholog_mapping__cross_species_cell_type.tsv"), check.names = FALSE)
+stopifnot(
+  identical(cross_species_audit$reference_species_detected[[1]], "mouse"),
+  identical(cross_species_audit$query_species_detected[[1]], "human"),
+  isTRUE(cross_species_audit$reference_converted_to_query_species[[1]]),
+  cross_species_audit$one_to_one_reference_genes_mapped[[1]] == nrow(reference_counts),
+  all(cross_species_mapping$status == "mapped_one_to_one")
 )
 message("Processed Seurat object continuation smoke test passed.")
