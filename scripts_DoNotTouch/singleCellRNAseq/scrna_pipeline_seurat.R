@@ -129,7 +129,7 @@ read_params <- function(path) {
   list(
     normalization = tolower(get("normalization", "sct")),
     integration = tolower(get("integration", "auto")),
-    batch_column = get("batch_column", "batch"),
+    batch_column = get("batch_column", "sample_id"),
     cluster_resolution = suppressWarnings(as.numeric(get("cluster_resolution", "0.6"))),
     n_pcs = suppressWarnings(as.integer(get("n_pcs", "30"))),
     min_features = suppressWarnings(as.integer(get("min_features", "200"))),

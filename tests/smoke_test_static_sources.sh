@@ -38,6 +38,8 @@ grep -Fq 'optional_quantifiers_enabled' "$repo_root/scripts_DoNotTouch/Shiny/app
 # Anchor integration can exceed Matrix's 32-bit sparse-index ceiling on large
 # multi-sample datasets even when sufficient RAM is available.
 test "$(grep -Fc 'if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "harmony" else "none"' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R")" -eq 2
+grep -Fq 'batch_column = get("batch_column", "sample_id")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq '"batch_column": get("batch_column", "sample_id")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 
 python3 - "$repo_root" <<'PY'
 import csv

@@ -149,7 +149,7 @@ def params_from(path: Path):
     return {
         "normalization": get("normalization", "lognormalize").lower(),
         "integration": get("integration", "auto").lower(),
-        "batch_column": get("batch_column", "batch"),
+        "batch_column": get("batch_column", "sample_id"),
         "cluster_resolution": float(get("cluster_resolution", "0.6") or 0.6),
         "n_pcs": int(float(get("n_pcs", "30") or 30)),
         "n_neighbors": int(float(get("n_neighbors", "15") or 15)),
