@@ -106,7 +106,8 @@ stopifnot(
   all(is.finite(transferred$baccin_cell_type_prediction_score)),
   file.exists(file.path(output, "tables", "reference_transfer_per_cell__baccin_cell_type.tsv")),
   file.exists(file.path(output, "tables", "reference_transfer_label_summary__baccin_cell_type.tsv")),
-  file.exists(file.path(output, "tables", "reference_transfer_audit__baccin_cell_type.tsv"))
+  file.exists(file.path(output, "tables", "reference_transfer_audit__baccin_cell_type.tsv")),
+  !file.exists(file.path(output, "tables", "cluster_markers.tsv"))
 )
 
 # A synthetic opposite-species reference verifies automatic detection,

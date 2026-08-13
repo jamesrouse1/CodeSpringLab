@@ -151,6 +151,7 @@ read_params <- function(path) {
     reference_file = get("reference_file", ""),
     reference_label_column = get("reference_label_column", ""),
     reference_ortholog_file = get("reference_ortholog_file", ""),
+    find_cluster_markers = tolower(get("find_cluster_markers", "false")) %in% c("true", "1", "yes"),
     marker_species = tolower(get("marker_species", "same")),
     marker_ortholog_file = get("marker_ortholog_file", ""),
     annotation_name = get("annotation_name", "cell_type"),
@@ -1259,7 +1260,7 @@ if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 
 # Cluster markers should use the normalized SCT representation when that is
 # the selected workflow.
 DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
-if (ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
+if (isTRUE(params$find_cluster_markers) && ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
   # An SCT-integrated object can retain one model per input sample. Bring
   # those models to a common sequencing-depth scale before marker testing;
   # otherwise Seurat may silently return an empty marker table.
@@ -1275,6 +1276,8 @@ if (ncol(obj) >= 20 && length(unique(obj$cluster)) > 1L) {
       utils::write.table(top, file.path(tables_dir, "top10_markers_per_cluster.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
     }
   }
+} else if (!isTRUE(params$find_cluster_markers)) {
+  message("Skipping optional cluster-marker discovery; reference annotation and its UMAP/table outputs are complete without it.")
 }
 
 # Match the Scanpy output schema: retain an input metadata column named
