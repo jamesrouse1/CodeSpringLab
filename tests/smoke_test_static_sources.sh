@@ -34,6 +34,11 @@ grep -Fq 'maize_nc350_nam1' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'maize_w22_nrgene2' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'optional_quantifiers_enabled' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 
+# Automatic Seurat integration must remain on the scalable PCA/Harmony path.
+# Anchor integration can exceed Matrix's 32-bit sparse-index ceiling on large
+# multi-sample datasets even when sufficient RAM is available.
+test "$(grep -Fc 'if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "harmony" else "none"' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R")" -eq 2
+
 python3 - "$repo_root" <<'PY'
 import csv
 import pathlib

@@ -698,7 +698,7 @@ integration <- params$integration
 batch_values <- unlist(lapply(objects, function(obj) {
   if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
 }), use.names = FALSE)
-if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "rpca" else "none"
+if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "harmony" else "none"
 if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
   stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
 }
@@ -772,7 +772,7 @@ integration <- params$integration
 batch_values <- unlist(lapply(objects, function(obj) {
   if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
 }), use.names = FALSE)
-if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "rpca" else "none"
+if (identical(integration, "auto")) integration <- if (length(unique(batch_values[nzchar(batch_values)])) > 1L) "harmony" else "none"
 if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[nzchar(batch_values)])) < 2L) {
   stop(integration, " integration requires at least two values in the selected batch column (", params$batch_column, "). Choose none or supply the appropriate technical batch column.")
 }
