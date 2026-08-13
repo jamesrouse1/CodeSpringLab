@@ -107,7 +107,9 @@ stopifnot(
   file.exists(file.path(output, "tables", "reference_transfer_per_cell__baccin_cell_type.tsv")),
   file.exists(file.path(output, "tables", "reference_transfer_label_summary__baccin_cell_type.tsv")),
   file.exists(file.path(output, "tables", "reference_transfer_audit__baccin_cell_type.tsv")),
-  !file.exists(file.path(output, "tables", "cluster_markers.tsv"))
+  !file.exists(file.path(output, "tables", "cluster_markers.tsv")),
+  !file.exists(file.path(output, "figures", "05_umap_baccin_cell_type.png")),
+  any(grepl("annotation_output: metadata only", readLines(file.path(output, "run_summary.txt")), fixed = TRUE))
 )
 
 # A synthetic opposite-species reference verifies automatic detection,

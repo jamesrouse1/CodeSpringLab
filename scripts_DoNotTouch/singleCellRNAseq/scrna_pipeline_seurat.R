@@ -1222,6 +1222,7 @@ apply_existing_annotation <- function(obj) {
 if (stage %in% c("annotate", "all")) {
 if (!inherits(obj, "Seurat")) stop("Annotation input is not a Seurat object; detected class: ", paste(class(obj), collapse = ", "))
 annotation_name <- safe_metadata_name(params$annotation_name)
+reference_annotation_only <- FALSE
 # Rejoin Seurat v5 RNA layers before any annotation scoring or differential
 # expression. Values are unchanged; the final object becomes portable and its
 # raw counts remain directly accessible.
@@ -1230,6 +1231,7 @@ if (any(grepl("^(counts|data)\\.", rna_layers))) obj <- SeuratObject::JoinLayers
 message("Annotation input loaded: ", ncol(obj), " cells; reductions: ", paste(names(obj@reductions), collapse = ", "))
 if (nzchar(params$reference_file) && !identical(tolower(params$reference_file), "none")) {
   obj <- apply_reference_annotation(obj, params$reference_file, annotation_name, params$reference_label_column)
+  reference_annotation_only <- identical(stage, "annotate")
 } else if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "none")) {
   obj <- apply_celltype_mapping(obj, params$celltype_file, annotation_name)
 } else if (nzchar(params$marker_file) && !identical(tolower(params$marker_file), "none")) {
@@ -1247,6 +1249,28 @@ if (nzchar(params$reference_file) && !identical(tolower(params$reference_file), 
       obj[[paste0("annotation_source__", annotation_name)]] <- obj$annotation_source
     }
   }
+}
+
+if (isTRUE(reference_annotation_only)) {
+  # Reference transfer is intentionally metadata-only. The transfer helper
+  # already wrote the per-cell labels/scores and audit tables, so avoid
+  # regenerating UMAPs, marker tests, dashboards, and composition summaries.
+  attr(obj, "codespring_active_annotation") <- annotation_name
+  attr(obj, "codespring_integration") <- integration
+  attr(obj, "codespring_doublets_removed") <- sum(doublet_summary$removed_doublets)
+  saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
+  summary_lines <- c(
+    paste("engine: seurat"), paste("normalization:", params$normalization), paste("integration:", integration),
+    paste("doublet_method:", params$doublet_method), paste("doublets_removed:", sum(doublet_summary$removed_doublets)),
+    paste("input_processing_inventory:", file.path("tables", "input_processing_detected.tsv")),
+    paste("input_samples:", NROW(samples)), paste("cells_after_qc:", ncol(obj)), paste("clusters:", length(unique(obj$cluster))), paste("active_annotation:", annotation_name),
+    paste("annotation_source:", unique(obj$annotation_source)[1]), paste("annotation_output: metadata only"), paste("generated:", as.character(Sys.time()))
+  )
+  writeLines(summary_lines, file.path(out_dir, "run_summary.txt"))
+  stage_marker("annotate")
+  writeLines(as.character(Sys.time()), file.path(out_dir, "_COMPLETE"))
+  message("Reference annotation metadata saved; no UMAP, marker, dashboard, or composition outputs were regenerated.")
+  quit(save = "no", status = 0L)
 }
 
 message("Annotation labels prepared; rendering UMAP summaries.")
