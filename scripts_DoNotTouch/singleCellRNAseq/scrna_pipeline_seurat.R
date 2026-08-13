@@ -966,7 +966,16 @@ load_seurat_reference <- function(path) {
 
 ensure_log_normalized_rna <- function(object, label) {
   if (!"RNA" %in% names(object@assays)) stop(label, " does not contain an RNA assay required for reference transfer.")
-  object <- SeuratObject::JoinLayers(object, assay = "RNA")
+  # JoinLayers is a Seurat v5 Assay5 operation. Published references such as
+  # the Baccin bone-marrow object are valid legacy Seurat Assay objects after
+  # UpdateSeuratObject(), but do not implement JoinLayers. Their counts/data
+  # slots are already single matrices and must be left intact.
+  if (inherits(object[["RNA"]], "Assay5")) {
+    rna_layers <- assay_layers_safe(object, "RNA")
+    if (any(grepl("^(counts|data)\\.", rna_layers))) {
+      object <- SeuratObject::JoinLayers(object, assay = "RNA")
+    }
+  }
   DefaultAssay(object) <- "RNA"
   layers <- assay_layers_safe(object, "RNA")
   if (!"data" %in% layers) {
