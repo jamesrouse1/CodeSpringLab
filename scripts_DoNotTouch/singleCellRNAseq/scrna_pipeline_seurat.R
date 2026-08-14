@@ -42,6 +42,30 @@ if (requireNamespace("future", quietly = TRUE)) {
 
 `%||%` <- function(x, y) if (is.null(x) || !length(x) || (length(x) == 1L && is.na(x))) y else x
 
+allocated_cpu_count <- function(cap = Inf) {
+  value <- suppressWarnings(as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = "1")))
+  if (is.na(value) || value < 1L) value <- 1L
+  max(1L, min(value, as.integer(cap)))
+}
+
+# Seurat's uwot backend derives its thread count from future::nbrOfWorkers().
+# Keep the global plan sequential for memory-heavy integration/transfer calls,
+# but expose up to eight allocated cores only while UMAP runs. On Linux,
+# multicore workers use forked memory and the UMAP call itself consumes the
+# worker count as native threads; the full Seurat object is not exported to a
+# persistent multisession cluster.
+run_umap_with_allocated_threads <- function(object, ...) {
+  workers <- allocated_cpu_count(8L)
+  if (workers <= 1L || !requireNamespace("future", quietly = TRUE) || !isTRUE(future::supportsMulticore())) {
+    return(Seurat::RunUMAP(object, ...))
+  }
+  previous_plan <- future::plan()
+  on.exit(future::plan(previous_plan), add = TRUE)
+  future::plan(future::multicore, workers = workers)
+  message("Running Seurat UMAP with ", workers, " allocated threads.")
+  Seurat::RunUMAP(object, ...)
+}
+
 # The jpplot gradient is reserved for continuous expression and score values.
 jpplot_colors <- c("#90C3DD", "#C2E4EF", "#ECF7E1", "#FEF4AF", "#FDD484", "#FBA25B", "#F0653F", "#D42D26", "#A50026")
 categorical_palette <- function(values) {
@@ -766,7 +790,7 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   pre_dims <- seq_len(min(params$n_pcs, ncol(Seurat::Embeddings(unintegrated, "pca"))))
   pre_neighbors <- min(params$n_neighbors, max(2L, ncol(unintegrated) - 1L))
   unintegrated <- Seurat::FindNeighbors(unintegrated, reduction = "pca", dims = pre_dims, k.param = pre_neighbors, verbose = FALSE)
-  unintegrated <- Seurat::RunUMAP(unintegrated, reduction = "pca", dims = pre_dims, reduction.name = "umap.unintegrated",
+  unintegrated <- run_umap_with_allocated_threads(unintegrated, reduction = "pca", dims = pre_dims, reduction.name = "umap.unintegrated",
                                   n.neighbors = pre_neighbors, min.dist = params$umap_min_dist, spread = params$umap_spread,
                                   metric = params$umap_metric,
                                   seed.use = params$seed, verbose = FALSE)
@@ -850,7 +874,7 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   graph_neighbors <- min(params$n_neighbors, max(2L, ncol(obj) - 1L))
   obj <- Seurat::FindNeighbors(obj, reduction = reduction_for_graph, dims = dims, k.param = graph_neighbors, verbose = FALSE)
   obj <- Seurat::FindClusters(obj, resolution = params$cluster_resolution, verbose = FALSE)
-  obj <- Seurat::RunUMAP(obj, reduction = reduction_for_graph, dims = dims,
+  obj <- run_umap_with_allocated_threads(obj, reduction = reduction_for_graph, dims = dims,
                          n.neighbors = graph_neighbors, min.dist = params$umap_min_dist, spread = params$umap_spread,
                          metric = params$umap_metric,
                          seed.use = params$seed, verbose = FALSE)

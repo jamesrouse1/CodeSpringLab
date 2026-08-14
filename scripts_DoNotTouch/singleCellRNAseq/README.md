@@ -45,16 +45,18 @@ The job checks essential packages before loading a large object, so a missing
 cluster dependency is reported promptly in the job log.
 
 CodeSpringApp sizes each checkpointed SLURM job from the compressed input or
-upstream checkpoint it will actually load. Routine inspection/pathway jobs use
-4 CPUs and 32 GB, ordinary QC/scoring jobs use 8 CPUs and 64 GB, and ordinary
-normalization, integration/clustering, and annotation use 12 CPUs and 96 GB.
-Medium, large, and exceptionally large objects step up through 128, 192, and
-256 GB tiers; the 256 GB tier is therefore not requested for routine projects.
-Cell Ranger similarly scales from the total FASTQ size (12 CPUs/64 GB, 16/96,
-or 24/128). The wrapper propagates the allocated CPU count to OpenMP, BLAS,
-Numba, and NumExpr so supported numerical operations can use the allocation.
-This balances speed against queue wait time; inherently single-threaded Seurat
-operations still do not scale linearly with CPU count.
+upstream checkpoint it will actually load. Routine inspection/pathway jobs begin
+at 6 CPUs and 48 GB, ordinary QC/scoring jobs at 10 CPUs and 80 GB, and ordinary
+Seurat normalization, integration/clustering, and annotation at 12 CPUs and
+128 GB. Medium, large, and exceptionally large objects step up through 160,
+192, and 256 GB tiers; Scanpy receives somewhat more CPU at the same heavy-stage
+memory tiers because more of its numerical stack uses native threading. Cell
+Ranger similarly scales from the total FASTQ size (16 CPUs/80 GB, 20/112, or
+24/128). The wrapper propagates the allocated CPU count to OpenMP, BLAS, Numba,
+and NumExpr. Seurat keeps its global future plan sequential so large objects are
+not copied into multiple workers, but UMAP temporarily exposes up to eight
+allocated threads to uwot. This balances useful parallelism against memory and
+queue wait time; inherently serial operations still do not scale with CPU count.
 
 Cell Ranger alignment/counting jobs require a matching `refdata-gex-*`
 transcriptome folder. CodeSpringApp automatically looks for the current human

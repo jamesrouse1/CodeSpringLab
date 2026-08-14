@@ -42,6 +42,8 @@ grep -Fq 'batch_column = get("batch_column", "sample_id")' "$repo_root/scripts_D
 grep -Fq 'reference_file = get("reference_file", "")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'FindTransferAnchors(' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'reference_transfer_per_cell__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq 'run_umap_with_allocated_threads <- function' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+test "$(grep -Fc 'run_umap_with_allocated_threads(' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R")" -eq 2
 grep -Fq '#SBATCH --cpus-per-task=8' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
 grep -Fq '#SBATCH --mem=64G' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
 grep -Fq 'export NUMBA_NUM_THREADS="$OMP_NUM_THREADS"' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
