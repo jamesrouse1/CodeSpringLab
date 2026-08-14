@@ -2,8 +2,8 @@
 #SBATCH --job-name=codespring_scrna
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
 #SBATCH --time=2-00:00:00
 #SBATCH --export=NONE
 
@@ -17,7 +17,7 @@ export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 # Propagate the SLURM allocation to numerical libraries used by Seurat and
 # Scanpy. Stage-specific submissions can override the fallback allocation
 # above without editing this wrapper.
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 export VECLIB_MAXIMUM_THREADS="$OMP_NUM_THREADS"

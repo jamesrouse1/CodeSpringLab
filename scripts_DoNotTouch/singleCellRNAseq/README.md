@@ -44,16 +44,17 @@ packages cannot override the compatible packages in the tested module.
 The job checks essential packages before loading a large object, so a missing
 cluster dependency is reported promptly in the job log.
 
-CodeSpringApp submits the checkpointed stages with stage-aware SLURM profiles.
-Light inspection and pathway jobs receive 12 CPUs and 96 GB; QC, scoring, and
-differential-expression jobs receive 16 CPUs and 128 GB; normalization/PCA,
-integration/clustering, and annotation receive 24 CPUs and 192 GB. A large
-Seurat query/reference transfer receives 256 GB. Cell Ranger requests 24 CPUs
-and 128 GB. The wrapper propagates the allocated CPU count to OpenMP, BLAS,
+CodeSpringApp sizes each checkpointed SLURM job from the compressed input or
+upstream checkpoint it will actually load. Routine inspection/pathway jobs use
+4 CPUs and 32 GB, ordinary QC/scoring jobs use 8 CPUs and 64 GB, and ordinary
+normalization, integration/clustering, and annotation use 12 CPUs and 96 GB.
+Medium, large, and exceptionally large objects step up through 128, 192, and
+256 GB tiers; the 256 GB tier is therefore not requested for routine projects.
+Cell Ranger similarly scales from the total FASTQ size (12 CPUs/64 GB, 16/96,
+or 24/128). The wrapper propagates the allocated CPU count to OpenMP, BLAS,
 Numba, and NumExpr so supported numerical operations can use the allocation.
-Larger allocations can wait longer in a busy queue and do not make inherently
-single-threaded Seurat operations scale linearly, but they reduce memory
-pressure and accelerate multithreaded operations.
+This balances speed against queue wait time; inherently single-threaded Seurat
+operations still do not scale linearly with CPU count.
 
 Cell Ranger alignment/counting jobs require a matching `refdata-gex-*`
 transcriptome folder. CodeSpringApp automatically looks for the current human
