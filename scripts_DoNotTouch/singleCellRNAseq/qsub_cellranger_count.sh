@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cellranger
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=20
 #SBATCH --mem=96G
 #SBATCH --time=2-00:00:00
 #SBATCH --export=NONE

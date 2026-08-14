@@ -47,7 +47,7 @@ test "$(grep -Fc 'run_umap_with_allocated_threads(' "$repo_root/scripts_DoNotTou
 grep -Fq '#SBATCH --cpus-per-task=8' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
 grep -Fq '#SBATCH --mem=64G' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
 grep -Fq 'export NUMBA_NUM_THREADS="$OMP_NUM_THREADS"' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
-grep -Fq '#SBATCH --cpus-per-task=16' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_cellranger_count.sh"
+grep -Fq '#SBATCH --cpus-per-task=20' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_cellranger_count.sh"
 grep -Fq 'export CELLRANGER_LOCALMEM_GB=$((allocated_mem_gb - 6))' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_cellranger_count.sh"
 grep -Fq '"batch_column": get("batch_column", "sample_id")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 
