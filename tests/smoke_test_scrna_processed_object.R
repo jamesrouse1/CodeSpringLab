@@ -11,9 +11,14 @@ if (!all(vapply(required, requireNamespace, logical(1), quietly = TRUE))) {
 args <- commandArgs(trailingOnly = TRUE)
 repo <- if (length(args)) normalizePath(args[[1]], mustWork = TRUE) else normalizePath(file.path(dirname(sys.frame(1)$ofile %||% "tests"), ".."), mustWork = TRUE)
 runner <- file.path(repo, "scripts_DoNotTouch", "singleCellRNAseq", "scrna_pipeline_seurat.R")
-work <- tempfile("codespring_processed_object_")
+keep_test_output <- identical(Sys.getenv("CODESPRING_KEEP_TEST_OUTPUT"), "1")
+work <- tempfile("codespring_processed_object_", tmpdir = if (keep_test_output) "/tmp" else tempdir())
 dir.create(work, recursive = TRUE)
-on.exit(unlink(work, recursive = TRUE, force = TRUE), add = TRUE)
+if (keep_test_output) {
+  message("Preserving smoke-test output at: ", work)
+} else {
+  on.exit(unlink(work, recursive = TRUE, force = TRUE), add = TRUE)
+}
 
 suppressPackageStartupMessages(library(Seurat))
 set.seed(17)
@@ -50,7 +55,7 @@ output <- file.path(work, "output")
 run <- function(stage) {
   status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(runner, manifest, output, params, stage)), stdout = TRUE, stderr = TRUE)
   code <- attr(status, "status") %||% 0L
-  if (code != 0L) stop("Processed-object ", stage, " failed:\n", paste(status, collapse = "\n"))
+  if (code != 0L) stop("Processed-object ", stage, " failed (last output lines):\n", paste(utils::tail(status, 80L), collapse = "\n"))
 }
 run("inspect")
 stopifnot(file.exists(file.path(output, "objects", "processed_seurat.rds")))
@@ -98,6 +103,9 @@ utils::write.table(
   ),
   params, sep = "\t", row.names = FALSE, quote = FALSE
 )
+# Simulate an interrupted prior annotation write. For this processed-object
+# workflow, the reference run must recover from the original read-only input.
+writeBin(charToRaw("incomplete-rds"), file.path(output, "objects", "processed_seurat.rds"))
 run("annotate")
 transferred <- readRDS(file.path(output, "objects", "processed_seurat.rds"))
 stopifnot(

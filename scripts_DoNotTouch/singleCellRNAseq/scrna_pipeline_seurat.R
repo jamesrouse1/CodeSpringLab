@@ -225,6 +225,15 @@ for (d in c(tables_dir, figures_dir, objects_dir, checkpoints_dir)) dir.create(d
 utils::write.table(samples, file.path(tables_dir, "sample_manifest_used.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 stage_marker <- function(name) writeLines("complete", file.path(out_dir, paste0("_STAGE_", toupper(name), "_COMPLETE")))
 checkpoint_path <- function(name) file.path(checkpoints_dir, paste0(name, "_seurat.rds"))
+atomic_save_rds <- function(object, path, compress = TRUE) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  temporary <- paste0(path, ".tmp.", Sys.getpid())
+  on.exit(if (file.exists(temporary)) unlink(temporary), add = TRUE)
+  saveRDS(object, temporary, compress = compress)
+  if (!file.exists(temporary) || file.info(temporary)$size <= 0) stop("Temporary RDS write was empty: ", temporary)
+  if (!file.rename(temporary, path)) stop("Could not atomically replace the processed Seurat object: ", path)
+  invisible(path)
+}
 require_checkpoint <- function(name, prior) {
   path <- checkpoint_path(name)
   if (!file.exists(path)) stop("The ", prior, " stage has not completed. Run ", prior, " before this stage.")
@@ -515,7 +524,7 @@ if (stage %in% c("inspect", "qc", "all")) {
     }
     attr(pre_qc_merged, "codespring_integration") <- "existing input object"
     attr(pre_qc_merged, "codespring_doublets_removed") <- 0
-    saveRDS(pre_qc_merged, file.path(objects_dir, "processed_seurat.rds"), compress = FALSE)
+    atomic_save_rds(pre_qc_merged, file.path(objects_dir, "processed_seurat.rds"), compress = FALSE)
   }
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples), checkpoint_path("01_input"))
   stage_marker("inspect")
@@ -868,10 +877,27 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   clustered_path <- checkpoint_path("04_clustered")
   use_processed <- file.exists(processed_path) && (!file.exists(clustered_path) || file.info(processed_path)$mtime >= file.info(clustered_path)$mtime)
   if (use_processed) {
-    obj <- readRDS(processed_path)
-    message("Loaded existing processed Seurat object for annotation.")
-    integration <- attr(obj, "codespring_integration") %||% params$integration
-    doublet_summary <- data.frame(removed_doublets = attr(obj, "codespring_doublets_removed") %||% 0)
+    processed_result <- tryCatch(readRDS(processed_path), error = function(e) e)
+    if (!inherits(processed_result, "error")) {
+      obj <- processed_result
+      message("Loaded existing processed Seurat object for annotation.")
+      integration <- attr(obj, "codespring_integration") %||% params$integration
+      doublet_summary <- data.frame(removed_doublets = attr(obj, "codespring_doublets_removed") %||% 0)
+    } else if (file.exists(clustered_path)) {
+      message("Existing processed Seurat object is unreadable; recovering from the intact clustered checkpoint.")
+      cluster_state <- require_checkpoint("04_clustered", "integration and clustering")
+      obj <- cluster_state$object
+      integration <- cluster_state$integration
+      samples <- cluster_state$samples
+      doublet_summary <- cluster_state$doublet_summary
+    } else if (NROW(samples) == 1L && identical(input_kind(samples$input_path[[1]]), "seurat_rds")) {
+      message("Existing processed Seurat object is unreadable; recovering from the original read-only Seurat input.")
+      obj <- read_one(samples[1, , drop = FALSE])
+      integration <- "existing input object"
+      doublet_summary <- data.frame(removed_doublets = 0)
+    } else {
+      stop("The processed Seurat object is unreadable and no intact clustered checkpoint is available: ", conditionMessage(processed_result))
+    }
   } else {
     cluster_state <- require_checkpoint("04_clustered", "integration and clustering")
     obj <- cluster_state$object
@@ -885,6 +911,17 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   obj <- readRDS(processed_path)
   integration <- attr(obj, "codespring_integration") %||% params$integration
   doublet_summary <- data.frame(removed_doublets = 0)
+}
+
+# Older uploaded Seurat objects commonly store clusters only as
+# `seurat_clusters` or active identities. Keep the pipeline's stable `cluster`
+# alias available after either a normal load or recovery from the source file.
+if (!"cluster" %in% colnames(obj@meta.data)) {
+  if ("seurat_clusters" %in% colnames(obj@meta.data)) {
+    obj$cluster <- as.character(obj$seurat_clusters)
+  } else {
+    obj$cluster <- as.character(Seurat::Idents(obj))
+  }
 }
 
 safe_metadata_name <- function(value, default = "cell_type") {
@@ -1273,7 +1310,7 @@ if (isTRUE(reference_annotation_only)) {
   attr(obj, "codespring_doublets_removed") <- sum(doublet_summary$removed_doublets)
   message("Saving the updated Seurat object; this final write can take several minutes for a large object.")
   flush.console()
-  saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
+  atomic_save_rds(obj, file.path(objects_dir, "processed_seurat.rds"))
   summary_lines <- c(
     paste("engine: seurat"), paste("normalization:", params$normalization), paste("integration:", integration),
     paste("doublet_method:", params$doublet_method), paste("doublets_removed:", sum(doublet_summary$removed_doublets)),
@@ -1362,7 +1399,7 @@ utils::write.table(legacy_composition, file.path(tables_dir, "cell_type_by_sampl
 attr(obj, "codespring_active_annotation") <- annotation_name
 attr(obj, "codespring_integration") <- integration
 attr(obj, "codespring_doublets_removed") <- sum(doublet_summary$removed_doublets)
-saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
+atomic_save_rds(obj, file.path(objects_dir, "processed_seurat.rds"))
 summary_lines <- c(
   paste("engine: seurat"), paste("normalization:", params$normalization), paste("integration:", integration),
   paste("doublet_method:", params$doublet_method), paste("doublets_removed:", sum(doublet_summary$removed_doublets)),
@@ -1425,7 +1462,7 @@ if (identical(stage, "score")) {
   utils::write.table(data.frame(cell = colnames(obj), cell_metadata, check.names = FALSE), file.path(tables_dir, "cell_metadata.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   umap_coordinates <- as.data.frame(Seurat::Embeddings(obj, reduction = "umap")); names(umap_coordinates)[1:2] <- c("UMAP_1", "UMAP_2")
   utils::write.table(data.frame(cell = rownames(umap_coordinates), umap_coordinates[, 1:2], cell_metadata, check.names = FALSE), file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-  saveRDS(obj, file.path(objects_dir, "processed_seurat.rds"))
+  atomic_save_rds(obj, file.path(objects_dir, "processed_seurat.rds"))
   stage_marker("score")
 }
 
