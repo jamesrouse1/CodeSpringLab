@@ -2,9 +2,9 @@
 #SBATCH --job-name=codespring_scrna
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
+#SBATCH --time=2-00:00:00
 #SBATCH --export=NONE
 
 set -euo pipefail
@@ -13,6 +13,16 @@ set -euo pipefail
 # some clusters.  The module initializer needs basic system tools (including
 # ps) before it can construct the scientific runtime environment.
 export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+
+# Propagate the SLURM allocation to numerical libraries used by Seurat and
+# Scanpy. Stage-specific submissions can override the fallback allocation
+# above without editing this wrapper.
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
+export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
+export MKL_NUM_THREADS="$OMP_NUM_THREADS"
+export VECLIB_MAXIMUM_THREADS="$OMP_NUM_THREADS"
+export NUMEXPR_NUM_THREADS="$OMP_NUM_THREADS"
+export NUMBA_NUM_THREADS="$OMP_NUM_THREADS"
 
 # SLURM batch shells do not always inherit the interactive module function.
 # Initialize it when available so the runner sees the intended R/Python stack.

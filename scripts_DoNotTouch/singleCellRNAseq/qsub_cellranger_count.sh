@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cellranger
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=96G
-#SBATCH --time=2-00:00:00
+#SBATCH --cpus-per-task=24
+#SBATCH --mem=128G
+#SBATCH --time=3-00:00:00
 #SBATCH --export=NONE
 
 set -Eeuo pipefail
@@ -31,6 +31,6 @@ if [[ -z "$runner" && -s "$stage_parent" ]]; then
   stage_parent="$5"
 fi
 [[ -s "$runner" ]] || { echo "ERROR: Cell Ranger runner was not found: $runner" >&2; exit 2; }
-export CELLRANGER_LOCALMEM_GB=90
+export CELLRANGER_LOCALMEM_GB=120
 export CELLRANGER_MIN_FREE_GB="${CELLRANGER_MIN_FREE_GB:-150}"
 exec bash "$runner" "$1" "$2" "$3" "$4" "$5" "$6" "$stage_parent"

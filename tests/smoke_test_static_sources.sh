@@ -42,6 +42,11 @@ grep -Fq 'batch_column = get("batch_column", "sample_id")' "$repo_root/scripts_D
 grep -Fq 'reference_file = get("reference_file", "")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'FindTransferAnchors(' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'reference_transfer_per_cell__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq '#SBATCH --cpus-per-task=16' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
+grep -Fq '#SBATCH --mem=128G' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
+grep -Fq 'export NUMBA_NUM_THREADS="$OMP_NUM_THREADS"' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_scrna_pipeline.sh"
+grep -Fq '#SBATCH --cpus-per-task=24' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_cellranger_count.sh"
+grep -Fq 'export CELLRANGER_LOCALMEM_GB=120' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_cellranger_count.sh"
 grep -Fq '"batch_column": get("batch_column", "sample_id")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 
 python3 - "$repo_root" <<'PY'
