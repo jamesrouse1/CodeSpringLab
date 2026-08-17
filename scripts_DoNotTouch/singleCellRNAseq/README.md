@@ -20,8 +20,9 @@ the following raw-count inputs:
   independently through the cluster's `CellRanger/9.0.1` module and the resulting
   `outs/filtered_feature_bc_matrix` becomes the downstream input.
 
-Additional columns such as `condition`, `batch`, and `donor` become cell
-metadata. `sample_id` must be unique. `capture_id` identifies the independent
+The default project-local design is deliberately minimal: input details plus a
+`condition` column. Add columns such as `batch` or `donor` only when they are
+needed for the study; added columns become cell metadata. `sample_id` must be unique. `capture_id` identifies the independent
 droplet capture/library used for doublet detection and defaults to `sample_id`.
 When multiple hashed or multiplexed biological samples came from the same 10x
 channel, give those rows the same `capture_id`. An optional
@@ -40,7 +41,9 @@ for the user to choose:
 `/grid/bsr/data/data/bsr_readable_data/references/scrna_example/pbmc3k/filtered_gene_bc_matrices/hg19`
 
 It is a valid older 10x layout (`matrix.mtx`, `genes.tsv`, and `barcodes.tsv`);
-the workflow accepts both this format and newer `features.tsv` layouts.
+the workflow accepts both this format and newer `features.tsv` layouts. The
+example asks the user to choose Seurat or Scanpy, and either engine can process
+this raw filtered matrix.
 
 ## Runtime on the HPC
 
