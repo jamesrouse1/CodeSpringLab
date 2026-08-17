@@ -1022,6 +1022,9 @@ apply_marker_annotation <- function(obj, path, annotation_name) {
   marker_list <- lapply(marker_list, function(x) intersect(unique(x[nzchar(x)]), rownames(obj)))
   marker_list <- marker_list[lengths(marker_list) > 0]
   if (!length(marker_list)) stop("None of the supplied marker genes were present in the expression object.")
+  # Retain the exact usable markers so the final dot plots and heatmaps always
+  # match the genes that were actually used for scoring.
+  attr(obj, "codespring_marker_gene_sets") <- marker_list
   # Average normalized expression per cluster is stable and transparent for
   # cluster-level marker-list annotation.
   DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
@@ -1038,6 +1041,69 @@ apply_marker_annotation <- function(obj, path, annotation_name) {
   utils::write.table(score_table, file.path(tables_dir, "marker_annotation_cluster_scores.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   utils::write.table(score_table, file.path(tables_dir, paste0("marker_annotation_cluster_scores__", annotation_name, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
   obj
+}
+
+marker_list_panels <- function(marker_list, max_cell_types = 6L, max_genes = 32L) {
+  marker_list <- marker_list[lengths(marker_list) > 0]
+  panels <- list(); current <- list(); current_genes <- 0L
+  add_panel <- function() {
+    if (length(current)) panels[[length(panels) + 1L]] <<- current
+    current <<- list(); current_genes <<- 0L
+  }
+  for (label in names(marker_list)) {
+    genes <- unique(as.character(marker_list[[label]]))
+    # Very large single labels are split without mixing them with another
+    # label, preserving legible axes rather than producing a compressed plot.
+    blocks <- split(genes, ceiling(seq_along(genes) / max_genes))
+    for (block_index in seq_along(blocks)) {
+      block <- blocks[[block_index]]
+      block_label <- if (length(blocks) > 1L) paste0(label, " (part ", block_index, ")") else label
+      if (length(current) && (length(current) >= max_cell_types || current_genes + length(block) > max_genes)) add_panel()
+      current[[block_label]] <- block
+      current_genes <- current_genes + length(block)
+    }
+  }
+  add_panel()
+  panels
+}
+
+save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
+  if (!length(marker_list)) return(invisible(FALSE))
+  assay <- DefaultAssay(obj)
+  expression <- Seurat::GetAssayData(obj, assay = assay, layer = "data")
+  clusters <- as.character(obj$cluster)
+  cluster_levels <- unique(clusters[order(suppressWarnings(as.numeric(clusters)), clusters, na.last = TRUE)])
+  panels <- marker_list_panels(marker_list)
+  for (panel_index in seq_along(panels)) {
+    features <- panels[[panel_index]]
+    genes <- unique(unlist(features, use.names = FALSE))
+    genes <- intersect(genes, rownames(expression))
+    if (!length(genes)) next
+    panel_label <- paste0("Marker-list annotation: ", paste(names(features), collapse = "; "))
+    width <- max(8, 3.8 + 0.58 * length(cluster_levels))
+    height <- max(5.5, 2.8 + 0.22 * length(genes))
+    dot <- Seurat::DotPlot(obj, features = features, group.by = "cluster", assay = assay, cols = c("#E9F2FA", "#B2182B")) +
+      Seurat::RotatedAxis() +
+      ggplot2::labs(title = panel_label, x = "Marker gene", y = "Cluster", color = "Average expression", size = "% expressing") +
+      ggplot2::theme_classic(base_size = 12) +
+      ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+    save_plot(dot, sprintf("07_marker_annotation_dotplot_panel_%02d.png", panel_index), width, height)
+
+    means <- sapply(cluster_levels, function(cluster) Matrix::rowMeans(expression[genes, clusters == cluster, drop = FALSE]))
+    if (is.null(dim(means))) means <- matrix(means, ncol = 1L, dimnames = list(genes, cluster_levels))
+    scaled <- t(scale(t(means)))
+    scaled[!is.finite(scaled)] <- 0
+    scaled <- pmax(-2.5, pmin(2.5, scaled))
+    heatmap_data <- data.frame(gene = rep(rownames(scaled), times = NCOL(scaled)), cluster = rep(colnames(scaled), each = NROW(scaled)), z_score = as.vector(scaled), stringsAsFactors = FALSE)
+    heatmap <- ggplot2::ggplot(heatmap_data, ggplot2::aes(x = .data$cluster, y = .data$gene, fill = .data$z_score)) +
+      ggplot2::geom_tile() +
+      ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "#FFFFFF", high = "#B2182B", midpoint = 0, limits = c(-2.5, 2.5), name = "Row Z-score") +
+      ggplot2::labs(title = panel_label, subtitle = "Mean normalized expression, row-scaled across clusters", x = "Cluster", y = "Marker gene") +
+      ggplot2::theme_classic(base_size = 12) +
+      ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), panel.grid = ggplot2::element_blank())
+    save_plot(heatmap, sprintf("07_marker_annotation_heatmap_panel_%02d.png", panel_index), width, height)
+  }
+  invisible(TRUE)
 }
 
 load_seurat_reference <- function(path) {
@@ -1392,6 +1458,11 @@ save_plot(categorical_dimplot(obj, reduction = "umap", group.by = "cluster", lab
 message("Rendered cluster UMAP.")
 save_plot(categorical_dimplot(obj, reduction = "umap", group.by = annotation_name, label = TRUE, repel = TRUE), paste0("05_umap_", annotation_name, ".png"), 9, 6)
 if ("condition" %in% colnames(obj@meta.data) && length(unique(obj$condition)) > 1L) save_plot(categorical_dimplot(obj, reduction = "umap", group.by = "condition", shuffle = TRUE), "06_umap_condition.png", 8, 6)
+marker_sets <- attr(obj, "codespring_marker_gene_sets")
+if (length(marker_sets)) {
+  message("Rendering readable marker-list dot plots and heatmaps.")
+  save_marker_annotation_panels(obj, marker_sets, annotation_name)
+}
 
 # Cluster markers should use the normalized SCT representation when that is
 # the selected workflow.

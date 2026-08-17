@@ -105,6 +105,18 @@ scanpy_bind_args() {
       [[ -n "$input_path" ]] && directories+=("$(dirname "$input_path")")
     done < <(awk -F '\t' -v col="$input_column" 'NR>1 && $col != "" {print $col}' "$samples")
   fi
+  # Annotation, signature, and reference resources may live outside the
+  # project directory.  Bind their parent directories too, otherwise a
+  # perfectly valid server path passes preflight but is invisible inside the
+  # isolated Scanpy container.
+  if [[ -r "$params" ]]; then
+    while IFS= read -r resource_path; do
+      [[ -n "$resource_path" ]] && directories+=("$(dirname "$resource_path")")
+    done < <(awk -F '\t' '
+      NR == 1 {for (i=1;i<=NF;i++) {if ($i=="key") key=i; if ($i=="value") value=i}; next}
+      key && value && $key ~ /^(marker_file|celltype_file|reference_file|reference_ortholog_file|marker_ortholog_file|signature_file|signature_ortholog_file|pathway_ortholog_file|pathway_gmt_file)$/ && $value ~ /^\// {print $value}
+    ' "$params")
+  fi
   local seen=$'\n'
   local directory
   for directory in "${directories[@]}"; do

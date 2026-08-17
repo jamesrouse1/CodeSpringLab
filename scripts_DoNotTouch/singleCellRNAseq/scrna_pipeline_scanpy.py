@@ -748,6 +748,9 @@ def apply_marker_annotation(adata, path: Path, tables_dir: Path, annotation_name
             lists[str(cell_type)] = keep
     if not lists:
         raise SystemExit("None of the supplied marker genes were present in the expression object.")
+    # Store the exact usable genes so plotted marker panels match the genes
+    # that actually contributed to the annotation score.
+    adata.uns["codespring_marker_gene_sets"] = {name: list(genes_for_type) for name, genes_for_type in lists.items()}
     for name, genes_for_type in lists.items():
         # Use normalized log-expression, not the scaled/clipped matrix used
         # for PCA and neighbor construction.
@@ -761,6 +764,65 @@ def apply_marker_annotation(adata, path: Path, tables_dir: Path, annotation_name
     adata.obs["annotation_source"] = f"marker-list cluster scoring ({annotation_name})"
     means.to_csv(tables_dir / f"marker_annotation_cluster_scores__{annotation_name}.tsv", sep="\t")
     means.to_csv(tables_dir / "marker_annotation_cluster_scores.tsv", sep="\t")
+
+
+def marker_list_panels(marker_sets, max_cell_types=6, max_genes=32):
+    panels, current, current_genes = [], {}, 0
+    for label, genes in marker_sets.items():
+        unique_genes = list(dict.fromkeys(str(gene) for gene in genes if str(gene)))
+        blocks = [unique_genes[i:i + max_genes] for i in range(0, len(unique_genes), max_genes)]
+        for index, block in enumerate(blocks, start=1):
+            block_label = f"{label} (part {index})" if len(blocks) > 1 else str(label)
+            if current and (len(current) >= max_cell_types or current_genes + len(block) > max_genes):
+                panels.append(current); current, current_genes = {}, 0
+            current[block_label] = block; current_genes += len(block)
+    if current:
+        panels.append(current)
+    return panels
+
+
+def save_marker_annotation_panels(adata, marker_sets, figures: Path):
+    if not marker_sets:
+        return
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
+    groups = adata.obs["cluster"].astype(str)
+    cluster_levels = sorted(groups.unique(), key=lambda value: (not str(value).replace(".", "", 1).isdigit(), float(value) if str(value).replace(".", "", 1).isdigit() else str(value)))
+    expression = adata.raw if adata.raw is not None else adata
+    available = set(expression.var_names)
+    for panel_index, panel in enumerate(marker_list_panels(marker_sets), start=1):
+        genes = list(dict.fromkeys(gene for values in panel.values() for gene in values if gene in available))
+        if not genes:
+            continue
+        means = np.zeros((len(genes), len(cluster_levels)), dtype=float)
+        fractions = np.zeros((len(genes), len(cluster_levels)), dtype=float)
+        for cluster_index, cluster in enumerate(cluster_levels):
+            subset = expression[groups.to_numpy() == cluster, genes]
+            values = subset.X.toarray() if hasattr(subset.X, "toarray") else np.asarray(subset.X)
+            means[:, cluster_index] = np.asarray(values.mean(axis=0)).ravel()
+            fractions[:, cluster_index] = np.asarray((values > 0).mean(axis=0)).ravel()
+        z_scores = (means - means.mean(axis=1, keepdims=True)) / np.maximum(means.std(axis=1, keepdims=True), 1e-8)
+        z_scores = np.clip(z_scores, -2.5, 2.5)
+        width = max(8.0, 3.8 + 0.58 * len(cluster_levels))
+        height = max(5.5, 2.8 + 0.22 * len(genes))
+        title = "Marker-list annotation: " + "; ".join(panel.keys())
+
+        fig, ax = plt.subplots(figsize=(width, height))
+        x_coords, y_coords = np.meshgrid(np.arange(len(cluster_levels)), np.arange(len(genes)))
+        dots = ax.scatter(x_coords.ravel(), y_coords.ravel(), s=20 + 250 * fractions.ravel(), c=z_scores.ravel(), cmap="RdBu_r", vmin=-2.5, vmax=2.5, edgecolors="none")
+        ax.set_xticks(np.arange(len(cluster_levels)), cluster_levels, rotation=45, ha="right")
+        ax.set_yticks(np.arange(len(genes)), genes)
+        ax.invert_yaxis(); ax.set_xlabel("Cluster"); ax.set_ylabel("Marker gene"); ax.set_title(title, fontweight="bold", loc="left", fontsize=11)
+        colorbar = fig.colorbar(dots, ax=ax, pad=0.02); colorbar.set_label("Row-scaled mean expression")
+        fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_dotplot_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(width, height))
+        image = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-2.5, vcenter=0, vmax=2.5))
+        ax.set_xticks(np.arange(len(cluster_levels)), cluster_levels, rotation=45, ha="right")
+        ax.set_yticks(np.arange(len(genes)), genes)
+        ax.set_xlabel("Cluster"); ax.set_ylabel("Marker gene"); ax.set_title(title + "\nMean normalized expression, row-scaled across clusters", fontweight="bold", loc="left", fontsize=11)
+        colorbar = fig.colorbar(image, ax=ax, pad=0.02); colorbar.set_label("Row Z-score")
+        fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
 
 
 def apply_existing_annotation(adata):
@@ -1244,6 +1306,10 @@ def main():
             save_umap(adata, col, figures / name)
         if "condition" in adata.obs.columns and adata.obs.condition.nunique() > 1:
             save_umap(adata, "condition", figures / "06_umap_condition.png")
+        marker_sets = adata.uns.get("codespring_marker_gene_sets", {})
+        if marker_sets:
+            print("Rendering readable marker-list dot plots and heatmaps.", flush=True)
+            save_marker_annotation_panels(adata, marker_sets, figures)
         try:
             sc.tl.rank_genes_groups(adata, groupby="cluster", method="wilcoxon", use_raw=True)
             markers = sc.get.rank_genes_groups_df(adata, group=None)
