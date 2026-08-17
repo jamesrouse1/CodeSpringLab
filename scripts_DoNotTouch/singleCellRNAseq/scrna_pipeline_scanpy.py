@@ -825,6 +825,53 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path):
         fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
 
 
+def save_cluster_marker_heatmaps(adata, markers, figures: Path, genes_per_cluster=10, clusters_per_panel=4):
+    if markers.empty or "group" not in markers.columns or "names" not in markers.columns:
+        return
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
+    ranked = []
+    for cluster, group in markers.groupby("group", sort=False, observed=True):
+        if "pvals_adj" in group.columns:
+            group = group.sort_values("pvals_adj", kind="stable")
+        ranked.append(group.head(genes_per_cluster).assign(source_cluster=str(cluster)))
+    top = pd.concat(ranked, ignore_index=True) if ranked else pd.DataFrame()
+    if top.empty:
+        return
+    cluster_levels = sorted(adata.obs["cluster"].astype(str).unique(), key=lambda value: (not str(value).replace(".", "", 1).isdigit(), float(value) if str(value).replace(".", "", 1).isdigit() else str(value)))
+    expression = adata.raw if adata.raw is not None else adata
+    available = set(expression.var_names)
+    source_clusters = [str(value) for value in top["source_cluster"].drop_duplicates()]
+    panels = [source_clusters[index:index + clusters_per_panel] for index in range(0, len(source_clusters), clusters_per_panel)]
+    group_labels = adata.obs["cluster"].astype(str).to_numpy()
+    for panel_index, panel_clusters in enumerate(panels, start=1):
+        panel_top = top[top["source_cluster"].isin(panel_clusters) & top["names"].astype(str).isin(available)].copy()
+        if panel_top.empty:
+            continue
+        genes = panel_top["names"].astype(str).tolist()
+        raw_labels = [f"{gene}  [cluster {cluster}]" for gene, cluster in zip(genes, panel_top["source_cluster"].astype(str))]
+        seen, labels = {}, []
+        for label in raw_labels:
+            seen[label] = seen.get(label, 0) + 1
+            labels.append(label if seen[label] == 1 else f"{label} ({seen[label]})")
+        means = np.zeros((len(genes), len(cluster_levels)), dtype=float)
+        for cluster_index, cluster in enumerate(cluster_levels):
+            subset = expression[group_labels == cluster, genes]
+            values = subset.X.toarray() if hasattr(subset.X, "toarray") else np.asarray(subset.X)
+            means[:, cluster_index] = np.asarray(values.mean(axis=0)).ravel()
+        z_scores = (means - means.mean(axis=1, keepdims=True)) / np.maximum(means.std(axis=1, keepdims=True), 1e-8)
+        z_scores = np.clip(z_scores, -2.5, 2.5)
+        width, height = max(8.0, 3.8 + 0.58 * len(cluster_levels)), max(6.0, 2.8 + 0.22 * len(genes))
+        fig, ax = plt.subplots(figsize=(width, height))
+        image = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-2.5, vcenter=0, vmax=2.5))
+        ax.set_xticks(np.arange(len(cluster_levels)), cluster_levels, rotation=45, ha="right")
+        ax.set_yticks(np.arange(len(labels)), labels)
+        ax.set_xlabel("Cluster"); ax.set_ylabel("Marker gene [source cluster]")
+        ax.set_title("Top cluster markers: " + ", ".join(panel_clusters) + "\nTop 10 ranked markers per selected cluster; mean normalized expression, row-scaled", fontweight="bold", loc="left", fontsize=11)
+        colorbar = fig.colorbar(image, ax=ax, pad=0.02); colorbar.set_label("Row Z-score")
+        fig.tight_layout(); fig.savefig(figures / f"08_cluster_marker_heatmap_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+
+
 def apply_existing_annotation(adata):
     candidates = [
         "cell_type", "celltype", "CellType", "annotation", "annotated_cell_type", "predicted.celltype",
@@ -1315,6 +1362,7 @@ def main():
             markers = sc.get.rank_genes_groups_df(adata, group=None)
             markers.to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
             markers.groupby("group", observed=True).head(10).to_csv(tables / "top10_markers_per_cluster.tsv", sep="\t", index=False)
+            save_cluster_marker_heatmaps(adata, markers, figures)
         except Exception as exc:
             pd.DataFrame({"warning": [str(exc)]}).to_csv(tables / "cluster_markers.tsv", sep="\t", index=False)
         write_cell_metadata_outputs(adata, tables)

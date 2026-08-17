@@ -1110,6 +1110,45 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
   invisible(TRUE)
 }
 
+save_cluster_marker_heatmaps <- function(obj, markers, genes_per_cluster = 10L, clusters_per_panel = 4L) {
+  if (!NROW(markers) || "error" %in% names(markers) || !"cluster" %in% names(markers)) return(invisible(FALSE))
+  gene_hits <- intersect(c("gene", "features"), names(markers))
+  gene_column <- if (length(gene_hits)) gene_hits[[1]] else ""
+  if (!nzchar(gene_column)) return(invisible(FALSE))
+  top <- do.call(rbind, lapply(split(markers, as.character(markers$cluster)), function(x) {
+    if ("p_val_adj" %in% names(x)) x <- x[order(x$p_val_adj, na.last = TRUE), , drop = FALSE]
+    utils::head(x, genes_per_cluster)
+  }))
+  if (!NROW(top)) return(invisible(FALSE))
+  cluster_order <- unique(as.character(top$cluster))
+  cluster_order <- cluster_order[order(suppressWarnings(as.numeric(cluster_order)), cluster_order, na.last = TRUE)]
+  panels <- split(cluster_order, ceiling(seq_along(cluster_order) / clusters_per_panel))
+  expression <- Seurat::GetAssayData(obj, assay = DefaultAssay(obj), layer = "data")
+  all_clusters <- as.character(obj$cluster)
+  all_cluster_levels <- unique(all_clusters[order(suppressWarnings(as.numeric(all_clusters)), all_clusters, na.last = TRUE)])
+  for (panel_index in seq_along(panels)) {
+    panel_clusters <- panels[[panel_index]]
+    panel_top <- top[as.character(top$cluster) %in% panel_clusters, , drop = FALSE]
+    panel_top <- panel_top[panel_top[[gene_column]] %in% rownames(expression), , drop = FALSE]
+    if (!NROW(panel_top)) next
+    genes <- as.character(panel_top[[gene_column]])
+    row_labels <- make.unique(paste0(genes, "  [cluster ", as.character(panel_top$cluster), "]"))
+    means <- do.call(cbind, lapply(all_cluster_levels, function(cluster) Matrix::rowMeans(expression[genes, all_clusters == cluster, drop = FALSE])))
+    means <- as.matrix(means); rownames(means) <- row_labels; colnames(means) <- all_cluster_levels
+    scaled <- t(scale(t(means))); scaled[!is.finite(scaled)] <- 0
+    scaled <- matrix(pmax(-2.5, pmin(2.5, scaled)), nrow = NROW(means), ncol = NCOL(means), dimnames = dimnames(means))
+    heatmap_data <- data.frame(gene = rep(rownames(scaled), times = NCOL(scaled)), cluster = rep(colnames(scaled), each = NROW(scaled)), z_score = as.vector(scaled), stringsAsFactors = FALSE)
+    plot <- ggplot2::ggplot(heatmap_data, ggplot2::aes(x = .data$cluster, y = .data$gene, fill = .data$z_score)) +
+      ggplot2::geom_tile() +
+      ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "#FFFFFF", high = "#B2182B", midpoint = 0, limits = c(-2.5, 2.5), name = "Row Z-score") +
+      ggplot2::labs(title = paste0("Top cluster markers: ", paste(panel_clusters, collapse = ", ")), subtitle = "Top 10 ranked markers per selected cluster; mean normalized expression, row-scaled", x = "Cluster", y = "Marker gene [source cluster]") +
+      ggplot2::theme_classic(base_size = 12) +
+      ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), panel.grid = ggplot2::element_blank())
+    save_plot(plot, sprintf("08_cluster_marker_heatmap_panel_%02d.png", panel_index), max(8, 3.8 + 0.58 * length(all_cluster_levels)), max(6, 2.8 + 0.22 * NROW(panel_top)))
+  }
+  invisible(TRUE)
+}
+
 load_seurat_reference <- function(path) {
   extension <- tolower(tools::file_ext(path))
   if (identical(extension, "rds")) {
@@ -1486,6 +1525,7 @@ if (isTRUE(params$find_cluster_markers) && ncol(obj) >= 20 && length(unique(obj$
       top <- do.call(rbind, lapply(split(markers, markers$cluster), function(x) utils::head(x[order(x$p_val_adj), , drop = FALSE], 10)))
       utils::write.table(top, file.path(tables_dir, "top10_markers_per_cluster.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
     }
+    save_cluster_marker_heatmaps(obj, markers)
   }
 } else if (!isTRUE(params$find_cluster_markers)) {
   message("Skipping optional cluster-marker discovery; reference annotation and its UMAP/table outputs are complete without it.")
