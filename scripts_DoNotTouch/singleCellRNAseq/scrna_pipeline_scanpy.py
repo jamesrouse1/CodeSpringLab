@@ -789,9 +789,16 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_
     expression = adata.raw if adata.raw is not None else adata
     available = set(expression.var_names)
     for panel_index, panel in enumerate(marker_list_panels(marker_sets), start=1):
-        genes = list(dict.fromkeys(gene for values in panel.values() for gene in values if gene in available))
+        marker_rows, seen = [], set()
+        for marker_set, values in panel.items():
+            for gene in values:
+                if gene in available and gene not in seen:
+                    marker_rows.append((marker_set, gene)); seen.add(gene)
+        genes = [gene for _, gene in marker_rows]
         if not genes:
             continue
+        row_labels = [f"{marker_set} | {gene}" for marker_set, gene in marker_rows]
+        row_breaks = [index - 0.5 for index in range(1, len(marker_rows)) if marker_rows[index][0] != marker_rows[index - 1][0]]
         title = "Marker-list annotation: " + "; ".join(panel.keys())
         groupings = [("cluster", "Cluster")]
         if annotation_name in adata.obs.columns:
@@ -809,14 +816,16 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_
             fig, ax = plt.subplots(figsize=(width, height))
             x_coords, y_coords = np.meshgrid(np.arange(len(group_levels)), np.arange(len(genes)))
             dots = ax.scatter(x_coords.ravel(), y_coords.ravel(), s=20 + 250 * fractions.ravel(), c=z_scores.ravel(), cmap="RdBu_r", vmin=-2.5, vmax=2.5, edgecolors="none")
-            ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), genes)
-            ax.invert_yaxis(); ax.set_xlabel(group_label); ax.set_ylabel("Marker gene"); ax.set_title(title + f" — grouped by {group_label.lower()}", fontweight="bold", loc="left", fontsize=11)
+            ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), row_labels)
+            for row_break in row_breaks: ax.axhline(row_break, color="#4B5563", linewidth=0.7)
+            ax.invert_yaxis(); ax.set_xlabel(group_label); ax.set_ylabel("Marker set | gene"); ax.set_title(title + f" — grouped by {group_label.lower()}", fontweight="bold", loc="left", fontsize=11)
             colorbar = fig.colorbar(dots, ax=ax, pad=0.02); colorbar.set_label("Row-scaled mean expression")
             fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_dotplot_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
             fig, ax = plt.subplots(figsize=(width, height))
             image = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-2.5, vcenter=0, vmax=2.5))
-            ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), genes)
-            ax.set_xlabel(group_label); ax.set_ylabel("Marker gene"); ax.set_title(title + f" — grouped by {group_label.lower()}\nMean normalized expression, row-scaled", fontweight="bold", loc="left", fontsize=11)
+            ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), row_labels)
+            for row_break in row_breaks: ax.axhline(row_break, color="#4B5563", linewidth=0.7)
+            ax.set_xlabel(group_label); ax.set_ylabel("Marker set | gene"); ax.set_title(title + f" — grouped by {group_label.lower()}\nMean normalized expression, row-scaled", fontweight="bold", loc="left", fontsize=11)
             colorbar = fig.colorbar(image, ax=ax, pad=0.02); colorbar.set_label("Row Z-score")
             fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
 

@@ -1086,8 +1086,9 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
       unique_set
     })
     dot_features <- dot_features[lengths(dot_features) > 0]
-    genes <- unique(unlist(features, use.names = FALSE))
-    genes <- intersect(genes, rownames(expression))
+    marker_rows <- do.call(rbind, lapply(names(features), function(label) data.frame(marker_set = label, gene = as.character(features[[label]]), stringsAsFactors = FALSE)))
+    marker_rows <- marker_rows[!duplicated(marker_rows$gene) & marker_rows$gene %in% rownames(expression), , drop = FALSE]
+    genes <- marker_rows$gene
     if (!length(genes)) next
     panel_label <- paste0("Marker-list annotation: ", paste(names(features), collapse = "; "))
     for (group_key in names(groupings)) {
@@ -1106,13 +1107,17 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
       save_plot(dot, sprintf("07_marker_annotation_dotplot_by_%s_panel_%02d.png", group_key, panel_index), width, height)
 
       means <- do.call(cbind, lapply(group_levels, function(group) Matrix::rowMeans(expression[genes, grouping == group, drop = FALSE])))
-      means <- as.matrix(means); rownames(means) <- genes; colnames(means) <- group_levels
+      row_labels <- make.unique(paste0(marker_rows$marker_set, " | ", genes))
+      means <- as.matrix(means); rownames(means) <- row_labels; colnames(means) <- group_levels
       scaled <- t(scale(t(means))); scaled[!is.finite(scaled)] <- 0
       scaled <- matrix(pmax(-2.5, pmin(2.5, scaled)), nrow = NROW(means), ncol = NCOL(means), dimnames = dimnames(means))
       heatmap_path <- file.path(figures_dir, sprintf("07_marker_annotation_heatmap_by_%s_panel_%02d.png", group_key, panel_index))
       if (requireNamespace("pheatmap", quietly = TRUE)) {
+        annotation_row <- data.frame(`Marker set` = marker_rows$marker_set, row.names = rownames(scaled), check.names = FALSE)
+        marker_colors <- categorical_palette(marker_rows$marker_set)
+        group_breaks <- which(marker_rows$marker_set[-1] != marker_rows$marker_set[-NROW(marker_rows)])
         grDevices::png(heatmap_path, width = width * 160, height = height * 160, res = 160)
-        pheatmap::pheatmap(scaled, color = grDevices::colorRampPalette(c("#2166AC", "#FFFFFF", "#B2182B"))(101), breaks = seq(-2.5, 2.5, length.out = 102), cluster_rows = TRUE, cluster_cols = FALSE, border_color = NA, fontsize = 11, main = paste0(panel_label, " — grouped by ", tolower(group_label)))
+        pheatmap::pheatmap(scaled, color = grDevices::colorRampPalette(c("#2166AC", "#FFFFFF", "#B2182B"))(101), breaks = seq(-2.5, 2.5, length.out = 102), cluster_rows = FALSE, cluster_cols = FALSE, annotation_row = annotation_row, annotation_colors = list(`Marker set` = marker_colors), gaps_row = group_breaks, border_color = NA, fontsize = 11, main = paste0(panel_label, " — grouped by ", tolower(group_label)))
         grDevices::dev.off()
       } else {
         heatmap_data <- data.frame(gene = rep(rownames(scaled), times = NCOL(scaled)), group = rep(colnames(scaled), each = NROW(scaled)), z_score = as.vector(scaled), stringsAsFactors = FALSE)
