@@ -31,6 +31,17 @@ constant within a capture. Do not mix Seurat `.rds` and AnnData
 For FASTQ inputs, the optional `fastq_sample` column records the filename prefix
 passed to `cellranger count --sample`; the app infers it when one prefix is found.
 
+### Shared PBMC example
+
+The CodeSpringApp **Use Example Dataset** control for scRNA-seq fills this
+shared human PBMC 3k matrix path, while leaving the results-storage location
+for the user to choose:
+
+`/grid/bsr/data/data/bsr_readable_data/references/scrna_example/pbmc3k/filtered_gene_bc_matrices/hg19`
+
+It is a valid older 10x layout (`matrix.mtx`, `genes.tsv`, and `barcodes.tsv`);
+the workflow accepts both this format and newer `features.tsv` layouts.
+
 ## Runtime on the HPC
 
 Starting `./run_codespringweb.sh` only starts the lightweight web interface;
