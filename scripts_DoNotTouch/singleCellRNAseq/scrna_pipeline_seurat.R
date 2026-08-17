@@ -1076,15 +1076,25 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
   panels <- marker_list_panels(marker_list)
   for (panel_index in seq_along(panels)) {
     features <- panels[[panel_index]]
+    # Seurat::DotPlot uses factor levels for feature labels and rejects a
+    # gene repeated under two biologically related labels. Shared genes still
+    # contribute to both annotation scores; show each once in the visual.
+    seen_genes <- character(0)
+    dot_features <- lapply(features, function(set) {
+      unique_set <- unique(setdiff(set, seen_genes))
+      seen_genes <<- unique(c(seen_genes, set))
+      unique_set
+    })
+    dot_features <- dot_features[lengths(dot_features) > 0]
     genes <- unique(unlist(features, use.names = FALSE))
     genes <- intersect(genes, rownames(expression))
     if (!length(genes)) next
     panel_label <- paste0("Marker-list annotation: ", paste(names(features), collapse = "; "))
     width <- max(8, 3.8 + 0.58 * length(cluster_levels))
     height <- max(5.5, 2.8 + 0.22 * length(genes))
-    dot <- Seurat::DotPlot(obj, features = features, group.by = "cluster", assay = assay, cols = c("#E9F2FA", "#B2182B")) +
+    dot <- Seurat::DotPlot(obj, features = dot_features, group.by = "cluster", assay = assay, cols = c("#E9F2FA", "#B2182B")) +
       Seurat::RotatedAxis() +
-      ggplot2::labs(title = panel_label, x = "Marker gene", y = "Cluster", color = "Average expression", size = "% expressing") +
+      ggplot2::labs(title = panel_label, subtitle = "Shared markers are displayed once; all listed markers were used for scoring", x = "Marker gene", y = "Cluster", color = "Average expression", size = "% expressing") +
       ggplot2::theme_classic(base_size = 12) +
       ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
     save_plot(dot, sprintf("07_marker_annotation_dotplot_panel_%02d.png", panel_index), width, height)
