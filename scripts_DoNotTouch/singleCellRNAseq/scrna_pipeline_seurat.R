@@ -1130,42 +1130,41 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
   invisible(TRUE)
 }
 
-save_cluster_marker_heatmaps <- function(obj, markers, genes_per_cluster = 10L, clusters_per_panel = 4L) {
+save_cluster_marker_heatmaps <- function(obj, markers, genes_per_cluster = 10L) {
   if (!NROW(markers) || "error" %in% names(markers) || !"cluster" %in% names(markers)) return(invisible(FALSE))
   gene_hits <- intersect(c("gene", "features"), names(markers))
   gene_column <- if (length(gene_hits)) gene_hits[[1]] else ""
   if (!nzchar(gene_column)) return(invisible(FALSE))
-  top <- do.call(rbind, lapply(split(markers, as.character(markers$cluster)), function(x) {
-    if ("p_val_adj" %in% names(x)) x <- x[order(x$p_val_adj, na.last = TRUE), , drop = FALSE]
-    utils::head(x, genes_per_cluster)
-  }))
-  if (!NROW(top)) return(invisible(FALSE))
-  cluster_order <- unique(as.character(top$cluster))
-  cluster_order <- cluster_order[order(suppressWarnings(as.numeric(cluster_order)), cluster_order, na.last = TRUE)]
-  panels <- split(cluster_order, ceiling(seq_along(cluster_order) / clusters_per_panel))
-  expression <- Seurat::GetAssayData(obj, assay = DefaultAssay(obj), layer = "data")
   all_clusters <- as.character(obj$cluster)
   all_cluster_levels <- unique(all_clusters[order(suppressWarnings(as.numeric(all_clusters)), all_clusters, na.last = TRUE)])
-  for (panel_index in seq_along(panels)) {
-    panel_clusters <- panels[[panel_index]]
-    panel_top <- top[as.character(top$cluster) %in% panel_clusters, , drop = FALSE]
-    panel_top <- panel_top[panel_top[[gene_column]] %in% rownames(expression), , drop = FALSE]
-    if (!NROW(panel_top)) next
-    genes <- as.character(panel_top[[gene_column]])
-    row_labels <- make.unique(paste0(genes, "  [cluster ", as.character(panel_top$cluster), "]"))
-    means <- do.call(cbind, lapply(all_cluster_levels, function(cluster) Matrix::rowMeans(expression[genes, all_clusters == cluster, drop = FALSE])))
-    means <- as.matrix(means); rownames(means) <- row_labels; colnames(means) <- all_cluster_levels
-    scaled <- t(scale(t(means))); scaled[!is.finite(scaled)] <- 0
-    scaled <- matrix(pmax(-2.5, pmin(2.5, scaled)), nrow = NROW(means), ncol = NCOL(means), dimnames = dimnames(means))
-    heatmap_data <- data.frame(gene = rep(rownames(scaled), times = NCOL(scaled)), cluster = rep(colnames(scaled), each = NROW(scaled)), z_score = as.vector(scaled), stringsAsFactors = FALSE)
-    plot <- ggplot2::ggplot(heatmap_data, ggplot2::aes(x = .data$cluster, y = .data$gene, fill = .data$z_score)) +
-      ggplot2::geom_tile() +
-      ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "#FFFFFF", high = "#B2182B", midpoint = 0, limits = c(-2.5, 2.5), name = "Row Z-score") +
-      ggplot2::labs(title = paste0("Top cluster markers: ", paste(panel_clusters, collapse = ", ")), subtitle = "Top 10 ranked markers per selected cluster; mean normalized expression, row-scaled", x = "Cluster", y = "Marker gene [source cluster]") +
-      ggplot2::theme_classic(base_size = 12) +
-      ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), panel.grid = ggplot2::element_blank())
-    save_plot(plot, sprintf("08_cluster_marker_heatmap_panel_%02d.png", panel_index), max(8, 3.8 + 0.58 * length(all_cluster_levels)), max(6, 2.8 + 0.22 * NROW(panel_top)))
-  }
+  logfc_column <- intersect(c("avg_log2FC", "avg_logFC"), names(markers))
+  top_by_cluster <- lapply(all_cluster_levels, function(cluster) {
+    x <- markers[as.character(markers$cluster) == cluster, , drop = FALSE]
+    # Match the Seurat PBMC tutorial: positive markers with log2FC > 1,
+    # ranked by effect size.
+    if (length(logfc_column)) {
+      x <- x[is.finite(x[[logfc_column[[1]]]]) & x[[logfc_column[[1]]]] > 1, , drop = FALSE]
+      x <- x[order(x[[logfc_column[[1]]]], decreasing = TRUE, na.last = TRUE), , drop = FALSE]
+    } else if ("p_val_adj" %in% names(x)) {
+      x <- x[order(x$p_val_adj, na.last = TRUE), , drop = FALSE]
+    }
+    utils::head(x, genes_per_cluster)
+  })
+  top <- do.call(rbind, top_by_cluster)
+  if (is.null(top) || !NROW(top)) return(invisible(FALSE))
+  top <- top[!duplicated(as.character(top[[gene_column]])), , drop = FALSE]
+  genes <- as.character(top[[gene_column]])
+  genes <- genes[genes %in% rownames(obj)]
+  if (!length(genes)) return(invisible(FALSE))
+  obj$cluster <- factor(all_clusters, levels = all_cluster_levels)
+  group_colors <- categorical_palette(all_cluster_levels)
+  names(group_colors) <- all_cluster_levels
+  heatmap <- Seurat::DoHeatmap(obj, features = genes, group.by = "cluster", group.colors = group_colors,
+    disp.min = -2.5, disp.max = 2.5, raster = TRUE, draw.lines = TRUE, combine = TRUE) +
+    Seurat::NoLegend() +
+    ggplot2::labs(title = "Top markers for every cluster", subtitle = "Up to 10 positive markers per cluster (log2 fold-change > 1)") +
+    ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 16), plot.subtitle = ggplot2::element_text(size = 11), axis.text.y = ggplot2::element_text(size = 8))
+  save_plot(heatmap, "08_cluster_marker_heatmap.png", max(12, 0.5 * length(all_cluster_levels) + 9), max(10, 3 + 0.16 * length(genes)))
   invisible(TRUE)
 }
 
