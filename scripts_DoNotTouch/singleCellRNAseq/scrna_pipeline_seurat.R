@@ -1071,8 +1071,8 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
   if (!length(marker_list)) return(invisible(FALSE))
   assay <- DefaultAssay(obj)
   expression <- Seurat::GetAssayData(obj, assay = assay, layer = "data")
-  clusters <- as.character(obj$cluster)
-  cluster_levels <- unique(clusters[order(suppressWarnings(as.numeric(clusters)), clusters, na.last = TRUE)])
+  groupings <- list(cluster = as.character(obj$cluster))
+  if (annotation_name %in% colnames(obj@meta.data)) groupings$cell_type <- as.character(obj[[annotation_name]][, 1])
   panels <- marker_list_panels(marker_list)
   for (panel_index in seq_along(panels)) {
     features <- panels[[panel_index]]
@@ -1090,32 +1090,36 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
     genes <- intersect(genes, rownames(expression))
     if (!length(genes)) next
     panel_label <- paste0("Marker-list annotation: ", paste(names(features), collapse = "; "))
-    width <- max(8, 3.8 + 0.58 * length(cluster_levels))
-    height <- max(5.5, 2.8 + 0.22 * length(genes))
-    dot <- Seurat::DotPlot(obj, features = dot_features, group.by = "cluster", assay = assay, cols = c("#E9F2FA", "#B2182B")) +
-      Seurat::RotatedAxis() +
-      ggplot2::labs(title = panel_label, subtitle = "Shared markers are displayed once; all listed markers were used for scoring", x = "Marker gene", y = "Cluster", color = "Average expression", size = "% expressing") +
-      ggplot2::theme_classic(base_size = 12) +
-      ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
-    save_plot(dot, sprintf("07_marker_annotation_dotplot_panel_%02d.png", panel_index), width, height)
+    for (group_key in names(groupings)) {
+      grouping <- groupings[[group_key]]
+      group_levels <- if (identical(group_key, "cluster")) unique(grouping[order(suppressWarnings(as.numeric(grouping)), grouping, na.last = TRUE)]) else sort(unique(grouping))
+      group_levels <- group_levels[!is.na(group_levels) & nzchar(group_levels)]
+      if (!length(group_levels)) next
+      group_column <- if (identical(group_key, "cluster")) "cluster" else annotation_name
+      group_label <- if (identical(group_key, "cluster")) "Cluster" else "Cell type"
+      width <- max(8, 3.8 + 0.58 * length(group_levels)); height <- max(5.5, 2.8 + 0.22 * length(genes))
+      dot <- Seurat::DotPlot(obj, features = dot_features, group.by = group_column, assay = assay, cols = c("#E9F2FA", "#B2182B")) +
+        Seurat::RotatedAxis() +
+        ggplot2::labs(title = panel_label, subtitle = paste0("Grouped by ", tolower(group_label), "; shared markers are displayed once"), x = "Marker gene", y = group_label, color = "Average expression", size = "% expressing") +
+        ggplot2::theme_classic(base_size = 12) +
+        ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+      save_plot(dot, sprintf("07_marker_annotation_dotplot_by_%s_panel_%02d.png", group_key, panel_index), width, height)
 
-    means <- do.call(cbind, lapply(cluster_levels, function(cluster) Matrix::rowMeans(expression[genes, clusters == cluster, drop = FALSE])))
-    means <- as.matrix(means)
-    rownames(means) <- genes
-    colnames(means) <- cluster_levels
-    scaled <- t(scale(t(means)))
-    scaled[!is.finite(scaled)] <- 0
-    # pmax/pmin can drop matrix dimnames; reconstruct them explicitly because
-    # they are the heatmap's gene and cluster axes.
-    scaled <- matrix(pmax(-2.5, pmin(2.5, scaled)), nrow = NROW(means), ncol = NCOL(means), dimnames = dimnames(means))
-    heatmap_data <- data.frame(gene = rep(rownames(scaled), times = NCOL(scaled)), cluster = rep(colnames(scaled), each = NROW(scaled)), z_score = as.vector(scaled), stringsAsFactors = FALSE)
-    heatmap <- ggplot2::ggplot(heatmap_data, ggplot2::aes(x = .data$cluster, y = .data$gene, fill = .data$z_score)) +
-      ggplot2::geom_tile() +
-      ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "#FFFFFF", high = "#B2182B", midpoint = 0, limits = c(-2.5, 2.5), name = "Row Z-score") +
-      ggplot2::labs(title = panel_label, subtitle = "Mean normalized expression, row-scaled across clusters", x = "Cluster", y = "Marker gene") +
-      ggplot2::theme_classic(base_size = 12) +
-      ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), panel.grid = ggplot2::element_blank())
-    save_plot(heatmap, sprintf("07_marker_annotation_heatmap_panel_%02d.png", panel_index), width, height)
+      means <- do.call(cbind, lapply(group_levels, function(group) Matrix::rowMeans(expression[genes, grouping == group, drop = FALSE])))
+      means <- as.matrix(means); rownames(means) <- genes; colnames(means) <- group_levels
+      scaled <- t(scale(t(means))); scaled[!is.finite(scaled)] <- 0
+      scaled <- matrix(pmax(-2.5, pmin(2.5, scaled)), nrow = NROW(means), ncol = NCOL(means), dimnames = dimnames(means))
+      heatmap_path <- file.path(figures_dir, sprintf("07_marker_annotation_heatmap_by_%s_panel_%02d.png", group_key, panel_index))
+      if (requireNamespace("pheatmap", quietly = TRUE)) {
+        grDevices::png(heatmap_path, width = width * 160, height = height * 160, res = 160)
+        pheatmap::pheatmap(scaled, color = grDevices::colorRampPalette(c("#2166AC", "#FFFFFF", "#B2182B"))(101), breaks = seq(-2.5, 2.5, length.out = 102), cluster_rows = TRUE, cluster_cols = FALSE, border_color = NA, fontsize = 11, main = paste0(panel_label, " — grouped by ", tolower(group_label)))
+        grDevices::dev.off()
+      } else {
+        heatmap_data <- data.frame(gene = rep(rownames(scaled), times = NCOL(scaled)), group = rep(colnames(scaled), each = NROW(scaled)), z_score = as.vector(scaled), stringsAsFactors = FALSE)
+        heatmap <- ggplot2::ggplot(heatmap_data, ggplot2::aes(x = .data$group, y = .data$gene, fill = .data$z_score)) + ggplot2::geom_tile() + ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "#FFFFFF", high = "#B2182B", midpoint = 0, limits = c(-2.5, 2.5), name = "Row Z-score") + ggplot2::labs(title = panel_label, subtitle = paste0("Mean normalized expression, row-scaled and grouped by ", tolower(group_label)), x = group_label, y = "Marker gene") + ggplot2::theme_classic(base_size = 12) + ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), panel.grid = ggplot2::element_blank())
+        save_plot(heatmap, basename(heatmap_path), width, height)
+      }
+    }
   }
   invisible(TRUE)
 }

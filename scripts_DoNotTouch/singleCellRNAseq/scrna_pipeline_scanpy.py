@@ -781,48 +781,44 @@ def marker_list_panels(marker_sets, max_cell_types=6, max_genes=32):
     return panels
 
 
-def save_marker_annotation_panels(adata, marker_sets, figures: Path):
+def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_name="cell_type"):
     if not marker_sets:
         return
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
-    groups = adata.obs["cluster"].astype(str)
-    cluster_levels = sorted(groups.unique(), key=lambda value: (not str(value).replace(".", "", 1).isdigit(), float(value) if str(value).replace(".", "", 1).isdigit() else str(value)))
     expression = adata.raw if adata.raw is not None else adata
     available = set(expression.var_names)
     for panel_index, panel in enumerate(marker_list_panels(marker_sets), start=1):
         genes = list(dict.fromkeys(gene for values in panel.values() for gene in values if gene in available))
         if not genes:
             continue
-        means = np.zeros((len(genes), len(cluster_levels)), dtype=float)
-        fractions = np.zeros((len(genes), len(cluster_levels)), dtype=float)
-        for cluster_index, cluster in enumerate(cluster_levels):
-            subset = expression[groups.to_numpy() == cluster, genes]
-            values = subset.X.toarray() if hasattr(subset.X, "toarray") else np.asarray(subset.X)
-            means[:, cluster_index] = np.asarray(values.mean(axis=0)).ravel()
-            fractions[:, cluster_index] = np.asarray((values > 0).mean(axis=0)).ravel()
-        z_scores = (means - means.mean(axis=1, keepdims=True)) / np.maximum(means.std(axis=1, keepdims=True), 1e-8)
-        z_scores = np.clip(z_scores, -2.5, 2.5)
-        width = max(8.0, 3.8 + 0.58 * len(cluster_levels))
-        height = max(5.5, 2.8 + 0.22 * len(genes))
         title = "Marker-list annotation: " + "; ".join(panel.keys())
-
-        fig, ax = plt.subplots(figsize=(width, height))
-        x_coords, y_coords = np.meshgrid(np.arange(len(cluster_levels)), np.arange(len(genes)))
-        dots = ax.scatter(x_coords.ravel(), y_coords.ravel(), s=20 + 250 * fractions.ravel(), c=z_scores.ravel(), cmap="RdBu_r", vmin=-2.5, vmax=2.5, edgecolors="none")
-        ax.set_xticks(np.arange(len(cluster_levels)), cluster_levels, rotation=45, ha="right")
-        ax.set_yticks(np.arange(len(genes)), genes)
-        ax.invert_yaxis(); ax.set_xlabel("Cluster"); ax.set_ylabel("Marker gene"); ax.set_title(title, fontweight="bold", loc="left", fontsize=11)
-        colorbar = fig.colorbar(dots, ax=ax, pad=0.02); colorbar.set_label("Row-scaled mean expression")
-        fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_dotplot_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
-
-        fig, ax = plt.subplots(figsize=(width, height))
-        image = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-2.5, vcenter=0, vmax=2.5))
-        ax.set_xticks(np.arange(len(cluster_levels)), cluster_levels, rotation=45, ha="right")
-        ax.set_yticks(np.arange(len(genes)), genes)
-        ax.set_xlabel("Cluster"); ax.set_ylabel("Marker gene"); ax.set_title(title + "\nMean normalized expression, row-scaled across clusters", fontweight="bold", loc="left", fontsize=11)
-        colorbar = fig.colorbar(image, ax=ax, pad=0.02); colorbar.set_label("Row Z-score")
-        fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+        groupings = [("cluster", "Cluster")]
+        if annotation_name in adata.obs.columns:
+            groupings.append((annotation_name, "Cell type"))
+        for group_column, group_label in groupings:
+            groups = adata.obs[group_column].astype(str)
+            group_levels = sorted(groups.unique(), key=lambda value: (not str(value).replace(".", "", 1).isdigit(), float(value) if group_column == "cluster" and str(value).replace(".", "", 1).isdigit() else str(value)))
+            means = np.zeros((len(genes), len(group_levels)), dtype=float); fractions = np.zeros((len(genes), len(group_levels)), dtype=float)
+            for group_index, group in enumerate(group_levels):
+                subset = expression[groups.to_numpy() == group, genes]
+                values = subset.X.toarray() if hasattr(subset.X, "toarray") else np.asarray(subset.X)
+                means[:, group_index] = np.asarray(values.mean(axis=0)).ravel(); fractions[:, group_index] = np.asarray((values > 0).mean(axis=0)).ravel()
+            z_scores = np.clip((means - means.mean(axis=1, keepdims=True)) / np.maximum(means.std(axis=1, keepdims=True), 1e-8), -2.5, 2.5)
+            width, height = max(8.0, 3.8 + 0.58 * len(group_levels)), max(5.5, 2.8 + 0.22 * len(genes))
+            fig, ax = plt.subplots(figsize=(width, height))
+            x_coords, y_coords = np.meshgrid(np.arange(len(group_levels)), np.arange(len(genes)))
+            dots = ax.scatter(x_coords.ravel(), y_coords.ravel(), s=20 + 250 * fractions.ravel(), c=z_scores.ravel(), cmap="RdBu_r", vmin=-2.5, vmax=2.5, edgecolors="none")
+            ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), genes)
+            ax.invert_yaxis(); ax.set_xlabel(group_label); ax.set_ylabel("Marker gene"); ax.set_title(title + f" — grouped by {group_label.lower()}", fontweight="bold", loc="left", fontsize=11)
+            colorbar = fig.colorbar(dots, ax=ax, pad=0.02); colorbar.set_label("Row-scaled mean expression")
+            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_dotplot_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+            fig, ax = plt.subplots(figsize=(width, height))
+            image = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-2.5, vcenter=0, vmax=2.5))
+            ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), genes)
+            ax.set_xlabel(group_label); ax.set_ylabel("Marker gene"); ax.set_title(title + f" — grouped by {group_label.lower()}\nMean normalized expression, row-scaled", fontweight="bold", loc="left", fontsize=11)
+            colorbar = fig.colorbar(image, ax=ax, pad=0.02); colorbar.set_label("Row Z-score")
+            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
 
 
 def save_cluster_marker_heatmaps(adata, markers, figures: Path, genes_per_cluster=10, clusters_per_panel=4):
@@ -1356,7 +1352,7 @@ def main():
         marker_sets = adata.uns.get("codespring_marker_gene_sets", {})
         if marker_sets:
             print("Rendering readable marker-list dot plots and heatmaps.", flush=True)
-            save_marker_annotation_panels(adata, marker_sets, figures)
+            save_marker_annotation_panels(adata, marker_sets, figures, annotation_name)
         try:
             sc.tl.rank_genes_groups(adata, groupby="cluster", method="wilcoxon", use_raw=True)
             markers = sc.get.rank_genes_groups_df(adata, group=None)
