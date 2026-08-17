@@ -157,7 +157,7 @@ read_params <- function(path) {
     cluster_resolution = suppressWarnings(as.numeric(get("cluster_resolution", "0.6"))),
     n_pcs = suppressWarnings(as.integer(get("n_pcs", "30"))),
     n_neighbors = suppressWarnings(as.integer(get("n_neighbors", "15"))),
-    umap_min_dist = suppressWarnings(as.numeric(get("umap_min_dist", "0.5"))),
+    umap_min_dist = suppressWarnings(as.numeric(get("umap_min_dist", "0.3"))),
     umap_spread = suppressWarnings(as.numeric(get("umap_spread", "1"))),
     umap_metric = tolower(get("umap_metric", "euclidean")),
     min_features = suppressWarnings(as.integer(get("min_features", "200"))),
@@ -202,7 +202,7 @@ if (!params$integration %in% c("auto", "none", "rpca", "cca", "harmony")) stop("
 if (!is.finite(params$cluster_resolution) || params$cluster_resolution <= 0) params$cluster_resolution <- 0.6
 if (!is.finite(params$n_pcs) || params$n_pcs < 5) params$n_pcs <- 30L
 if (!is.finite(params$n_neighbors) || params$n_neighbors < 2L || params$n_neighbors > 200L) params$n_neighbors <- 15L
-if (!is.finite(params$umap_min_dist) || params$umap_min_dist < 0 || params$umap_min_dist > 2) params$umap_min_dist <- 0.5
+if (!is.finite(params$umap_min_dist) || params$umap_min_dist < 0 || params$umap_min_dist > 2) params$umap_min_dist <- 0.3
 if (!is.finite(params$umap_spread) || params$umap_spread < 0.1 || params$umap_spread > 10) params$umap_spread <- 1
 if (!params$umap_metric %in% c("euclidean", "cosine", "manhattan", "correlation")) params$umap_metric <- "euclidean"
 if (!is.finite(params$min_features) || params$min_features < 0) params$min_features <- 200L

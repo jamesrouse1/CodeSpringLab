@@ -153,7 +153,7 @@ def params_from(path: Path):
         "cluster_resolution": float(get("cluster_resolution", "0.6") or 0.6),
         "n_pcs": int(float(get("n_pcs", "30") or 30)),
         "n_neighbors": int(float(get("n_neighbors", "15") or 15)),
-        "umap_min_dist": float(get("umap_min_dist", "0.5") or 0.5),
+        "umap_min_dist": float(get("umap_min_dist", "0.3") or 0.3),
         "umap_spread": float(get("umap_spread", "1.0") or 1.0),
         "umap_metric": get("umap_metric", "euclidean").lower(),
         "umap_init_pos": get("umap_init_pos", "spectral").lower(),
