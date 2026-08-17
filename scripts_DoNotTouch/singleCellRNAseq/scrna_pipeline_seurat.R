@@ -717,8 +717,10 @@ save_plot <- function(plot, file, width = 9, height = 6) ggplot2::ggsave(file.pa
 qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
 DefaultAssay(qc_merged) <- "RNA"
 applied_cutoffs <- list(min_features = params$min_features, min_counts = params$min_counts, max_features = params$max_features, max_percent_mt = params$max_percent_mt)
-save_plot(qc_violin_plot(qc_merged, applied_cutoffs, "Retained cells — applied QC cutoffs"), "01_qc_violin.png", 14, 5)
-save_plot(qc_scatter_plot(qc_merged, applied_cutoffs, "Retained cells — applied QC cutoffs"), "02_qc_scatter.png", 12, 5)
+# Use the same names as the Scanpy runner so the app can display retained-cell
+# QC figures uniformly regardless of the selected analysis engine.
+save_plot(qc_violin_plot(qc_merged, applied_cutoffs, "Retained cells — applied QC cutoffs"), "01_qc_post_filter_violin.png", 14, 5)
+save_plot(qc_scatter_plot(qc_merged, applied_cutoffs, "Retained cells — applied QC cutoffs"), "01_qc_post_filter_scatter.png", 12, 5)
 if (any(is.finite(doublet_calls$doublet_score))) {
   doublet_plot <- ggplot2::ggplot(doublet_calls[is.finite(doublet_calls$doublet_score), , drop = FALSE], ggplot2::aes(x = doublet_score)) +
     ggplot2::geom_histogram(bins = 40, fill = jpplot_colors[[7]], color = "white") +
