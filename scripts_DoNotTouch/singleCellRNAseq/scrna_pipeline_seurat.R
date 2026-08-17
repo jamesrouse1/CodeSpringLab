@@ -956,6 +956,23 @@ safe_metadata_name <- function(value, default = "cell_type") {
   value
 }
 
+write_interactive_metadata_tables <- function(obj) {
+  cell_metadata <- obj@meta.data
+  if ("cell" %in% names(cell_metadata)) names(cell_metadata)[names(cell_metadata) == "cell"] <- "input_cell"
+  cell_metadata <- data.frame(cell = colnames(obj), cell_metadata, check.names = FALSE)
+  utils::write.table(cell_metadata, file.path(tables_dir, "cell_metadata.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+
+  if (!"umap" %in% names(obj@reductions)) return(invisible(FALSE))
+  umap_coordinates <- as.data.frame(Seurat::Embeddings(obj, reduction = "umap"), check.names = FALSE)
+  colnames(umap_coordinates)[seq_len(min(2L, NCOL(umap_coordinates)))] <- c("UMAP_1", "UMAP_2")[seq_len(min(2L, NCOL(umap_coordinates)))]
+  if (!all(c("UMAP_1", "UMAP_2") %in% names(umap_coordinates))) stop("The final UMAP does not contain two coordinates.")
+  umap_metadata <- obj@meta.data[rownames(umap_coordinates), , drop = FALSE]
+  if ("cell" %in% names(umap_metadata)) names(umap_metadata)[names(umap_metadata) == "cell"] <- "input_cell"
+  umap_table <- data.frame(cell = rownames(umap_coordinates), umap_coordinates[, c("UMAP_1", "UMAP_2"), drop = FALSE], umap_metadata, check.names = FALSE)
+  utils::write.table(umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  invisible(TRUE)
+}
+
 apply_celltype_mapping <- function(obj, path, annotation_name) {
   if (!nzchar(path) || identical(tolower(path), "none")) return(obj)
   map <- read_delim_safe(path)
@@ -1332,6 +1349,9 @@ if (isTRUE(reference_annotation_only)) {
   attr(obj, "codespring_active_annotation") <- annotation_name
   attr(obj, "codespring_integration") <- integration
   attr(obj, "codespring_doublets_removed") <- sum(doublet_summary$removed_doublets)
+  # Reference transfer does not alter coordinates, but its new labels must be
+  # republished beside those coordinates for the interactive UMAP explorer.
+  write_interactive_metadata_tables(obj)
   message("Saving the updated Seurat object; this final write can take several minutes for a large object.")
   flush.console()
   atomic_save_rds(obj, file.path(objects_dir, "processed_seurat.rds"))
@@ -1384,20 +1404,10 @@ if (isTRUE(params$find_cluster_markers) && ncol(obj) >= 20 && length(unique(obj$
 # `cell` as `input_cell`, while always reserving `cell` for the exact final
 # barcode/cell identifier.  This prevents duplicate column names in tables
 # consumed by the interactive results explorer.
-cell_metadata <- obj@meta.data
-if ("cell" %in% names(cell_metadata)) names(cell_metadata)[names(cell_metadata) == "cell"] <- "input_cell"
-cell_metadata <- data.frame(cell = colnames(obj), cell_metadata, check.names = FALSE)
-utils::write.table(cell_metadata, file.path(tables_dir, "cell_metadata.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+write_interactive_metadata_tables(obj)
 # The interactive dashboard requests one normalized gene at a time from the
 # processed RDS. Keep the complete symbol list small and engine-consistent.
 utils::write.table(data.frame(gene = rownames(obj)), file.path(tables_dir, "dashboard_all_genes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
-umap_coordinates <- as.data.frame(Seurat::Embeddings(obj, reduction = "umap"), check.names = FALSE)
-colnames(umap_coordinates)[seq_len(min(2L, NCOL(umap_coordinates)))] <- c("UMAP_1", "UMAP_2")[seq_len(min(2L, NCOL(umap_coordinates)))]
-if (!all(c("UMAP_1", "UMAP_2") %in% names(umap_coordinates))) stop("The final UMAP does not contain two coordinates.")
-umap_metadata <- obj@meta.data
-if ("cell" %in% names(umap_metadata)) names(umap_metadata)[names(umap_metadata) == "cell"] <- "input_cell"
-umap_table <- data.frame(cell = rownames(umap_coordinates), umap_coordinates[, c("UMAP_1", "UMAP_2"), drop = FALSE], umap_metadata, check.names = FALSE)
-utils::write.table(umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 cluster_sizes <- as.data.frame(table(cluster = obj$cluster, annotation_label = obj[[annotation_name]][, 1]), stringsAsFactors = FALSE)
 names(cluster_sizes)[names(cluster_sizes) == "Freq"] <- "cells"
 cluster_sizes <- cluster_sizes[cluster_sizes$cells > 0, , drop = FALSE]
