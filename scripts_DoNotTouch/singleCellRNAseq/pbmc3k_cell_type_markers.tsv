@@ -1,16 +1,46 @@
 cell_type	gene
 Naive CD4 T	IL7R
 Naive CD4 T	CCR7
+Naive CD4 T	LTB
+Naive CD4 T	TCF7
+Naive CD4 T	MAL
 Memory CD4 T	IL7R
 Memory CD4 T	S100A4
+Memory CD4 T	LTB
+Memory CD4 T	IL32
+Memory CD4 T	CD3D
 CD8 T	CD8A
+CD8 T	CD3D
+CD8 T	CD3E
+CD8 T	CCL5
+CD8 T	NKG7
 B cells	MS4A1
+B cells	CD79A
+B cells	CD37
+B cells	CD74
+B cells	HLA-DRA
 CD14+ Monocytes	CD14
 CD14+ Monocytes	LYZ
+CD14+ Monocytes	S100A8
+CD14+ Monocytes	S100A9
+CD14+ Monocytes	LGALS3
 FCGR3A+ Monocytes	FCGR3A
 FCGR3A+ Monocytes	MS4A7
+FCGR3A+ Monocytes	LST1
+FCGR3A+ Monocytes	LILRB1
+FCGR3A+ Monocytes	IFITM3
 NK cells	GNLY
 NK cells	NKG7
+NK cells	PRF1
+NK cells	GZMB
+NK cells	KLRD1
 Dendritic cells	FCER1A
 Dendritic cells	CST3
+Dendritic cells	CD74
+Dendritic cells	HLA-DRA
+Dendritic cells	CLEC10A
 Platelets	PPBP
+Platelets	PF4
+Platelets	GNG11
+Platelets	SDPR
+Platelets	RGS18
