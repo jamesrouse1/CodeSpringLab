@@ -6,6 +6,7 @@ if (!requireNamespace("Seurat", quietly = TRUE)) stop("Seurat is required to rea
 object_path <- normalizePath(args[[1]], mustWork = TRUE)
 output_path <- path.expand(args[[2]])
 obj <- readRDS(object_path)
+if (is.list(obj) && inherits(obj$object, "Seurat")) obj <- obj$object
 if (!inherits(obj, "Seurat")) stop("Processed RDS is not a Seurat object.")
 
 # RNA retains the complete normalized feature space in CodeSpringLab outputs.

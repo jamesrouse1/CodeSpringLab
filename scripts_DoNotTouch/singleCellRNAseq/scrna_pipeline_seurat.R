@@ -894,6 +894,14 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   cluster_umap_table <- data.frame(cell = rownames(cluster_umap), cluster_umap[, c("UMAP_1", "UMAP_2"), drop = FALSE], cluster_metadata, check.names = FALSE)
   utils::write.table(cluster_umap_table, file.path(tables_dir, "umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   saveRDS(list(object = obj, integration = integration, samples = samples, doublet_summary = doublet_summary), checkpoint_path("04_clustered"))
+  # The interactive UMAP is published at this stage, so publish the same
+  # normalized object as the dashboard-ready object too. This allows marker
+  # expression immediately after UMAP and lets signature scoring resume later
+  # without requiring an annotation pass solely to materialize the object.
+  utils::write.table(data.frame(gene = rownames(obj)), file.path(tables_dir, "dashboard_all_genes.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  attr(obj, "codespring_integration") <- integration
+  attr(obj, "codespring_doublets_removed") <- sum(doublet_summary$removed_doublets)
+  atomic_save_rds(obj, file.path(objects_dir, "processed_seurat.rds"))
   stage_marker("cluster")
   if (identical(stage, "cluster")) quit(save = "no", status = 0L)
 } else if (identical(stage, "annotate")) {
@@ -931,10 +939,19 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   }
 } else if (stage %in% c("score", "differential")) {
   processed_path <- file.path(objects_dir, "processed_seurat.rds")
-  if (!file.exists(processed_path)) stop("The annotation stage has not completed. Run annotation before ", stage, ".")
-  obj <- readRDS(processed_path)
-  integration <- attr(obj, "codespring_integration") %||% params$integration
-  doublet_summary <- data.frame(removed_doublets = 0)
+  clustered_path <- checkpoint_path("04_clustered")
+  if (file.exists(processed_path)) {
+    obj <- readRDS(processed_path)
+    integration <- attr(obj, "codespring_integration") %||% params$integration
+    doublet_summary <- data.frame(removed_doublets = attr(obj, "codespring_doublets_removed") %||% 0)
+  } else if (identical(stage, "score") && file.exists(clustered_path)) {
+    cluster_state <- require_checkpoint("04_clustered", "UMAP and clustering")
+    obj <- cluster_state$object
+    integration <- cluster_state$integration
+    doublet_summary <- cluster_state$doublet_summary
+  } else {
+    stop("The annotation stage has not completed. Run annotation before ", stage, ".")
+  }
 }
 
 # Older uploaded Seurat objects commonly store clusters only as
@@ -1461,6 +1478,9 @@ if (identical(stage, "score")) {
   }
   signatures <- expanded_signatures
   annotation_name <- safe_metadata_name(attr(obj, "codespring_active_annotation") %||% params$annotation_name)
+  # Signature scoring is valid before formal annotation. In that case retain
+  # the stable cluster labels for its per-cell and summary outputs.
+  if (!annotation_name %in% colnames(obj@meta.data)) obj[[annotation_name]] <- obj$cluster
   DefaultAssay(obj) <- if ("SCT" %in% names(obj@assays)) "SCT" else "RNA"
   signature_names <- unique(as.character(signatures$signature))
   coverage <- list(); score_columns <- character(0)

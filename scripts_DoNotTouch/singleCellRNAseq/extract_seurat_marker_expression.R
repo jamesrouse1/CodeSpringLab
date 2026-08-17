@@ -6,6 +6,7 @@ object_path <- normalizePath(args[[1]], mustWork = TRUE)
 gene <- args[[2]]
 output_path <- path.expand(args[[3]])
 obj <- readRDS(object_path)
+if (is.list(obj) && inherits(obj$object, "Seurat")) obj <- obj$object
 if (!inherits(obj, "Seurat")) stop("Processed RDS is not a Seurat object.")
 
 # FetchData(layer = "data") is not portable across Seurat v4/v5 and can fail

@@ -1218,6 +1218,10 @@ def main():
             save_umap(adata, "sample_id", figures / "04_umap_samples_pre_annotation.png", title="UMAP by input sample")
         save_umap_coordinates(adata, tables)
         write_h5ad_checkpoint(adata, cluster_checkpoint)
+        # The interactive UMAP is available immediately after clustering.
+        # Publish the same normalized object here so marker plotting and a
+        # later signature-scoring step do not depend on an annotation pass.
+        write_h5ad_checkpoint(adata, processed_object)
         mark_complete("cluster")
         if stage == "cluster":
             return
