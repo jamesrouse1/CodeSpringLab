@@ -1,0 +1,16 @@
+signature	gene
+Naive CD4 T	IL7R
+Naive CD4 T	CCR7
+Memory CD4 T	IL7R
+Memory CD4 T	S100A4
+CD8 T	CD8A
+B cells	MS4A1
+CD14+ Monocytes	CD14
+CD14+ Monocytes	LYZ
+FCGR3A+ Monocytes	FCGR3A
+FCGR3A+ Monocytes	MS4A7
+NK cells	GNLY
+NK cells	NKG7
+Dendritic cells	FCER1A
+Dendritic cells	CST3
+Platelets	PPBP
