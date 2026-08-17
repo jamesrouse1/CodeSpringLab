@@ -1116,7 +1116,8 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
         annotation_row <- data.frame(`Marker set` = marker_rows$marker_set, row.names = rownames(scaled), check.names = FALSE)
         marker_colors <- categorical_palette(marker_rows$marker_set)
         group_breaks <- which(marker_rows$marker_set[-1] != marker_rows$marker_set[-NROW(marker_rows)])
-        grDevices::png(heatmap_path, width = width * 160, height = height * 160, res = 160)
+        # Compute nodes are headless: Cairo writes PNGs without requiring X11.
+        grDevices::png(heatmap_path, width = width * 160, height = height * 160, res = 160, type = "cairo")
         pheatmap::pheatmap(scaled, color = grDevices::colorRampPalette(c("#2166AC", "#FFFFFF", "#B2182B"))(101), breaks = seq(-2.5, 2.5, length.out = 102), cluster_rows = FALSE, cluster_cols = FALSE, annotation_row = annotation_row, annotation_colors = list(`Marker set` = marker_colors), gaps_row = group_breaks, border_color = NA, fontsize = 11, main = paste0(panel_label, " — grouped by ", tolower(group_label)))
         grDevices::dev.off()
       } else {
