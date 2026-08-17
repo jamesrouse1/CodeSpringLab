@@ -786,6 +786,7 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_
         return
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
+    from matplotlib.lines import Line2D
     expression = adata.raw if adata.raw is not None else adata
     available = set(expression.var_names)
     for panel_index, panel in enumerate(marker_list_panels(marker_sets), start=1):
@@ -812,22 +813,28 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_
                 values = subset.X.toarray() if hasattr(subset.X, "toarray") else np.asarray(subset.X)
                 means[:, group_index] = np.asarray(values.mean(axis=0)).ravel(); fractions[:, group_index] = np.asarray((values > 0).mean(axis=0)).ravel()
             z_scores = np.clip((means - means.mean(axis=1, keepdims=True)) / np.maximum(means.std(axis=1, keepdims=True), 1e-8), -2.5, 2.5)
-            width, height = max(8.0, 3.8 + 0.58 * len(group_levels)), max(5.5, 2.8 + 0.22 * len(genes))
+            width, height = max(8.0, 4.4 + 0.62 * len(group_levels)), max(5.5, 2.5 + 0.24 * len(genes))
             fig, ax = plt.subplots(figsize=(width, height))
             x_coords, y_coords = np.meshgrid(np.arange(len(group_levels)), np.arange(len(genes)))
-            dots = ax.scatter(x_coords.ravel(), y_coords.ravel(), s=20 + 250 * fractions.ravel(), c=z_scores.ravel(), cmap="RdBu_r", vmin=-2.5, vmax=2.5, edgecolors="none")
+            dots = ax.scatter(x_coords.ravel(), y_coords.ravel(), s=12 + 260 * fractions.ravel(), c=z_scores.ravel(), cmap="RdBu_r", vmin=-2.5, vmax=2.5, edgecolors="#374151", linewidths=0.18)
             ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), row_labels)
             for row_break in row_breaks: ax.axhline(row_break, color="#4B5563", linewidth=0.7)
-            ax.invert_yaxis(); ax.set_xlabel(group_label); ax.set_ylabel("Marker set | gene"); ax.set_title(title + f" — grouped by {group_label.lower()}", fontweight="bold", loc="left", fontsize=11)
-            colorbar = fig.colorbar(dots, ax=ax, pad=0.02); colorbar.set_label("Row-scaled mean expression")
-            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_dotplot_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+            ax.invert_yaxis(); ax.set_xlabel(group_label); ax.set_ylabel("Marker set | gene")
+            ax.set_title(f"Marker expression by {group_label}", fontweight="bold", loc="left", fontsize=13)
+            ax.text(0, 1.01, title + ". Color is scaled within each gene; size is the fraction of positive cells.", transform=ax.transAxes, fontsize=9, va="bottom")
+            ax.xaxis.grid(True, color="#E5E7EB", linewidth=0.45); ax.set_axisbelow(True)
+            colorbar = fig.colorbar(dots, ax=ax, pad=0.02); colorbar.set_label("Relative mean expression\n(row Z-score)")
+            size_handles = [Line2D([], [], marker="o", linestyle="", markerfacecolor="#D1D5DB", markeredgecolor="#374151", markersize=np.sqrt(12 + 260 * value / 100), label=f"{value}%") for value in (0, 25, 50, 75, 100)]
+            ax.legend(handles=size_handles, title="Cells expressing", bbox_to_anchor=(1.18, 0.33), loc="center left", frameon=False)
+            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_dotplot_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=220, bbox_inches="tight"); plt.close(fig)
             fig, ax = plt.subplots(figsize=(width, height))
             image = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-2.5, vcenter=0, vmax=2.5))
             ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), row_labels)
             for row_break in row_breaks: ax.axhline(row_break, color="#4B5563", linewidth=0.7)
-            ax.set_xlabel(group_label); ax.set_ylabel("Marker set | gene"); ax.set_title(title + f" — grouped by {group_label.lower()}\nMean normalized expression, row-scaled", fontweight="bold", loc="left", fontsize=11)
+            ax.set_xlabel(group_label); ax.set_ylabel("Marker set | gene"); ax.set_title(f"Marker expression by {group_label}", fontweight="bold", loc="left", fontsize=13)
+            ax.text(0, 1.01, title + ". Mean normalized expression, scaled within each gene.", transform=ax.transAxes, fontsize=9, va="bottom")
             colorbar = fig.colorbar(image, ax=ax, pad=0.02); colorbar.set_label("Row Z-score")
-            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=220, bbox_inches="tight"); plt.close(fig)
 
 
 def save_cluster_marker_heatmaps(adata, markers, figures: Path, genes_per_cluster=10, clusters_per_panel=4):
