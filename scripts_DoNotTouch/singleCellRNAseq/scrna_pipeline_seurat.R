@@ -1089,11 +1089,15 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
       ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 13), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
     save_plot(dot, sprintf("07_marker_annotation_dotplot_panel_%02d.png", panel_index), width, height)
 
-    means <- sapply(cluster_levels, function(cluster) Matrix::rowMeans(expression[genes, clusters == cluster, drop = FALSE]))
-    if (is.null(dim(means))) means <- matrix(means, ncol = 1L, dimnames = list(genes, cluster_levels))
+    means <- do.call(cbind, lapply(cluster_levels, function(cluster) Matrix::rowMeans(expression[genes, clusters == cluster, drop = FALSE])))
+    means <- as.matrix(means)
+    rownames(means) <- genes
+    colnames(means) <- cluster_levels
     scaled <- t(scale(t(means)))
     scaled[!is.finite(scaled)] <- 0
-    scaled <- pmax(-2.5, pmin(2.5, scaled))
+    # pmax/pmin can drop matrix dimnames; reconstruct them explicitly because
+    # they are the heatmap's gene and cluster axes.
+    scaled <- matrix(pmax(-2.5, pmin(2.5, scaled)), nrow = NROW(means), ncol = NCOL(means), dimnames = dimnames(means))
     heatmap_data <- data.frame(gene = rep(rownames(scaled), times = NCOL(scaled)), cluster = rep(colnames(scaled), each = NROW(scaled)), z_score = as.vector(scaled), stringsAsFactors = FALSE)
     heatmap <- ggplot2::ggplot(heatmap_data, ggplot2::aes(x = .data$cluster, y = .data$gene, fill = .data$z_score)) +
       ggplot2::geom_tile() +
