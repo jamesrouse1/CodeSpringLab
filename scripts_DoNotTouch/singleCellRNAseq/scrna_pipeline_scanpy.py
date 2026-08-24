@@ -188,7 +188,7 @@ def params_from(path: Path):
         "marker_ortholog_file": get("marker_ortholog_file", ""),
         "annotation_name": get("annotation_name", "cell_type"),
         "signature_file": get("signature_file", ""),
-        "signature_species": get("signature_species", "same").lower(),
+        "signature_species": get("signature_species", "auto").lower(),
         "signature_ortholog_file": get("signature_ortholog_file", ""),
         "de_group_column": get("de_group_column", "condition"),
         "de_reference": get("de_reference", ""),

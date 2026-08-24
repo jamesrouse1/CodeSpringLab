@@ -87,6 +87,8 @@ test "$(grep -Fc 'write_interactive_metadata_tables(obj)' "$repo_root/scripts_Do
 grep -Fq '"batch_column": get("batch_column", "sample_id")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'marker_species = tolower(get("marker_species", "auto"))' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq '"marker_species": get("marker_species", "auto").lower()' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'signature_species = tolower(get("signature_species", "auto"))' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq '"signature_species": get("signature_species", "auto").lower()' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'auto_case_match' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'auto_case_match' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'qc_preset = tolower(get("qc_preset", ""))' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"

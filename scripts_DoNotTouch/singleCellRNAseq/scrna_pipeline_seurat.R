@@ -196,7 +196,7 @@ read_params <- function(path) {
     marker_ortholog_file = get("marker_ortholog_file", ""),
     annotation_name = get("annotation_name", "cell_type"),
     signature_file = get("signature_file", ""),
-    signature_species = tolower(get("signature_species", "same")),
+    signature_species = tolower(get("signature_species", "auto")),
     signature_ortholog_file = get("signature_ortholog_file", ""),
     de_group_column = get("de_group_column", "condition"),
     de_reference = get("de_reference", ""),
@@ -1662,7 +1662,8 @@ if (identical(stage, "score")) {
   if (!identical(params$signature_species, "same")) {
     map_cross_species_genes(expanded_signatures$gene, params$signature_species, params$signature_ortholog_file, rownames(obj), file.path(tables_dir, "signature_ortholog_mapping.tsv"), expanded_signatures$signature)
     audit <- read_delim_safe(file.path(tables_dir, "signature_ortholog_mapping.tsv"))
-    expanded_signatures <- data.frame(signature = audit$set[audit$status %in% c("mapped", "same_species")], gene = audit$mapped_gene[audit$status %in% c("mapped", "same_species")], stringsAsFactors = FALSE)
+    usable_status <- audit$status %in% c("mapped", "same_species", "auto_case_match", "auto_ortholog")
+    expanded_signatures <- data.frame(signature = audit$set[usable_status], gene = audit$mapped_gene[usable_status], stringsAsFactors = FALSE)
   }
   signatures <- expanded_signatures
   annotation_name <- safe_metadata_name(attr(obj, "codespring_active_annotation") %||% params$annotation_name)
