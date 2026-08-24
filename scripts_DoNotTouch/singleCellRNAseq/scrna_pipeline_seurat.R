@@ -494,10 +494,18 @@ qc_violin_plot <- function(obj, cutoffs = NULL, state_label = "") {
     plots[[2]] <- qc_cutoff_lines(plots[[2]], cutoffs$min_counts)
     plots[[3]] <- qc_cutoff_lines(plots[[3]], cutoffs$max_percent_mt)
   }
-  # Reference lines outside the observed range do not always train Seurat's
-  # violin scale. Start the detected-gene axis at zero so a lower QC cutoff
-  # (for example the PBMC 3K tutorial's 200-gene threshold) stays visible.
-  if (identical(params$qc_preset, "pbmc3k")) plots[[1]] <- plots[[1]] + ggplot2::coord_cartesian(ylim = c(0, NA_real_))
+  # Seurat's violin scale may clip a reference line below the observed data.
+  # For the PBMC tutorial, explicitly train the gene axis from zero and draw
+  # labeled, higher-contrast tutorial thresholds above the violin layer.
+  if (identical(params$qc_preset, "pbmc3k")) {
+    tutorial_gene_lines <- c(params$min_features, params$max_features)
+    tutorial_gene_lines <- tutorial_gene_lines[is.finite(tutorial_gene_lines) & tutorial_gene_lines > 0]
+    plots[[1]] <- plots[[1]] +
+      ggplot2::scale_y_continuous(limits = c(0, NA_real_), expand = ggplot2::expansion(mult = c(0, 0.05))) +
+      ggplot2::geom_hline(yintercept = tutorial_gene_lines, color = "#C62828", linetype = "dashed", linewidth = 0.95) +
+      ggplot2::annotate("text", x = Inf, y = params$min_features, label = paste0("minimum = ", params$min_features), hjust = 1.08, vjust = -0.55, color = "#A41414", size = 3.1, fontface = "bold") +
+      ggplot2::annotate("text", x = Inf, y = params$max_features, label = paste0("maximum = ", params$max_features), hjust = 1.08, vjust = -0.55, color = "#A41414", size = 3.1, fontface = "bold")
+  }
   plots[[3]] <- plots[[3]] +
     ggplot2::coord_cartesian(ylim = c(0, mt_cap)) +
     ggplot2::labs(caption = paste0("Display capped at ", mt_cap, "% (99th-percentile rule; maximum 50%)."))
@@ -513,7 +521,11 @@ qc_scatter_plot <- function(obj, cutoffs = NULL, state_label = "") {
     ggplot2::labs(title = "Counts versus mitochondrial reads", x = "Counts per cell", y = "Mitochondrial reads (%)", caption = paste0("Mitochondrial axis capped at ", mt_cap, "% for display only."))
   counts_features <- jpplot_point_layer(Seurat::FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")) +
     ggplot2::labs(title = "Counts versus detected genes", x = "Counts per cell", y = "Genes per cell")
-  if (identical(params$qc_preset, "pbmc3k")) counts_features <- counts_features + ggplot2::coord_cartesian(ylim = c(0, NA_real_))
+  if (identical(params$qc_preset, "pbmc3k")) {
+    counts_features <- counts_features +
+      ggplot2::scale_y_continuous(limits = c(0, NA_real_), expand = ggplot2::expansion(mult = c(0, 0.05))) +
+      ggplot2::geom_hline(yintercept = c(params$min_features, params$max_features), color = "#C62828", linetype = "dashed", linewidth = 0.95)
+  }
   if (!is.null(cutoffs)) {
     if (is.finite(as.numeric(cutoffs$min_counts)) && as.numeric(cutoffs$min_counts) > 0) {
       counts_mt <- counts_mt + ggplot2::geom_vline(xintercept = as.numeric(cutoffs$min_counts), color = "#C62828", linetype = "dashed", linewidth = 0.55)
