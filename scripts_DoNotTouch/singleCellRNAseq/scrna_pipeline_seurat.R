@@ -1507,6 +1507,19 @@ if (nzchar(params$reference_file) && !identical(tolower(params$reference_file), 
   reference_annotation_only <- identical(stage, "annotate")
 } else if (nzchar(params$celltype_file) && !identical(tolower(params$celltype_file), "none")) {
   obj <- apply_celltype_mapping(obj, params$celltype_file, annotation_name)
+  # A manual cluster-to-cell-type mapping may still be accompanied by the
+  # marker list used to review those assignments. Calculate and retain the
+  # marker evidence for cluster/cell-type panels without replacing the user's
+  # chosen labels with automatic highest-score labels.
+  if (nzchar(params$marker_file) && !identical(tolower(params$marker_file), "none")) {
+    mapped_labels <- obj[[annotation_name]][, 1]
+    mapped_annotation_source <- obj[[paste0("annotation_source__", annotation_name)]][, 1]
+    mapped_source <- obj$annotation_source
+    obj <- apply_marker_annotation(obj, params$marker_file, annotation_name)
+    obj[[annotation_name]] <- mapped_labels
+    obj[[paste0("annotation_source__", annotation_name)]] <- mapped_annotation_source
+    obj$annotation_source <- mapped_source
+  }
 } else if (nzchar(params$marker_file) && !identical(tolower(params$marker_file), "none")) {
   obj <- apply_marker_annotation(obj, params$marker_file, annotation_name)
 } else {

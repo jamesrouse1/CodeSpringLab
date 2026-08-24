@@ -1375,6 +1375,14 @@ def main():
         annotation_name = safe_metadata_name(p["annotation_name"])
         if p["celltype_file"] and p["celltype_file"].lower() != "none":
             apply_celltype_mapping(adata, Path(p["celltype_file"]).expanduser(), annotation_name)
+            if p["marker_file"] and p["marker_file"].lower() != "none":
+                mapped_labels = adata.obs[annotation_name].copy()
+                mapped_annotation_source = adata.obs[f"annotation_source__{annotation_name}"].copy()
+                mapped_source = adata.obs["annotation_source"].copy()
+                apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables, annotation_name, p["marker_species"], p["marker_ortholog_file"])
+                adata.obs[annotation_name] = mapped_labels
+                adata.obs[f"annotation_source__{annotation_name}"] = mapped_annotation_source
+                adata.obs["annotation_source"] = mapped_source
         elif p["marker_file"] and p["marker_file"].lower() != "none":
             apply_marker_annotation(adata, Path(p["marker_file"]).expanduser(), tables, annotation_name, p["marker_species"], p["marker_ortholog_file"])
         elif not apply_existing_annotation(adata):
