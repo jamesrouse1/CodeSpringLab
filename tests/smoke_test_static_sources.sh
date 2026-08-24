@@ -100,6 +100,10 @@ grep -Fq 'label = paste0("maximum = ", params$max_percent_mt, "%")' "$repo_root/
 grep -Fq 'linewidth = 0.95' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'gene_axis_from_zero=p["qc_preset"] == "pbmc3k"' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'tutorial_cutoff_labels=tutorial_qc' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq '07_marker_annotation_dotplot_by_%s.png' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq '07_marker_annotation_dotplot_by_{' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'panels = [source_clusters]' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq '08_cluster_marker_heatmap.png' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'pathway_de_file' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pathway_fgsea.R"
 grep -Fq 'signed -log10(raw P)' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pathway_fgsea.R"
 

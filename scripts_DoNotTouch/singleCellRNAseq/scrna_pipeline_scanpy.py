@@ -789,18 +789,12 @@ def apply_marker_annotation(adata, path: Path, tables_dir: Path, annotation_name
 
 
 def marker_list_panels(marker_sets, max_cell_types=6, max_genes=32):
-    panels, current, current_genes = [], {}, 0
-    for label, genes in marker_sets.items():
-        unique_genes = list(dict.fromkeys(str(gene) for gene in genes if str(gene)))
-        blocks = [unique_genes[i:i + max_genes] for i in range(0, len(unique_genes), max_genes)]
-        for index, block in enumerate(blocks, start=1):
-            block_label = f"{label} (part {index})" if len(blocks) > 1 else str(label)
-            if current and (len(current) >= max_cell_types or current_genes + len(block) > max_genes):
-                panels.append(current); current, current_genes = {}, 0
-            current[block_label] = block; current_genes += len(block)
-    if current:
-        panels.append(current)
-    return panels
+    combined = {
+        str(label): list(dict.fromkeys(str(gene) for gene in genes if str(gene)))
+        for label, genes in marker_sets.items()
+    }
+    combined = {label: genes for label, genes in combined.items() if genes}
+    return [combined] if combined else []
 
 
 def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_name="cell_type"):
@@ -809,6 +803,8 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
     from matplotlib.lines import Line2D
+    for stale in figures.glob("07_marker_annotation_*_by_*_panel_*.png"):
+        stale.unlink()
     expression = adata.raw if adata.raw is not None else adata
     available = set(expression.var_names)
     for panel_index, panel in enumerate(marker_list_panels(marker_sets), start=1):
@@ -848,7 +844,7 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_
             colorbar = fig.colorbar(dots, ax=ax, pad=0.02); colorbar.set_label("Relative mean expression\n(row Z-score)")
             size_handles = [Line2D([], [], marker="o", linestyle="", markerfacecolor="#D1D5DB", markeredgecolor="#374151", markersize=np.sqrt(12 + 260 * value / 100), label=f"{value}%") for value in (0, 25, 50, 75, 100)]
             ax.legend(handles=size_handles, title="Cells expressing", bbox_to_anchor=(1.18, 0.33), loc="center left", frameon=False)
-            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_dotplot_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=220, bbox_inches="tight"); plt.close(fig)
+            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_dotplot_by_{'cluster' if group_column == 'cluster' else 'cell_type'}.png", dpi=220, bbox_inches="tight"); plt.close(fig)
             fig, ax = plt.subplots(figsize=(width, height))
             image = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-2.5, vcenter=0, vmax=2.5))
             ax.set_xticks(np.arange(len(group_levels)), group_levels, rotation=45, ha="right"); ax.set_yticks(np.arange(len(genes)), row_labels)
@@ -856,7 +852,7 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_
             ax.set_xlabel(group_label); ax.set_ylabel("Marker set | gene"); ax.set_title(f"Marker expression by {group_label}", fontweight="bold", loc="left", fontsize=13)
             ax.text(0, 1.01, title + ". Mean normalized expression, scaled within each gene.", transform=ax.transAxes, fontsize=9, va="bottom")
             colorbar = fig.colorbar(image, ax=ax, pad=0.02); colorbar.set_label("Row Z-score")
-            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_by_{'cluster' if group_column == 'cluster' else 'cell_type'}_panel_{panel_index:02d}.png", dpi=220, bbox_inches="tight"); plt.close(fig)
+            fig.tight_layout(); fig.savefig(figures / f"07_marker_annotation_heatmap_by_{'cluster' if group_column == 'cluster' else 'cell_type'}.png", dpi=220, bbox_inches="tight"); plt.close(fig)
 
 
 def save_cluster_marker_heatmaps(adata, markers, figures: Path, genes_per_cluster=10, clusters_per_panel=4):
@@ -876,7 +872,9 @@ def save_cluster_marker_heatmaps(adata, markers, figures: Path, genes_per_cluste
     expression = adata.raw if adata.raw is not None else adata
     available = set(expression.var_names)
     source_clusters = [str(value) for value in top["source_cluster"].drop_duplicates()]
-    panels = [source_clusters[index:index + clusters_per_panel] for index in range(0, len(source_clusters), clusters_per_panel)]
+    panels = [source_clusters]
+    for stale in figures.glob("08_cluster_marker_heatmap_panel_*.png"):
+        stale.unlink()
     group_labels = adata.obs["cluster"].astype(str).to_numpy()
     for panel_index, panel_clusters in enumerate(panels, start=1):
         panel_top = top[top["source_cluster"].isin(panel_clusters) & top["names"].astype(str).isin(available)].copy()
@@ -903,7 +901,7 @@ def save_cluster_marker_heatmaps(adata, markers, figures: Path, genes_per_cluste
         ax.set_xlabel("Cluster"); ax.set_ylabel("Marker gene [source cluster]")
         ax.set_title("Top cluster markers: " + ", ".join(panel_clusters) + "\nTop 10 ranked markers per selected cluster; mean normalized expression, row-scaled", fontweight="bold", loc="left", fontsize=11)
         colorbar = fig.colorbar(image, ax=ax, pad=0.02); colorbar.set_label("Row Z-score")
-        fig.tight_layout(); fig.savefig(figures / f"08_cluster_marker_heatmap_panel_{panel_index:02d}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+        fig.tight_layout(); fig.savefig(figures / "08_cluster_marker_heatmap.png", dpi=180, bbox_inches="tight"); plt.close(fig)
 
 
 def apply_existing_annotation(adata):
