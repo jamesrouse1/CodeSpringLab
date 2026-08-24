@@ -993,6 +993,62 @@ def score_signatures(adata, path: Path, tables_dir: Path, annotation_name: str, 
     return score_columns
 
 
+def save_cell_level_de_plots(subset, result, group_column, comparison, reference, file_slug, job_dir):
+    import matplotlib.pyplot as plt
+    effect_col = next((x for x in ["logfoldchanges", "avg_log2FC", "avg_logFC"] if x in result.columns), None)
+    p_col = next((x for x in ["pvals_adj", "pvals", "p_val_adj", "p_val"] if x in result.columns), None)
+    gene_col = next((x for x in ["names", "gene"] if x in result.columns), None)
+    if not effect_col or not p_col or not gene_col or result.empty:
+        return
+    effect = pd.to_numeric(result[effect_col], errors="coerce").to_numpy()
+    pvalue = pd.to_numeric(result[p_col], errors="coerce").to_numpy()
+    genes = result[gene_col].astype(str).to_numpy()
+    keep = np.isfinite(effect) & np.isfinite(pvalue)
+    status = np.full(len(result), "Not significant", dtype=object)
+    status[(pvalue < 0.05) & (effect >= 0.25)] = f"Higher in {comparison}"
+    status[(pvalue < 0.05) & (effect <= -0.25)] = f"Higher in {reference}"
+    colors = {"Not significant": "#B8C2CC", f"Higher in {comparison}": "#C43C39", f"Higher in {reference}": "#2B6CB0"}
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for label in colors:
+        selected = keep & (status == label)
+        ax.scatter(effect[selected], -np.log10(np.maximum(pvalue[selected], 1e-300)), s=9, alpha=0.65, color=colors[label], label=label, linewidths=0)
+    ax.axvline(-0.25, linestyle="--", color="#6B7280", linewidth=0.7); ax.axvline(0.25, linestyle="--", color="#6B7280", linewidth=0.7); ax.axhline(-np.log10(0.05), linestyle="--", color="#6B7280", linewidth=0.7)
+    ax.set(title=f"{comparison} vs {reference}", xlabel="Average log2 fold change", ylabel="-log10 adjusted P value")
+    ax.text(0, 1.01, "Cell-level Wilcoxon differential expression", transform=ax.transAxes, fontsize=10)
+    for side in ["top", "right"]:
+        ax.spines[side].set_visible(False)
+    ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=3)
+    fig.tight_layout(); fig.savefig(job_dir / f"volcano__cell_level_Wilcoxon__{file_slug}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+
+    order = np.lexsort((-np.abs(np.nan_to_num(effect, nan=0.0)), np.nan_to_num(pvalue, nan=np.inf)))
+    ranked_genes = list(dict.fromkeys(genes[order]))
+    expression = subset.raw if subset.raw is not None else subset
+    available = set(expression.var_names.astype(str))
+    top_genes = [gene for gene in ranked_genes if gene in available][:30]
+    if not top_genes:
+        return
+    groups = subset.obs[group_column].astype(str).to_numpy()
+    rng = np.random.default_rng(1234)
+    positions = []
+    for group in [reference, comparison]:
+        found = np.flatnonzero(groups == group)
+        if len(found) > 50:
+            found = np.sort(rng.choice(found, size=50, replace=False))
+        positions.extend(found.tolist())
+    values = expression[positions, top_genes].X
+    values = values.toarray() if hasattr(values, "toarray") else np.asarray(values)
+    matrix = values.T.astype(float)
+    means = matrix.mean(axis=1, keepdims=True); sds = matrix.std(axis=1, keepdims=True); sds[sds == 0] = 1
+    matrix = np.clip((matrix - means) / sds, -2.5, 2.5)
+    reference_count = int(np.sum(groups[positions] == reference))
+    fig, ax = plt.subplots(figsize=(10, max(6, 0.22 * len(top_genes) + 2)))
+    image = ax.imshow(matrix, aspect="auto", cmap="RdBu_r", vmin=-2.5, vmax=2.5, interpolation="nearest")
+    ax.axvline(reference_count - 0.5, color="white", linewidth=1.2); ax.set_yticks(np.arange(len(top_genes)), top_genes, fontsize=8); ax.set_xticks([])
+    ax.set_xlabel(f"{reference} cells (n={reference_count})     |     {comparison} cells (n={len(positions) - reference_count})")
+    ax.set_title(f"Top differential genes: {comparison} vs {reference}", fontweight="bold", loc="left")
+    fig.colorbar(image, ax=ax, pad=0.015, label="Row Z-score"); fig.tight_layout(); fig.savefig(job_dir / f"heatmap__cell_level_Wilcoxon__{file_slug}.png", dpi=180, bbox_inches="tight"); plt.close(fig)
+
+
 def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
     group_column = p["de_group_column"]
     reference, comparison = p["de_reference"], p["de_comparison"]
@@ -1061,9 +1117,13 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
                 result = sc.get.rank_genes_groups_df(subset, group=comparison)
                 result.insert(0, "comparison", f"{comparison}_vs_{reference}")
                 result.insert(1, "population", "global" if is_global else str(annotation_value))
-                result["analysis_level"] = "cell-level exploratory Wilcoxon; cells are not biological replicates"
+                result["analysis_level"] = "cell-level Wilcoxon"
                 cell_file = job_dir / f"cell_level_Wilcoxon__{file_slug}.tsv"
                 result.to_csv(cell_file, sep="\t", index=False); row["cell_result_file"] = str(cell_file)
+                try:
+                    save_cell_level_de_plots(subset, result, group_column, comparison, reference, file_slug, job_dir)
+                except Exception as plot_error:
+                    row["note"] = f"DE completed; figure generation skipped: {plot_error}"
                 if is_global:
                     result.to_csv(tables_dir / "cell_level_differential_expression.tsv", sep="\t", index=False)
             completed += 1

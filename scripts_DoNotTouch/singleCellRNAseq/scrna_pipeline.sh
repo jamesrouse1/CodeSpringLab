@@ -135,7 +135,7 @@ if [[ "$stage" == "pathway" ]]; then
 fi
 case "$engine" in
   seurat)
-    run_seurat_r -e 'for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
+    run_seurat_r -e 'for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork", "pheatmap")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
     run_seurat_r "$script_dir/scrna_pipeline_seurat.R" "$samples" "$out_dir" "$params" "$stage"
     ;;
   scanpy)
@@ -167,7 +167,7 @@ case "$engine" in
 esac
 
 if [[ "$stage" == "differential" ]]; then
-  run_seurat_r -e 'if (!requireNamespace("DESeq2", quietly=TRUE)) stop("Missing R package: DESeq2")'
+  run_seurat_r -e 'for (pkg in c("DESeq2", "ggplot2", "pheatmap")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
   run_seurat_r "$script_dir/scrna_pseudobulk_deseq2.R" "$out_dir" "$params"
   printf 'complete\n' > "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE"
 fi

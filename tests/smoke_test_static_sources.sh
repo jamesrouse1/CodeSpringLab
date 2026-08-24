@@ -163,4 +163,11 @@ if any(not (fastq_dir / row["filename"].strip()).is_file() for row in rows):
     raise SystemExit("A ChIP example FASTQ named in the design matrix is missing")
 PY
 
+grep -Fq 'volcano__cell_level_Wilcoxon__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq 'heatmap__cell_level_Wilcoxon__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq 'volcano__cell_level_Wilcoxon__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'heatmap__cell_level_Wilcoxon__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'volcano__pseudobulk_DESeq2__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pseudobulk_deseq2.R"
+grep -Fq 'heatmap__pseudobulk_DESeq2__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pseudobulk_deseq2.R"
+
 echo "Shell, Python, and R source syntax checks passed."

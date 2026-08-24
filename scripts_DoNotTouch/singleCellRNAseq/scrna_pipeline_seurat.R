@@ -1705,6 +1705,48 @@ if (identical(stage, "score")) {
   stage_marker("score")
 }
 
+save_cell_level_de_plots <- function(subset_obj, cell_de, group_column, comparison, reference, file_slug, job_dir) {
+  effect_col <- intersect(c("avg_log2FC", "avg_logFC"), names(cell_de))[1]
+  p_col <- intersect(c("p_val_adj", "p_val"), names(cell_de))[1]
+  if (is.na(effect_col) || is.na(p_col) || !NROW(cell_de)) return(invisible(FALSE))
+  effect <- suppressWarnings(as.numeric(cell_de[[effect_col]])); pvalue <- suppressWarnings(as.numeric(cell_de[[p_col]]))
+  volcano_data <- data.frame(gene = as.character(cell_de$gene), effect = effect, significance = -log10(pmax(pvalue, 1e-300)), stringsAsFactors = FALSE)
+  volcano_data$status <- ifelse(is.finite(pvalue) & pvalue < 0.05 & is.finite(effect) & effect >= 0.25, paste0("Higher in ", comparison), ifelse(is.finite(pvalue) & pvalue < 0.05 & is.finite(effect) & effect <= -0.25, paste0("Higher in ", reference), "Not significant"))
+  volcano_data <- volcano_data[is.finite(volcano_data$effect) & is.finite(volcano_data$significance), , drop = FALSE]
+  colors <- setNames(c("#B8C2CC", "#C43C39", "#2B6CB0"), c("Not significant", paste0("Higher in ", comparison), paste0("Higher in ", reference)))
+  volcano <- ggplot2::ggplot(volcano_data, ggplot2::aes(x = .data$effect, y = .data$significance, color = .data$status)) +
+    ggplot2::geom_point(size = 1.15, alpha = 0.65) + ggplot2::scale_color_manual(values = colors, breaks = names(colors), name = NULL) +
+    ggplot2::geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "#6B7280", linewidth = 0.35) + ggplot2::geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "#6B7280", linewidth = 0.35) +
+    ggplot2::labs(title = paste0(comparison, " vs ", reference), subtitle = "Cell-level Wilcoxon differential expression", x = "Average log2 fold change", y = "-log10 adjusted P value") + ggplot2::theme_classic(base_size = 12) + ggplot2::theme(plot.title = ggplot2::element_text(face = "bold"), legend.position = "bottom")
+  ggplot2::ggsave(file.path(job_dir, paste0("volcano__cell_level_Wilcoxon__", file_slug, ".png")), volcano, width = 8, height = 6, dpi = 180)
+
+  ordered <- order(pvalue, -abs(effect), na.last = TRUE)
+  genes <- unique(as.character(cell_de$gene[ordered])); genes <- genes[nzchar(genes)]
+  assay_candidates <- unique(c(DefaultAssay(subset_obj), "RNA", "SCT"))
+  assay_candidates <- assay_candidates[assay_candidates %in% names(subset_obj@assays)]
+  assay <- assay_candidates[vapply(assay_candidates, function(candidate) "data" %in% assay_layers_safe(subset_obj, candidate), logical(1))][1]
+  if (is.na(assay)) return(invisible(TRUE))
+  expression <- Seurat::GetAssayData(subset_obj, assay = assay, layer = "data")
+  genes <- head(intersect(genes, rownames(expression)), 30L)
+  if (!length(genes)) return(invisible(TRUE))
+  groups <- as.character(subset_obj@meta.data[[group_column]])
+  set.seed(1234L)
+  chosen <- unlist(lapply(c(reference, comparison), function(group) {
+    cells <- colnames(subset_obj)[groups == group]
+    if (length(cells) > 50L) sample(cells, 50L) else cells
+  }), use.names = FALSE)
+  matrix <- as.matrix(expression[genes, chosen, drop = FALSE])
+  matrix <- t(scale(t(matrix))); matrix[!is.finite(matrix)] <- 0; matrix <- pmax(-2.5, pmin(2.5, matrix))
+  annotation <- data.frame(Group = factor(groups[match(chosen, colnames(subset_obj))], levels = c(reference, comparison)), row.names = chosen)
+  heatmap_path <- file.path(job_dir, paste0("heatmap__cell_level_Wilcoxon__", file_slug, ".png"))
+  if (requireNamespace("pheatmap", quietly = TRUE)) {
+    grDevices::png(heatmap_path, width = 1800, height = 1350, res = 180, type = "cairo")
+    pheatmap::pheatmap(matrix, cluster_rows = TRUE, cluster_cols = FALSE, show_colnames = FALSE, annotation_col = annotation, gaps_col = sum(annotation$Group == reference), color = grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#C51B29"))(101), border_color = NA, main = paste0("Top differential genes: ", comparison, " vs ", reference))
+    grDevices::dev.off()
+  }
+  invisible(TRUE)
+}
+
 if (identical(stage, "differential")) {
   group_column <- params$de_group_column
   reference <- params$de_reference; comparison <- params$de_comparison
@@ -1758,8 +1800,10 @@ if (identical(stage, "differential")) {
           if (identical(DefaultAssay(subset_obj), "SCT") && length(subset_obj[["SCT"]]@SCTModel.list) > 1L) subset_obj <- Seurat::PrepSCTFindMarkers(subset_obj, verbose = FALSE)
           Seurat::Idents(subset_obj) <- as.character(subset_obj@meta.data[[group_column]])
           cell_de <- Seurat::FindMarkers(subset_obj, ident.1 = comparison, ident.2 = reference, test.use = "wilcox", logfc.threshold = 0, min.pct = 0, verbose = FALSE)
-          cell_de <- data.frame(gene = rownames(cell_de), comparison = paste0(comparison, "_vs_", reference), population = if (is_global) "global" else annotation_value, cell_de, analysis_level = "cell-level exploratory Wilcoxon; cells are not biological replicates", check.names = FALSE)
+          cell_de <- data.frame(gene = rownames(cell_de), comparison = paste0(comparison, "_vs_", reference), population = if (is_global) "global" else annotation_value, cell_de, analysis_level = "cell-level Wilcoxon", check.names = FALSE)
           cell_file <- file.path(job_dir, paste0("cell_level_Wilcoxon__", file_slug, ".tsv")); utils::write.table(cell_de, cell_file, sep = "\t", row.names = FALSE, quote = FALSE); row$cell_result_file <- cell_file
+          plot_error <- tryCatch({ save_cell_level_de_plots(subset_obj, cell_de, group_column, comparison, reference, file_slug, job_dir); "" }, error = function(e) conditionMessage(e))
+          if (nzchar(plot_error)) row$note <- paste0("DE completed; figure generation skipped: ", plot_error)
           if (is_global) utils::write.table(cell_de, file.path(tables_dir, "cell_level_differential_expression.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
           ""
         }, error = function(e) conditionMessage(e))
