@@ -60,6 +60,9 @@ grep -Fq 'class=\"btn btn-danger btn-xs delete-result-file\"' "$repo_root/script
 grep -Fq 'validated_rna_result_file <- function' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'actionButton("confirm_delete_rna_file", "Delete file"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'tags$p(tags$strong("This cannot be undone."))' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'div(class = "rna-files-table-shell", table_widget("rna_files_table"))' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq '.rna-files-table-shell .dataTables_scrollBody' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'min-width: 360px !important;' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 if grep -Fq 'selectInput("rna_file_category"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"; then
   echo "RNA file browsing must use the tool filter rather than the old category filter" >&2
   exit 1

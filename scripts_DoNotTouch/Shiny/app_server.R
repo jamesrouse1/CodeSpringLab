@@ -1981,7 +1981,7 @@ rna_files_tab <- tabPanel(
     ),
     mainPanel(
       width = 9,
-      table_widget("rna_files_table"),
+      div(class = "rna-files-table-shell", table_widget("rna_files_table")),
       tags$script(HTML("Shiny.addCustomMessageHandler('rna-trigger-file-download', function(){ var link = document.getElementById('download_selected_rna_file'); if (link) link.click(); });"))
     )
   )
@@ -2734,6 +2734,57 @@ ui <- fluidPage(
         max-height: min(62vh, 650px) !important;
         overflow: auto !important;
       }
+      .rna-files-table-shell {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        padding: 2px 2px 12px;
+      }
+      .rna-files-table-shell .dataTables_wrapper {
+        min-width: 100%;
+        overflow: visible;
+      }
+      .rna-files-table-shell .dataTables_scroll {
+        overflow-x: auto !important;
+        padding-bottom: 8px;
+      }
+      .rna-files-table-shell .dataTables_scrollBody {
+        overflow-x: scroll !important;
+        scrollbar-gutter: stable;
+      }
+      .rna-files-table-shell table.dataTable {
+        table-layout: auto !important;
+        min-width: 1120px !important;
+      }
+      .rna-files-table-shell table.dataTable thead th,
+      .rna-files-table-shell table.dataTable tbody td {
+        min-width: 0 !important;
+        max-width: none !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        padding: 10px 12px !important;
+        vertical-align: middle !important;
+      }
+      .rna-files-table-shell table.dataTable thead th:nth-child(1),
+      .rna-files-table-shell table.dataTable tbody td:nth-child(1) { min-width: 125px !important; }
+      .rna-files-table-shell table.dataTable thead th:nth-child(2),
+      .rna-files-table-shell table.dataTable tbody td:nth-child(2) { min-width: 145px !important; }
+      .rna-files-table-shell table.dataTable thead th:nth-child(3),
+      .rna-files-table-shell table.dataTable tbody td:nth-child(3) {
+        min-width: 360px !important;
+        max-width: 520px !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        line-height: 1.35;
+      }
+      .rna-files-table-shell table.dataTable thead th:nth-child(4),
+      .rna-files-table-shell table.dataTable tbody td:nth-child(4) { min-width: 80px !important; }
+      .rna-files-table-shell table.dataTable thead th:nth-child(5),
+      .rna-files-table-shell table.dataTable tbody td:nth-child(5) { min-width: 145px !important; }
+      .rna-files-table-shell .btn-xs {
+        min-width: 70px;
+        margin: 0;
+      }
       .tab-pane,
       .tab-content,
       .main-panel,
@@ -2887,7 +2938,20 @@ server <- function(input, output, session) {
       rna_files_display(),
       rownames = FALSE,
       escape = FALSE,
-      options = list(pageLength = 25, scrollX = TRUE, autoWidth = FALSE),
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        scrollCollapse = TRUE,
+        autoWidth = TRUE,
+        columnDefs = list(
+          list(width = "125px", targets = 0),
+          list(width = "145px", targets = 1),
+          list(width = "400px", targets = 2),
+          list(width = "80px", targets = 3),
+          list(width = "145px", targets = 4),
+          list(width = "90px", targets = 5:7)
+        )
+      ),
       callback = DT::JS(
         "table.on('click', 'button.copy-result-path', function(){",
         "  var button = this;",
