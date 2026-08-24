@@ -66,4 +66,14 @@ stopifnot(
   !any(grepl("/", app_env$rna_result_files$File, fixed = TRUE))
 )
 
+ui_text <- paste(as.character(app_env$ui), collapse = "\n")
+server_text <- paste(deparse(body(app_env$server)), collapse = "\n")
+stopifnot(
+  grepl("download_selected_rna_file", ui_text, fixed = TRUE),
+  grepl("rna-trigger-file-download", ui_text, fixed = TRUE),
+  grepl("validated_rna_result_file", server_text, fixed = TRUE),
+  grepl("confirm_delete_rna_file", server_text, fixed = TRUE),
+  grepl("This cannot be undone", server_text, fixed = TRUE)
+)
+
 cat("Native completed RNA-seq comparison fixture passed.\n")

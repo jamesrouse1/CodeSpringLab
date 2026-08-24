@@ -1975,10 +1975,15 @@ rna_files_tab <- tabPanel(
       selectInput("rna_file_tool", "Tool", choices = c("All tools" = "all", stats::setNames(sort(unique(rna_result_files$Tool)), sort(unique(rna_result_files$Tool)))), selected = "all", selectize = FALSE),
       uiOutput("rna_file_sample_ui"),
       downloadButton("download_rna_file_catalog", "Download file catalog"),
+      downloadButton("download_selected_rna_file", "Download selected file", style = "display:none;"),
       tags$hr(),
-      helpText("Filter by tool and sample. The table shows readable filenames and sizes; use Copy path when you need the full absolute server location.")
+      helpText("Filter by tool and sample. Download or copy a path directly from its row. Delete permanently removes only that one confirmed project file.")
     ),
-    mainPanel(width = 9, table_widget("rna_files_table"))
+    mainPanel(
+      width = 9,
+      table_widget("rna_files_table"),
+      tags$script(HTML("Shiny.addCustomMessageHandler('rna-trigger-file-download', function(){ var link = document.getElementById('download_selected_rna_file'); if (link) link.click(); });"))
+    )
   )
 )
 
@@ -2830,10 +2835,24 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   gtf_cache <- reactiveValues(mouse = NULL, human = NULL, maize = NULL)
+  rna_result_files_state <- reactiveVal(rna_result_files)
+  selected_rna_download_path <- reactiveVal("")
+  pending_rna_delete_path <- reactiveVal("")
+
+  validated_rna_result_file <- function(path, must_exist = TRUE) {
+    path <- trimws(as.character(value_or(path, ""))[1])
+    if (!nzchar(path)) return("")
+    root <- normalizePath(data_dir, winslash = "/", mustWork = TRUE)
+    candidate <- normalizePath(path, winslash = "/", mustWork = must_exist)
+    inside <- identical(candidate, root) || startsWith(candidate, paste0(root, "/"))
+    if (!inside || dir.exists(candidate) || (must_exist && !file.exists(candidate))) return("")
+    candidate
+  }
 
   rna_files_for_tool <- reactive({
     tool <- value_or(input$rna_file_tool, "all")
-    if (identical(tool, "all")) rna_result_files else rna_result_files[rna_result_files$Tool == tool, , drop = FALSE]
+    files <- rna_result_files_state()
+    if (identical(tool, "all")) files else files[files$Tool == tool, , drop = FALSE]
   })
   output$rna_file_sample_ui <- renderUI({
     available <- sort(unique(rna_files_for_tool()$Sample))
@@ -2849,7 +2868,19 @@ server <- function(input, output, session) {
   })
   rna_files_display <- reactive({
     files <- rna_files_filtered()
-    files[, c("Tool", "Sample", "File", "Size", "Modified", "Copy path"), drop = FALSE]
+    if (!NROW(files)) {
+      return(data.frame(Tool = character(0), Sample = character(0), File = character(0), Size = character(0), Modified = character(0), `Copy path` = character(0), Download = character(0), Delete = character(0), stringsAsFactors = FALSE, check.names = FALSE))
+    }
+    display <- files[, c("Tool", "Sample", "File", "Size", "Modified", "Copy path"), drop = FALSE]
+    display$Download <- vapply(files[["Absolute path"]], function(path) sprintf(
+      "<button type=\"button\" class=\"btn btn-primary btn-xs download-result-file\" data-path=\"%s\">Download</button>",
+      htmltools::htmlEscape(path, attribute = TRUE)
+    ), character(1))
+    display$Delete <- vapply(files[["Absolute path"]], function(path) sprintf(
+      "<button type=\"button\" class=\"btn btn-danger btn-xs delete-result-file\" data-path=\"%s\">Delete</button>",
+      htmltools::htmlEscape(path, attribute = TRUE)
+    ), character(1))
+    display
   })
   if (DT_AVAILABLE) {
     output$rna_files_table <- DT::renderDT(DT::datatable(
@@ -2864,7 +2895,9 @@ server <- function(input, output, session) {
         "  var done = function(){ var old = button.textContent; button.textContent = 'Copied'; setTimeout(function(){ button.textContent = old; }, 1200); };",
         "  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(path).then(done); }",
         "  else { var box = document.createElement('textarea'); box.value = path; document.body.appendChild(box); box.select(); document.execCommand('copy'); document.body.removeChild(box); done(); }",
-        "});"
+        "});",
+        "table.on('click', 'button.download-result-file', function(){ Shiny.setInputValue('rna_download_file_request', {path: this.getAttribute('data-path') || '', nonce: Date.now()}, {priority: 'event'}); });",
+        "table.on('click', 'button.delete-result-file', function(){ Shiny.setInputValue('rna_delete_file_request', {path: this.getAttribute('data-path') || '', nonce: Date.now()}, {priority: 'event'}); });"
       )
     ))
   } else {
@@ -2874,6 +2907,58 @@ server <- function(input, output, session) {
     filename = function() paste0(project_name, "_file_catalog.csv"),
     content = function(file) write.csv(rna_files_filtered()[, c("Tool", "Sample", "File", "Size", "Modified"), drop = FALSE], file, row.names = FALSE, quote = TRUE)
   )
+  observeEvent(input$rna_download_file_request, {
+    path <- validated_rna_result_file(input$rna_download_file_request$path)
+    if (!nzchar(path)) {
+      showNotification("The selected file is unavailable or outside this project.", type = "error")
+      return()
+    }
+    selected_rna_download_path(path)
+    session$sendCustomMessage("rna-trigger-file-download", list())
+  }, ignoreInit = TRUE)
+  output$download_selected_rna_file <- downloadHandler(
+    filename = function() {
+      path <- validated_rna_result_file(selected_rna_download_path())
+      if (nzchar(path)) basename(path) else "result_file"
+    },
+    content = function(file) {
+      path <- validated_rna_result_file(selected_rna_download_path())
+      req(nzchar(path))
+      if (!file.copy(path, file, overwrite = TRUE)) stop("Could not copy the selected result file for download.")
+    },
+    contentType = "application/octet-stream"
+  )
+  observeEvent(input$rna_delete_file_request, {
+    path <- validated_rna_result_file(input$rna_delete_file_request$path)
+    if (!nzchar(path)) {
+      showNotification("The selected file is unavailable or outside this project.", type = "error")
+      return()
+    }
+    pending_rna_delete_path(path)
+    showModal(modalDialog(
+      title = "Delete this result file?",
+      tags$p("This permanently deletes one file from the selected RNA-seq project."),
+      tags$ul(tags$li(tags$strong("File: "), basename(path)), tags$li(tags$strong("Absolute path: "), tags$code(path))),
+      tags$p(tags$strong("This cannot be undone.")),
+      footer = tagList(modalButton("Cancel"), actionButton("confirm_delete_rna_file", "Delete file", class = "btn-danger")),
+      easyClose = TRUE
+    ))
+  }, ignoreInit = TRUE)
+  observeEvent(input$confirm_delete_rna_file, {
+    path <- validated_rna_result_file(pending_rna_delete_path())
+    removeModal()
+    pending_rna_delete_path("")
+    if (!nzchar(path)) {
+      showNotification("The file is no longer available or is outside this project.", type = "error")
+      return()
+    }
+    if (!file.remove(path)) {
+      showNotification(paste("Could not delete", basename(path)), type = "error")
+      return()
+    }
+    rna_result_files_state(rna_result_file_catalog(sample_ids = samples))
+    showNotification(paste("Deleted", basename(path)), type = "message")
+  }, ignoreInit = TRUE)
 
   get_gtf_map <- function(species) {
     if (identical(species, "mouse")) {

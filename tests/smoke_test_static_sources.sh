@@ -54,6 +54,12 @@ grep -Fq 'selectInput("rna_file_tool", "Tool"' "$repo_root/scripts_DoNotTouch/Sh
 grep -Fq 'uiOutput("rna_file_sample_ui")' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'File = basename(absolute)' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'c("Tool", "Sample", "File", "Size", "Modified", "Copy path")' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'downloadButton("download_selected_rna_file"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'class=\"btn btn-primary btn-xs download-result-file\"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'class=\"btn btn-danger btn-xs delete-result-file\"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'validated_rna_result_file <- function' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'actionButton("confirm_delete_rna_file", "Delete file"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'tags$p(tags$strong("This cannot be undone."))' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 if grep -Fq 'selectInput("rna_file_category"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"; then
   echo "RNA file browsing must use the tool filter rather than the old category filter" >&2
   exit 1
