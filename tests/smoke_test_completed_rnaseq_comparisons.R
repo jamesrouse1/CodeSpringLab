@@ -5,6 +5,7 @@ data_dir <- file.path(root, "data")
 dir.create(file.path(data_dir, "deseq2"), recursive = TRUE)
 dir.create(file.path(data_dir, "gseapy", "Treated_vs_Control", "Hallmark"), recursive = TRUE)
 dir.create(file.path(data_dir, "manifest"), recursive = TRUE)
+dir.create(file.path(data_dir, "star", "S1"), recursive = TRUE)
 
 design_path <- file.path(data_dir, "manifest", "design_matrix.txt")
 write.table(
@@ -30,6 +31,7 @@ writeLines(
   "Term,NES,NOM p-val,FDR q-val",
   file.path(data_dir, "gseapy", "Treated_vs_Control", "Hallmark", "report.gseapy.Hallmark.csv")
 )
+writeLines("synthetic STAR log", file.path(data_dir, "star", "S1", "S1_Log.final.out"))
 
 config_path <- file.path(root, "config.R")
 writeLines(c(
@@ -58,7 +60,10 @@ stopifnot(
   NROW(app_env$completed_gsea_catalog) == 1L,
   identical(app_env$completed_gsea_catalog$compare_col[[1]], "treatment"),
   identical(app_env$completed_gsea_catalog$treatment[[1]], "Treated"),
-  identical(app_env$completed_gsea_catalog$control[[1]], "Control")
+  identical(app_env$completed_gsea_catalog$control[[1]], "Control"),
+  all(c("Tool", "Sample", "File", "Size", "Modified", "Absolute path", "Copy path") %in% names(app_env$rna_result_files)),
+  any(app_env$rna_result_files$Tool == "STAR" & app_env$rna_result_files$Sample == "S1" & app_env$rna_result_files$File == "S1_Log.final.out"),
+  !any(grepl("/", app_env$rna_result_files$File, fixed = TRUE))
 )
 
 cat("Native completed RNA-seq comparison fixture passed.\n")

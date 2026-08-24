@@ -50,6 +50,14 @@ if grep -Fq '"featureCounts count matrix" = "counts"' "$repo_root/scripts_DoNotT
   echo "RNA-seq PCA must not offer raw featureCounts values" >&2
   exit 1
 fi
+grep -Fq 'selectInput("rna_file_tool", "Tool"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'uiOutput("rna_file_sample_ui")' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'File = basename(absolute)' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'c("Tool", "Sample", "File", "Size", "Modified", "Copy path")' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+if grep -Fq 'selectInput("rna_file_category"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"; then
+  echo "RNA file browsing must use the tool filter rather than the old category filter" >&2
+  exit 1
+fi
 
 # Automatic Seurat integration must remain on the scalable PCA/Harmony path.
 # Anchor integration can exceed Matrix's 32-bit sparse-index ceiling on large

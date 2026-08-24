@@ -408,8 +408,50 @@ human_bytes <- function(bytes) {
   paste0(format(round(bytes / (1024^power), digits), nsmall = digits, trim = TRUE), " ", units[[power + 1L]])
 }
 
-rna_result_file_catalog <- function(root = data_dir) {
-  empty <- data.frame(Category = character(0), File = character(0), Size = character(0), Modified = character(0), `Absolute path` = character(0), `Copy path` = character(0), stringsAsFactors = FALSE, check.names = FALSE)
+rna_tool_label <- function(folder) {
+  labels <- c(
+    project = "Project-level",
+    manifest = "Manifest",
+    design_matrix = "Design matrix",
+    fastqc = "FastQC",
+    fastqc_cutadapt = "FastQC (trimmed)",
+    cutadapt = "Cutadapt",
+    star = "STAR",
+    star_summary = "STAR summary",
+    featurecounts = "featureCounts",
+    counts = "Count matrices",
+    deseq2 = "DESeq2",
+    deseq2_gene_name = "DESeq2 (gene names)",
+    gseapy = "GSEA",
+    rsem = "RSEM",
+    kallisto = "Kallisto",
+    multiqc = "MultiQC",
+    log = "Logs"
+  )
+  label <- unname(labels[folder])
+  ifelse(is.na(label) | !nzchar(label), gsub("_", " ", folder, fixed = TRUE), label)
+}
+
+rna_file_sample_label <- function(path, sample_ids = character(0)) {
+  sample_ids <- unique(trimws(as.character(sample_ids)))
+  sample_ids <- sample_ids[!is.na(sample_ids) & nzchar(sample_ids)]
+  if (!length(sample_ids)) return("Project-level")
+  parts <- strsplit(normalizePath(path, winslash = "/", mustWork = FALSE), "/", fixed = TRUE)[[1]]
+  exact <- sample_ids[sample_ids %in% parts]
+  if (length(exact)) return(exact[[which.max(nchar(exact))]])
+  sample_keys <- gsub("[^a-z0-9]+", "", tolower(sample_ids))
+  part_keys <- gsub("[^a-z0-9]+", "", tolower(parts))
+  file_key <- gsub("[^a-z0-9]+", "", tolower(basename(path)))
+  matched <- vapply(seq_along(sample_ids), function(i) {
+    nzchar(sample_keys[[i]]) && (sample_keys[[i]] %in% part_keys || startsWith(file_key, sample_keys[[i]]))
+  }, logical(1))
+  if (!any(matched)) return("Project-level")
+  candidates <- sample_ids[matched]
+  candidates[[which.max(nchar(candidates))]]
+}
+
+rna_result_file_catalog <- function(root = data_dir, sample_ids = character(0)) {
+  empty <- data.frame(Tool = character(0), Sample = character(0), File = character(0), Size = character(0), Modified = character(0), `Absolute path` = character(0), `Copy path` = character(0), stringsAsFactors = FALSE, check.names = FALSE)
   if (!dir.exists(root)) return(empty)
   paths <- list.files(root, recursive = TRUE, full.names = TRUE, all.files = FALSE)
   paths <- paths[file.exists(paths) & !dir.exists(paths)]
@@ -417,11 +459,12 @@ rna_result_file_catalog <- function(root = data_dir) {
   info <- file.info(paths)
   absolute <- normalizePath(paths, winslash = "/", mustWork = FALSE)
   relative <- substring(absolute, nchar(normalizePath(root, winslash = "/", mustWork = FALSE)) + 2L)
-  category <- sub("/.*$", "", relative)
-  category[!grepl("/", relative, fixed = TRUE)] <- "project"
+  tool_folder <- sub("/.*$", "", relative)
+  tool_folder[!grepl("/", relative, fixed = TRUE)] <- "project"
   data.frame(
-    Category = category,
-    File = relative,
+    Tool = rna_tool_label(tool_folder),
+    Sample = vapply(absolute, rna_file_sample_label, character(1), sample_ids = sample_ids),
+    File = basename(absolute),
     Size = vapply(info$size, human_bytes, character(1)),
     Modified = format(info$mtime, "%Y-%m-%d %H:%M"),
     `Absolute path` = absolute,
@@ -436,7 +479,6 @@ rna_result_file_catalog <- function(root = data_dir) {
   )
 }
 
-rna_result_files <- rna_result_file_catalog()
 rna_result_total_size <- if (dir.exists(data_dir)) {
   paths <- list.files(data_dir, recursive = TRUE, full.names = TRUE, all.files = FALSE)
   paths <- paths[file.exists(paths) & !dir.exists(paths)]
@@ -459,6 +501,7 @@ fallback_sample_sources <- fallback_sample_sources[
     !grepl("\\.(txt|tsv|csv|html|png|pdf)$", fallback_sample_sources, ignore.case = TRUE)
 ]
 samples <- if (length(design_samples)) design_samples else sort(unique(fallback_sample_sources))
+rna_result_files <- rna_result_file_catalog(sample_ids = samples)
 default_show_trimmed <- if (fastqc_trim_available && !fastqc_raw_available) TRUE else if (fastqc_raw_available && !fastqc_trim_available) FALSE else fastqc_trim_available
 featurecounts_sample_choices <- setdiff(colnames(featurecounts_summary_df), "Status")
 if (length(samples)) {
@@ -1929,10 +1972,11 @@ rna_files_tab <- tabPanel(
   sidebarLayout(
     sidebarPanel(
       width = 3,
-      selectInput("rna_file_category", "Category", choices = c("All files" = "all", stats::setNames(sort(unique(rna_result_files$Category)), sort(unique(rna_result_files$Category)))), selected = "all", selectize = FALSE),
+      selectInput("rna_file_tool", "Tool", choices = c("All tools" = "all", stats::setNames(sort(unique(rna_result_files$Tool)), sort(unique(rna_result_files$Tool)))), selected = "all", selectize = FALSE),
+      uiOutput("rna_file_sample_ui"),
       downloadButton("download_rna_file_catalog", "Download file catalog"),
       tags$hr(),
-      helpText("Sizes are human-readable. Every row includes the absolute server path and a copy-path button.")
+      helpText("Filter by tool and sample. The table shows readable filenames and sizes; use Copy path when you need the full absolute server location.")
     ),
     mainPanel(width = 9, table_widget("rna_files_table"))
   )
@@ -2787,16 +2831,32 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   gtf_cache <- reactiveValues(mouse = NULL, human = NULL, maize = NULL)
 
+  rna_files_for_tool <- reactive({
+    tool <- value_or(input$rna_file_tool, "all")
+    if (identical(tool, "all")) rna_result_files else rna_result_files[rna_result_files$Tool == tool, , drop = FALSE]
+  })
+  output$rna_file_sample_ui <- renderUI({
+    available <- sort(unique(rna_files_for_tool()$Sample))
+    selected <- value_or(input$rna_file_sample, "all")
+    if (!selected %in% c("all", available)) selected <- "all"
+    selectInput("rna_file_sample", "Sample", choices = c("All samples / project-level" = "all", stats::setNames(available, available)), selected = selected, selectize = FALSE)
+  })
   rna_files_filtered <- reactive({
-    category <- value_or(input$rna_file_category, "all")
-    if (identical(category, "all")) rna_result_files else rna_result_files[rna_result_files$Category == category, , drop = FALSE]
+    files <- rna_files_for_tool()
+    sample <- value_or(input$rna_file_sample, "all")
+    if (!identical(sample, "all")) files <- files[files$Sample == sample, , drop = FALSE]
+    files
+  })
+  rna_files_display <- reactive({
+    files <- rna_files_filtered()
+    files[, c("Tool", "Sample", "File", "Size", "Modified", "Copy path"), drop = FALSE]
   })
   if (DT_AVAILABLE) {
     output$rna_files_table <- DT::renderDT(DT::datatable(
-      rna_files_filtered(),
+      rna_files_display(),
       rownames = FALSE,
       escape = FALSE,
-      options = list(pageLength = 20, scrollX = TRUE),
+      options = list(pageLength = 25, scrollX = TRUE, autoWidth = FALSE),
       callback = DT::JS(
         "table.on('click', 'button.copy-result-path', function(){",
         "  var button = this;",
@@ -2808,11 +2868,11 @@ server <- function(input, output, session) {
       )
     ))
   } else {
-    output$rna_files_table <- renderTable(rna_files_filtered())
+    output$rna_files_table <- renderTable(rna_files_display())
   }
   output$download_rna_file_catalog <- downloadHandler(
     filename = function() paste0(project_name, "_file_catalog.csv"),
-    content = function(file) write.csv(rna_files_filtered()[, setdiff(names(rna_files_filtered()), "Copy path"), drop = FALSE], file, row.names = FALSE, quote = TRUE)
+    content = function(file) write.csv(rna_files_filtered()[, c("Tool", "Sample", "File", "Size", "Modified"), drop = FALSE], file, row.names = FALSE, quote = TRUE)
   )
 
   get_gtf_map <- function(species) {
