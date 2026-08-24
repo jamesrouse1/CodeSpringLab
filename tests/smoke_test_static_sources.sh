@@ -43,6 +43,13 @@ if grep -Fq 'table_widget("rna_overview_status")' "$repo_root/scripts_DoNotTouch
   echo "RNA-seq Overview must use the live sample progress matrix instead of the old pipeline-status table" >&2
   exit 1
 fi
+grep -Fq 'actionButton("refresh_rna_results", "Refresh results"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq '"log2-transformed DESeq2 normalized counts"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'No DESeq2 normalized-counts file is available for PCA. Finish DESeq2, then click Refresh results.' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+if grep -Fq '"featureCounts count matrix" = "counts"' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"; then
+  echo "RNA-seq PCA must not offer raw featureCounts values" >&2
+  exit 1
+fi
 
 # Automatic Seurat integration must remain on the scalable PCA/Harmony path.
 # Anchor integration can exceed Matrix's 32-bit sparse-index ceiling on large

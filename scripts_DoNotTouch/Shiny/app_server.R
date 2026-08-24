@@ -1315,7 +1315,8 @@ pca_all_plot_path <- function(compare_col) {
 }
 
 read_normalized_counts <- function(path) {
-  if (!file.exists(path)) return(NULL)
+  if (is.null(path) || !length(path) || is.na(path[[1]]) || !nzchar(path[[1]]) || !file.exists(path[[1]])) return(NULL)
+  path <- path[[1]]
   df <- read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
   first_col <- colnames(df)[1]
   colnames(df)[1] <- "gene_label"
@@ -1906,7 +1907,11 @@ counts_subtabs <- Filter(Negate(is.null), counts_subtabs)
 rna_overview_tab <- tabPanel(
   "Overview",
   br(),
-  div(class = "results-actions", span(class = "updated-note", "Live summary of saved pipeline outputs")),
+  div(
+    class = "results-actions",
+    span(class = "updated-note", "Live summary of saved pipeline outputs"),
+    actionButton("refresh_rna_results", "Refresh results", class = "btn-primary")
+  ),
   div(class = "metric-grid",
     div(class = "metric-card tone-blue", span("Disk space"), strong(human_bytes(rna_result_total_size)), tags$small("Total size of result files")),
     div(class = "metric-card tone-green", span("Samples"), strong(format(length(samples), big.mark = ",")), tags$small("Saved design matrix")),
@@ -2005,11 +2010,7 @@ app_tabs <- list(
         ),
         conditionalPanel(
           "input.plot_subtab == 'PCA'",
-          selectInput(
-            "pca_source",
-            "PCA values",
-            choices = c("DESeq2 normalized counts" = "deseq", "featureCounts count matrix" = "counts"),
-            selected = "deseq", selectize = FALSE),
+          tags$div(class = "tiny-note", tags$strong("PCA values: "), "log2-transformed DESeq2 normalized counts"),
           selectInput(
             "pca_color_col",
             "Color by",
@@ -2298,6 +2299,8 @@ ui <- fluidPage(
       .results-actions {
         display: flex;
         justify-content: flex-end;
+        align-items: center;
+        gap: 12px;
         margin-bottom: 14px;
       }
       .updated-note, .muted-note {
@@ -3917,31 +3920,21 @@ server <- function(input, output, session) {
     })
 
     pca_source_df <- reactive({
-      if (identical(value_or(input$pca_source, "deseq"), "counts")) {
-        df <- count_matrix_nonzero_df
-        if (is.null(df) || !nrow(df)) return(NULL)
-        colnames(df)[1] <- "gene_label"
-        return(df)
-      }
       selected_path <- NULL
-      if (!is.null(input$plot_treatment) && !is.null(input$plot_control)) {
-        raw_mode <- normalized_counts_raw_label_mode(input$plot_treatment, input$plot_control)
-        label_mode <- plot_effective_label_mode()
+      treatment_value <- value_or(input$plot_treatment, "")
+      control_value <- value_or(input$plot_control, "")
+      if (nzchar(treatment_value) && nzchar(control_value)) {
         candidate <- normalized_counts_path(input$plot_treatment, input$plot_control, "gene_id")
-        if (identical(label_mode, "gene_name") && !identical(raw_mode, "gene_name")) {
-          saved <- save_normalized_counts_gene_names(input$plot_treatment, input$plot_control)
-          if (isTRUE(saved$ok) && file.exists(saved$path)) candidate <- saved$path
-        }
         if (file.exists(candidate)) selected_path <- candidate
       }
-      if (is.null(selected_path)) selected_path <- first_normalized_counts_path(plot_effective_label_mode())
-      if (is.null(selected_path)) selected_path <- first_normalized_counts_path()
+      if (is.null(selected_path)) selected_path <- first_normalized_counts_path("gene_id")
+      if (is.null(selected_path)) selected_path <- first_normalized_counts_path("gene_name")
       read_normalized_counts(selected_path)
     })
 
     output$pca_plot <- renderPlot({
       df <- pca_source_df()
-      validate(need(!is.null(df), "No count matrix or DESeq2 normalized-counts file is available for PCA."))
+      validate(need(!is.null(df), "No DESeq2 normalized-counts file is available for PCA. Finish DESeq2, then click Refresh results."))
       mat <- expression_matrix_from_df(df, samples)
       color_col <- value_or(input$pca_color_col, "__none__")
       if (identical(color_col, "__none__")) color_col <- ""
@@ -4339,7 +4332,7 @@ server <- function(input, output, session) {
       status_box("Differential expression results have not been generated yet.", "warning")
     })
     output$plot_status_ui <- renderUI({
-      status_box("Plots are available after differential expression outputs are generated. PCA can also use the count matrix when available.", "warning")
+      status_box("Plots are available after differential expression outputs are generated. PCA requires completed DESeq2 normalized counts.", "warning")
     })
     output$deg_table <- if (DT_AVAILABLE) DT::renderDT(NULL) else renderTable({ NULL })
     output$pca_include_values_ui <- renderUI({
@@ -4350,17 +4343,8 @@ server <- function(input, output, session) {
       selectizeInput("pca_include_values", "Include values", choices = vals, selected = vals, multiple = TRUE, options = list(dropdownParent = "body"))
     })
     output$pca_plot <- renderPlot({
-      df <- count_matrix_nonzero_df
-      if (is.null(df) || !nrow(df)) {
-        plot.new()
-        text(0.5, 0.5, "PCA is not available until a count matrix or normalized-counts file exists.")
-      } else {
-        colnames(df)[1] <- "gene_label"
-        mat <- expression_matrix_from_df(df, samples)
-        color_col <- value_or(input$pca_color_col, "__none__")
-        if (identical(color_col, "__none__")) color_col <- ""
-        draw_pca_plot(mat, design_df, color_col, value_or(input$pca_include_values, character(0)), isTRUE(input$pca_label_samples))
-      }
+      plot.new()
+      text(0.5, 0.5, "PCA is available after DESeq2 normalized counts finish.")
     }, width = function() {
       as.numeric(value_or(input$pca_plot_width, 900))
     }, height = function() {
