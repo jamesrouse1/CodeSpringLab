@@ -509,6 +509,11 @@ qc_violin_plot <- function(obj, cutoffs = NULL, state_label = "") {
   plots[[3]] <- plots[[3]] +
     ggplot2::coord_cartesian(ylim = c(0, mt_cap)) +
     ggplot2::labs(caption = paste0("Display capped at ", mt_cap, "% (99th-percentile rule; maximum 50%)."))
+  if (identical(params$qc_preset, "pbmc3k")) {
+    plots[[3]] <- plots[[3]] +
+      ggplot2::geom_hline(yintercept = params$max_percent_mt, color = "#C62828", linetype = "dashed", linewidth = 0.95) +
+      ggplot2::annotate("text", x = Inf, y = params$max_percent_mt, label = paste0("maximum = ", params$max_percent_mt, "%"), hjust = 1.08, vjust = -0.55, color = "#A41414", size = 3.1, fontface = "bold")
+  }
   combined <- patchwork::wrap_plots(plots, ncol = 3)
   if (nzchar(state_label)) combined <- combined + patchwork::plot_annotation(title = state_label)
   combined
@@ -533,6 +538,11 @@ qc_scatter_plot <- function(obj, cutoffs = NULL, state_label = "") {
     }
     counts_mt <- qc_cutoff_lines(counts_mt, cutoffs$max_percent_mt)
     counts_features <- qc_cutoff_lines(counts_features, c(cutoffs$min_features, cutoffs$max_features))
+  }
+  if (identical(params$qc_preset, "pbmc3k")) {
+    counts_mt <- counts_mt +
+      ggplot2::geom_hline(yintercept = params$max_percent_mt, color = "#C62828", linetype = "dashed", linewidth = 0.95) +
+      ggplot2::annotate("text", x = Inf, y = params$max_percent_mt, label = paste0("maximum = ", params$max_percent_mt, "%"), hjust = 1.08, vjust = -0.55, color = "#A41414", size = 3.1, fontface = "bold")
   }
   combined <- patchwork::wrap_plots(counts_mt, counts_features, ncol = 2)
   if (nzchar(state_label)) combined <- combined + patchwork::plot_annotation(title = state_label)

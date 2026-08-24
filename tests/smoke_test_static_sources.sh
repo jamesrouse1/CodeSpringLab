@@ -94,8 +94,10 @@ grep -Fq '"qc_preset": get("qc_preset", "").lower()' "$repo_root/scripts_DoNotTo
 grep -Fq 'Seurat PBMC 3K tutorial cutoffs' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'Seurat PBMC 3K tutorial cutoffs' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'label = paste0("minimum = ", params$min_features)' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq 'label = paste0("maximum = ", params$max_percent_mt, "%")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'linewidth = 0.95' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'gene_axis_from_zero=p["qc_preset"] == "pbmc3k"' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'tutorial_cutoff_labels=tutorial_qc' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'pathway_de_file' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pathway_fgsea.R"
 grep -Fq 'signed -log10(raw P)' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pathway_fgsea.R"
 
