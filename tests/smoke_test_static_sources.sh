@@ -89,6 +89,10 @@ grep -Fq 'marker_species = tolower(get("marker_species", "auto"))' "$repo_root/s
 grep -Fq '"marker_species": get("marker_species", "auto").lower()' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'auto_case_match' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
 grep -Fq 'auto_case_match' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'qc_preset = tolower(get("qc_preset", ""))' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq '"qc_preset": get("qc_preset", "").lower()' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'Seurat PBMC 3K tutorial cutoffs' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq 'Seurat PBMC 3K tutorial cutoffs' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'pathway_de_file' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pathway_fgsea.R"
 grep -Fq 'signed -log10(raw P)' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pathway_fgsea.R"
 

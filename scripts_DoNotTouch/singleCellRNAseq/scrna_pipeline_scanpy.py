@@ -175,6 +175,7 @@ def params_from(path: Path):
         "min_counts": int(float(get("min_counts", "0") or 0)),
         "max_features": int(float(get("max_features", "0") or 0)),
         "max_percent_mt": float(get("max_percent_mt", "20") or 20),
+        "qc_preset": get("qc_preset", "").lower(),
         "min_cells_per_gene": int(float(get("min_cells_per_gene", "3") or 3)),
         "doublet_method": get("doublet_method", "auto").lower(),
         # Zero requests a capture-specific automatic estimate. Positive values
@@ -530,7 +531,8 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
             if cutoffs["max_features"] > 0:
                 lines.append((cutoffs["max_features"], "≤ maximum"))
         elif column == "total_counts":
-            lines.append((cutoffs["min_counts"], "≥ minimum"))
+            if cutoffs["min_counts"] > 0:
+                lines.append((cutoffs["min_counts"], "≥ minimum"))
         elif column == "pct_counts_mt":
             lines.append((cutoffs["max_percent_mt"], "≤ maximum"))
         for value, label in lines:
@@ -589,9 +591,11 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
     ax.set_ylabel("Mitochondrial reads (%)")
     ax.set_title("Library size versus mitochondrial content", loc="left", fontweight="bold")
     if cutoffs:
-        ax.axvline(cutoffs["min_counts"], color=JP_COLOR_MAP(0.92), linestyle="--", linewidth=1.25)
+        if cutoffs["min_counts"] > 0:
+            ax.axvline(cutoffs["min_counts"], color=JP_COLOR_MAP(0.92), linestyle="--", linewidth=1.25)
         ax.axhline(cutoffs["max_percent_mt"], color=JP_COLOR_MAP(0.92), linestyle="--", linewidth=1.25)
-        ax.text(0.99, 0.98, f"Applied cutoffs: counts ≥ {cutoffs['min_counts']:g}; mitochondrial reads ≤ {cutoffs['max_percent_mt']:g}%",
+        count_note = f"counts ≥ {cutoffs['min_counts']:g}; " if cutoffs["min_counts"] > 0 else "no total-count cutoff; "
+        ax.text(0.99, 0.98, f"Applied cutoffs: {count_note}mitochondrial reads ≤ {cutoffs['max_percent_mt']:g}%",
                 transform=ax.transAxes, ha="right", va="top", fontsize=8, color=JP_COLOR_MAP(0.98),
                 bbox={"facecolor": "white", "edgecolor": "#fecaca", "alpha": 0.9, "pad": 3})
     mt_values = pd.to_numeric(adata.obs["pct_counts_mt"], errors="coerce").dropna().to_numpy()
@@ -1161,8 +1165,11 @@ def main():
         recommendations = qc_recommendations(adata)
         recommendations.to_csv(tables / "qc_recommended_thresholds.tsv", sep="\t", index=False)
         global_recommendation = recommendations[recommendations["sample_id"] == "Recommended global"]
-        suggested_cutoffs = global_recommendation.iloc[0][["min_features", "min_counts", "max_features", "max_percent_mt"]].to_dict() if len(global_recommendation) else None
-        save_qc_plots(adata, figures, prefix="00_qc_pre_filter", cutoffs=suggested_cutoffs, state_label="Unfiltered cells — suggested cutoffs")
+        tutorial_qc = p["qc_preset"] == "pbmc3k"
+        suggested_cutoffs = ({"min_features": p["min_features"], "min_counts": 0, "max_features": p["max_features"], "max_percent_mt": p["max_percent_mt"]}
+                             if tutorial_qc else global_recommendation.iloc[0][["min_features", "min_counts", "max_features", "max_percent_mt"]].to_dict() if len(global_recommendation) else None)
+        cutoff_label = "Unfiltered cells — Seurat PBMC 3K tutorial cutoffs" if tutorial_qc else "Unfiltered cells — suggested cutoffs"
+        save_qc_plots(adata, figures, prefix="00_qc_pre_filter", cutoffs=suggested_cutoffs, state_label=cutoff_label)
         # Continue a single processed AnnData object without rebuilding a
         # valid embedding. This writes only a project-local copy; the source
         # H5AD remains read-only and unchanged.

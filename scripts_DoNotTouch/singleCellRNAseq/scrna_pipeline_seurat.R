@@ -179,6 +179,7 @@ read_params <- function(path) {
     min_counts = suppressWarnings(as.integer(get("min_counts", "0"))),
     max_features = suppressWarnings(as.integer(get("max_features", "0"))),
     max_percent_mt = suppressWarnings(as.numeric(get("max_percent_mt", "20"))),
+    qc_preset = tolower(get("qc_preset", "")),
     min_cells_per_gene = suppressWarnings(as.integer(get("min_cells_per_gene", "3"))),
     doublet_method = tolower(get("doublet_method", "none")),
     # Zero means that scDblFinder should estimate the rate independently for
@@ -544,11 +545,15 @@ if (stage %in% c("inspect", "qc", "all")) {
   recommended_qc <- qc_recommendations(pre_qc_cells)
   utils::write.table(recommended_qc, file.path(tables_dir, "qc_recommended_thresholds.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   global_qc <- recommended_qc[recommended_qc$sample_id == "Recommended global", , drop = FALSE]
-  suggested_cutoffs <- if (NROW(global_qc)) as.list(global_qc[1, c("min_features", "min_counts", "max_features", "max_percent_mt")]) else NULL
+  tutorial_qc <- identical(params$qc_preset, "pbmc3k")
+  suggested_cutoffs <- if (tutorial_qc) {
+    list(min_features = params$min_features, min_counts = 0, max_features = params$max_features, max_percent_mt = params$max_percent_mt)
+  } else if (NROW(global_qc)) as.list(global_qc[1, c("min_features", "min_counts", "max_features", "max_percent_mt")]) else NULL
+  cutoff_label <- if (tutorial_qc) "Unfiltered cells — Seurat PBMC 3K tutorial cutoffs" else "Unfiltered cells — suggested starting cutoffs"
   pre_qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
   Seurat::DefaultAssay(pre_qc_merged) <- "RNA"
-  save_plot(qc_violin_plot(pre_qc_merged, suggested_cutoffs, "Unfiltered cells — suggested starting cutoffs"), "00_qc_pre_filter_violin.png", 14, 5)
-  save_plot(qc_scatter_plot(pre_qc_merged, suggested_cutoffs, "Unfiltered cells — suggested starting cutoffs"), "00_qc_pre_filter_scatter.png", 12, 5)
+  save_plot(qc_violin_plot(pre_qc_merged, suggested_cutoffs, cutoff_label), "00_qc_pre_filter_violin.png", 14, 5)
+  save_plot(qc_scatter_plot(pre_qc_merged, suggested_cutoffs, cutoff_label), "00_qc_pre_filter_scatter.png", 12, 5)
   # A single processed Seurat object can be continued without rebuilding its
   # existing embedding. Preserve a project-local copy only when both UMAP and
   # clusters were detected; source data remain read-only and unchanged.
