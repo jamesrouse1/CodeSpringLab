@@ -127,6 +127,15 @@ scanpy_bind_args() {
 }
 
 engine="$(printf '%s' "$engine" | tr '[:upper:]' '[:lower:]')"
+if [[ "$stage" == "restore_embedding" ]]; then
+  if [[ "$engine" != "seurat" ]]; then
+    echo "ERROR: Automatic coordinate restoration currently requires a saved Seurat object." >&2
+    exit 2
+  fi
+  run_seurat_r -e 'for (pkg in c("Seurat", "SeuratObject")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
+  run_seurat_r "$script_dir/restore_seurat_umap_coordinates.R" "$out_dir"
+  exit 0
+fi
 if [[ "$stage" == "pathway" ]]; then
   run_seurat_r -e 'for (pkg in c("fgsea", "ggplot2")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
   run_seurat_r "$script_dir/scrna_pathway_fgsea.R" "$out_dir" "$params"
