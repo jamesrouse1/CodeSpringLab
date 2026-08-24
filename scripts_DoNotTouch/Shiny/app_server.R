@@ -1908,18 +1908,14 @@ rna_overview_tab <- tabPanel(
   br(),
   div(class = "results-actions", span(class = "updated-note", "Live summary of saved pipeline outputs")),
   div(class = "metric-grid",
-    div(class = "metric-card", span("Samples"), strong(format(length(samples), big.mark = ",")), tags$small("Saved design matrix")),
-    div(class = "metric-card", span("Pipeline stages"), strong(paste0(sum(rna_stage_status$status == "Complete"), "/", nrow(rna_stage_status))), tags$small("Completed or available")),
-    div(class = "metric-card", span("Counted genes"), strong(format(nrow(count_matrix_nonzero_df), big.mark = ",")), tags$small("Nonzero featureCounts rows")),
-    div(class = "metric-card", span("Result files"), strong(format(nrow(rna_result_files), big.mark = ",")), tags$small("Files under the project data folder")),
-    div(class = "metric-card", span("Disk space"), strong(human_bytes(rna_result_total_size)), tags$small("Total size of result files"))
+    div(class = "metric-card tone-blue", span("Disk space"), strong(human_bytes(rna_result_total_size)), tags$small("Total size of result files")),
+    div(class = "metric-card tone-green", span("Samples"), strong(format(length(samples), big.mark = ",")), tags$small("Saved design matrix")),
+    div(class = "metric-card tone-gold", span("Counted genes"), strong(format(nrow(count_matrix_nonzero_df), big.mark = ",")), tags$small("Nonzero featureCounts rows")),
+    div(class = "metric-card tone-purple", span("Result files"), strong(format(nrow(rna_result_files), big.mark = ",")), tags$small("Files under the project data folder"))
   ),
-  h4("Pipeline status"),
-  table_widget("rna_overview_status"),
-  tags$hr(),
-  h4("Design matrix"),
-  tags$p(class = "muted-note", "Samples and metadata used by RNA-seq quantification and comparisons."),
-  table_widget("rna_overview_design")
+  h4("Sample progress"),
+  tags$p(class = "muted-note", "The same live sample-by-step visualization shown on the Progress page."),
+  uiOutput("rna_overview_sample_progress_ui")
 )
 
 rna_files_tab <- tabPanel(
@@ -2321,6 +2317,9 @@ ui <- fluidPage(
         box-shadow: 0 5px 14px rgba(15, 45, 75, 0.07);
         padding: 16px;
       }
+      .metric-card.tone-green { border-top-color: #15936f; }
+      .metric-card.tone-gold { border-top-color: #d39116; }
+      .metric-card.tone-purple { border-top-color: #805ad5; }
       .metric-card span, .metric-card small {
         display: block;
         color: #60758b;
@@ -2790,8 +2789,6 @@ server <- function(input, output, session) {
     if (identical(category, "all")) rna_result_files else rna_result_files[rna_result_files$Category == category, , drop = FALSE]
   })
   if (DT_AVAILABLE) {
-    output$rna_overview_status <- DT::renderDT(DT::datatable(rna_stage_status, rownames = FALSE, options = list(dom = "t", pageLength = nrow(rna_stage_status))))
-    output$rna_overview_design <- DT::renderDT(DT::datatable(design_df, rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)))
     output$rna_files_table <- DT::renderDT(DT::datatable(
       rna_files_filtered(),
       rownames = FALSE,
@@ -2808,8 +2805,6 @@ server <- function(input, output, session) {
       )
     ))
   } else {
-    output$rna_overview_status <- renderTable(rna_stage_status)
-    output$rna_overview_design <- renderTable(design_df)
     output$rna_files_table <- renderTable(rna_files_filtered())
   }
   output$download_rna_file_catalog <- downloadHandler(

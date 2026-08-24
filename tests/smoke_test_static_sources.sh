@@ -33,6 +33,16 @@ grep -Fq 'configured_species, "maize"' "$repo_root/scripts_DoNotTouch/Shiny/app_
 grep -Fq 'maize_nc350_nam1' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'maize_w22_nrgene2' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
 grep -Fq 'optional_quantifiers_enabled' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'uiOutput("rna_overview_sample_progress_ui")' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+grep -Fq 'div(class = "metric-card tone-blue", span("Disk space")' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"
+if grep -Fq 'table_widget("rna_overview_design")' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"; then
+  echo "RNA-seq Overview must not display the design matrix" >&2
+  exit 1
+fi
+if grep -Fq 'table_widget("rna_overview_status")' "$repo_root/scripts_DoNotTouch/Shiny/app_server.R"; then
+  echo "RNA-seq Overview must use the live sample progress matrix instead of the old pipeline-status table" >&2
+  exit 1
+fi
 
 # Automatic Seurat integration must remain on the scalable PCA/Harmony path.
 # Anchor integration can exceed Matrix's 32-bit sparse-index ceiling on large
