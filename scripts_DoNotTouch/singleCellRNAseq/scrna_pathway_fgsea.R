@@ -39,14 +39,33 @@ if (!nzchar(gmt)) {
   }
 }
 if (!file.exists(gmt) || file.info(gmt)$size <= 0) stop("The selected pathway database is unavailable: ", library_name)
-de_path <- file.path(tables, "pseudobulk_differential_expression.tsv")
-if (!file.exists(de_path)) stop("Best-practice pathway analysis requires the pseudobulk DESeq2 result. Complete pseudobulk differential expression first.")
+de_path <- path.expand(get("pathway_de_file", ""))
+if (!nzchar(de_path) || !file.exists(de_path)) stop("Choose a completed differential-expression result before pathway analysis.")
 de <- utils::read.delim(de_path, check.names = FALSE, stringsAsFactors = FALSE)
-if (!all(c("gene", "stat") %in% names(de))) stop("The pseudobulk DE result does not contain gene and Wald-statistic columns.")
-de <- de[is.finite(de$stat) & nzchar(as.character(de$gene)), , drop = FALSE]
-de <- de[order(abs(de$stat), decreasing = TRUE), , drop = FALSE]
-de <- de[!duplicated(de$gene), , drop = FALSE]
-ranks <- setNames(as.numeric(de$stat), as.character(de$gene))
+gene_col <- intersect(c("gene", "names", "Gene", "GeneName"), names(de))[1] %||% ""
+if (!nzchar(gene_col)) stop("The selected differential-expression result has no recognizable gene-symbol column.")
+rank_method <- ""
+if ("stat" %in% names(de)) {
+  rank_values <- suppressWarnings(as.numeric(de$stat)); rank_method <- "DESeq2 Wald statistic"
+} else if ("scores" %in% names(de)) {
+  rank_values <- suppressWarnings(as.numeric(de$scores)); rank_method <- "Wilcoxon score"
+} else {
+  lfc_col <- intersect(c("avg_log2FC", "avg_logFC", "logfoldchanges", "log2FoldChange"), names(de))[1] %||% ""
+  p_col <- intersect(c("p_val", "pvals", "pvalue", "p_value"), names(de))[1] %||% ""
+  if (!nzchar(lfc_col) || !nzchar(p_col)) stop("The selected differential-expression result needs a statistic, Wilcoxon score, or log-fold-change and raw-P-value columns.")
+  lfc <- suppressWarnings(as.numeric(de[[lfc_col]])); pvalue <- suppressWarnings(as.numeric(de[[p_col]]))
+  rank_values <- sign(lfc) * -log10(pmax(pvalue, 1e-300)); rank_method <- paste0("signed -log10(raw P); direction from ", lfc_col)
+}
+genes <- trimws(as.character(de[[gene_col]]))
+keep_rank <- is.finite(rank_values) & nzchar(genes)
+rank_table <- data.frame(gene = genes[keep_rank], rank = rank_values[keep_rank], stringsAsFactors = FALSE)
+rank_table <- rank_table[order(abs(rank_table$rank), decreasing = TRUE), , drop = FALSE]
+rank_table <- rank_table[!duplicated(rank_table$gene), , drop = FALSE]
+ranks <- setNames(rank_table$rank, rank_table$gene)
+comparison_slug <- sub("\\.tsv$", "", basename(de_path))
+comparison_slug <- sub("^(pseudobulk_DESeq2|cell_level_Wilcoxon)__", "", comparison_slug)
+comparison_slug <- gsub("[^A-Za-z0-9_.-]+", "_", comparison_slug)
+if (!nzchar(comparison_slug)) comparison_slug <- "comparison"
 species <- tolower(get("pathway_species", "human"))
 mapping_note <- "Input ranks already use human gene symbols."
 mapped_genes <- length(ranks)
@@ -90,7 +109,7 @@ if (identical(species, "mouse")) {
   mapped <- mapped[order(abs(mapped$stat), decreasing = TRUE), , drop = FALSE]
   mapped <- mapped[!duplicated(mapped$human_gene_symbol), , drop = FALSE]
   if (NROW(mapped) < 100L) stop("Too few mouse genes mapped to human ortholog symbols for reliable pathway analysis (", NROW(mapped), ").")
-  utils::write.table(mapped, file.path(tables, paste0("pathway_mouse_to_human_mapping__", library_slug, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
+  utils::write.table(mapped, file.path(tables, paste0("pathway_mouse_to_human_mapping__", comparison_slug, "__", library_slug, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
   ranks <- setNames(mapped$stat, mapped$human_gene_symbol)
   mapped_genes <- NROW(mapped)
   mapping_note <- paste0("Mouse ranks mapped to human ortholog symbols with bundled MGI table; ambiguous mouse-to-many mappings excluded; duplicate human targets retained by largest absolute Wald statistic. Mapped genes: ", mapped_genes, ".")
@@ -102,7 +121,8 @@ result <- fgsea::fgseaMultilevel(pathways = pathways, stats = ranks, minSize = 1
 result <- as.data.frame(result)
 if ("leadingEdge" %in% names(result)) result$leadingEdge <- vapply(result$leadingEdge, paste, collapse = ";", character(1))
 result <- result[order(result$padj, -abs(result$NES), na.last = TRUE), , drop = FALSE]
-specific_result <- file.path(tables, paste0("pathway_fgsea_ranked__", library_slug, ".tsv"))
+result_stem <- paste0(comparison_slug, "__", library_slug)
+specific_result <- file.path(tables, paste0("pathway_fgsea_ranked__", result_stem, ".tsv"))
 utils::write.table(result, specific_result, sep = "\t", row.names = FALSE, quote = FALSE)
 utils::write.table(result, file.path(tables, "pathway_fgsea_ranked.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 provenance <- data.frame(
@@ -113,17 +133,19 @@ provenance <- data.frame(
   species = species,
   ranked_genes = length(ranks),
   mapping_note = mapping_note,
+  differential_expression_file = normalizePath(de_path, winslash = "/", mustWork = TRUE),
+  rank_method = rank_method,
   generated = as.character(Sys.time()),
   stringsAsFactors = FALSE
 )
-utils::write.table(provenance, file.path(tables, paste0("pathway_source__", library_slug, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
+utils::write.table(provenance, file.path(tables, paste0("pathway_source__", result_stem, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
 if (requireNamespace("ggplot2", quietly = TRUE) && NROW(result)) {
   shown <- head(result[is.finite(result$padj) & is.finite(result$NES), , drop = FALSE], 20L)
   if (NROW(shown)) {
     shown$pathway <- factor(shown$pathway, levels = rev(shown$pathway))
     jpplot_colors <- c("#90C3DD", "#C2E4EF", "#ECF7E1", "#FEF4AF", "#FDD484", "#FBA25B", "#F0653F", "#D42D26", "#A50026")
-    plot <- ggplot2::ggplot(shown, ggplot2::aes(x = NES, y = pathway, color = -log10(pmax(padj, 1e-300)))) + ggplot2::geom_point(size = 3) + ggplot2::scale_color_gradientn(colors = jpplot_colors, name = "−log10 FDR") + ggplot2::labs(x = "Normalized enrichment score", y = NULL, title = paste("Ranked pseudobulk pathway analysis —", library_name)) + ggplot2::theme_classic(base_size = 11) + ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8), plot.title = ggplot2::element_text(face = "bold"))
-    ggplot2::ggsave(file.path(figures, paste0("pathway_fgsea_top20__", library_slug, ".png")), plot, width = 9, height = 6, dpi = 180)
+    plot <- ggplot2::ggplot(shown, ggplot2::aes(x = NES, y = pathway, color = -log10(pmax(padj, 1e-300)))) + ggplot2::geom_point(size = 3) + ggplot2::scale_color_gradientn(colors = jpplot_colors, name = "−log10 FDR") + ggplot2::labs(x = "Normalized enrichment score", y = NULL, title = paste("Ranked pathway analysis —", library_name)) + ggplot2::theme_classic(base_size = 11) + ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8), plot.title = ggplot2::element_text(face = "bold"))
+    ggplot2::ggsave(file.path(figures, paste0("pathway_fgsea_top20__", result_stem, ".png")), plot, width = 9, height = 6, dpi = 180)
     ggplot2::ggsave(file.path(figures, "pathway_fgsea_top20.png"), plot, width = 9, height = 6, dpi = 180)
   }
 }

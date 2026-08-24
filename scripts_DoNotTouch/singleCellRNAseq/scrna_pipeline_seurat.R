@@ -129,6 +129,21 @@ map_cross_species_genes <- function(genes, source_species, ortholog_path, expres
   human_overlap <- sum(expression_genes %in% orth$human)
   target_species <- if (mouse_overlap > human_overlap) "mouse" else if (human_overlap > mouse_overlap) "human" else "unknown"
   if (identical(target_species, "unknown")) stop("Could not infer whether expression features are mouse or human from the ortholog table. Choose 'Same as the expression dataset' if conversion is unnecessary.")
+  if (identical(source_species, "auto")) {
+    expression_lookup <- stats::setNames(expression_genes, toupper(expression_genes))
+    direct <- unname(expression_lookup[toupper(genes)])
+    other_species <- if (identical(target_species, "mouse")) "human" else "mouse"
+    source_counts <- table(toupper(orth[[other_species]]))
+    usable <- orth[source_counts[toupper(orth[[other_species]])] == 1L, , drop = FALSE]
+    ortholog_lookup <- stats::setNames(usable[[target_species]], toupper(usable[[other_species]]))
+    mapped <- direct
+    unresolved <- is.na(mapped) | !nzchar(mapped)
+    mapped[unresolved] <- unname(ortholog_lookup[toupper(genes[unresolved])])
+    status <- ifelse(!is.na(direct) & nzchar(direct), "auto_case_match", ifelse(is.na(mapped) | !nzchar(mapped), "unmapped_or_ambiguous", "auto_ortholog"))
+    audit <- data.frame(set = set_names %||% "", original_gene = genes, mapped_gene = ifelse(is.na(mapped), "", mapped), status = status, source_species = "auto", target_species = target_species)
+    utils::write.table(audit, audit_path, sep = "\t", row.names = FALSE, quote = FALSE)
+    return(unique(mapped[status %in% c("auto_case_match", "auto_ortholog")]))
+  }
   if (identical(source_species, target_species)) {
     audit <- data.frame(set = set_names %||% "", original_gene = genes, mapped_gene = genes, status = "same_species", source_species = source_species, target_species = target_species)
     utils::write.table(audit, audit_path, sep = "\t", row.names = FALSE, quote = FALSE)
@@ -176,7 +191,7 @@ read_params <- function(path) {
     reference_label_column = get("reference_label_column", ""),
     reference_ortholog_file = get("reference_ortholog_file", ""),
     find_cluster_markers = tolower(get("find_cluster_markers", "false")) %in% c("true", "1", "yes"),
-    marker_species = tolower(get("marker_species", "same")),
+    marker_species = tolower(get("marker_species", "auto")),
     marker_ortholog_file = get("marker_ortholog_file", ""),
     annotation_name = get("annotation_name", "cell_type"),
     signature_file = get("signature_file", ""),
@@ -1016,7 +1031,8 @@ apply_marker_annotation <- function(obj, path, annotation_name) {
   if (!identical(params$marker_species, "same")) {
     mapped <- map_cross_species_genes(expanded$gene, params$marker_species, params$marker_ortholog_file, rownames(obj), file.path(tables_dir, "marker_ortholog_mapping.tsv"), expanded$cell_type)
     audit <- read_delim_safe(file.path(tables_dir, "marker_ortholog_mapping.tsv"))
-    expanded <- data.frame(cell_type = audit$set[audit$status %in% c("mapped", "same_species")], gene = audit$mapped_gene[audit$status %in% c("mapped", "same_species")], stringsAsFactors = FALSE)
+    usable_status <- audit$status %in% c("mapped", "same_species", "auto_case_match", "auto_ortholog")
+    expanded <- data.frame(cell_type = audit$set[usable_status], gene = audit$mapped_gene[usable_status], stringsAsFactors = FALSE)
   }
   marker_list <- split(expanded$gene, expanded$cell_type)
   marker_list <- lapply(marker_list, function(x) intersect(unique(x[nzchar(x)]), rownames(obj)))

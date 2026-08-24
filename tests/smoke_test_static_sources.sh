@@ -85,6 +85,12 @@ grep -Fq '#SBATCH --cpus-per-task=20' "$repo_root/scripts_DoNotTouch/singleCellR
 grep -Fq 'export CELLRANGER_LOCALMEM_GB=$((allocated_mem_gb - 6))' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/qsub_cellranger_count.sh"
 test "$(grep -Fc 'write_interactive_metadata_tables(obj)' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R")" -ge 2
 grep -Fq '"batch_column": get("batch_column", "sample_id")' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'marker_species = tolower(get("marker_species", "auto"))' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq '"marker_species": get("marker_species", "auto").lower()' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'auto_case_match' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq 'auto_case_match' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'pathway_de_file' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pathway_fgsea.R"
+grep -Fq 'signed -log10(raw P)' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pathway_fgsea.R"
 
 python3 - "$repo_root" <<'PY'
 import csv

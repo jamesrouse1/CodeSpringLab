@@ -123,6 +123,20 @@ def map_cross_species_genes(genes, set_names, source_species, ortholog_path: Pat
     target_species = "mouse" if mouse_overlap > human_overlap else "human" if human_overlap > mouse_overlap else "unknown"
     if target_species == "unknown":
         raise SystemExit("Could not infer whether expression features are mouse or human from the ortholog table. Choose 'Same as the expression dataset' if conversion is unnecessary.")
+    if source_species == "auto":
+        expression_lookup = {str(g).upper(): str(g) for g in expression_genes}
+        other_species = "human" if target_species == "mouse" else "mouse"
+        source_upper = orth[other_species].astype(str).str.upper()
+        counts = source_upper.value_counts()
+        usable = orth[source_upper.map(counts).eq(1)].copy()
+        ortholog_lookup = dict(zip(usable[other_species].astype(str).str.upper(), usable[target_species].astype(str)))
+        direct = [expression_lookup.get(g.upper(), "") for g in genes]
+        mapped = [d or ortholog_lookup.get(g.upper(), "") for g, d in zip(genes, direct)]
+        status = ["auto_case_match" if d else "auto_ortholog" if m else "unmapped_or_ambiguous" for d, m in zip(direct, mapped)]
+        audit = pd.DataFrame({"set": set_names, "original_gene": genes, "mapped_gene": mapped, "status": status, "source_species": "auto", "target_species": target_species})
+        audit.to_csv(audit_path, sep="\t", index=False)
+        keep = audit["status"].isin(["auto_case_match", "auto_ortholog"])
+        return audit.loc[keep, "mapped_gene"].tolist(), audit.loc[keep, "set"].tolist()
     if source_species == target_species:
         audit = pd.DataFrame({"set": set_names, "original_gene": genes, "mapped_gene": genes, "status": "same_species", "source_species": source_species, "target_species": target_species})
     else:
@@ -169,7 +183,7 @@ def params_from(path: Path):
         "remove_doublets": get_bool("remove_doublets", True),
         "marker_file": get("marker_file", ""),
         "celltype_file": get("celltype_file", ""),
-        "marker_species": get("marker_species", "same").lower(),
+        "marker_species": get("marker_species", "auto").lower(),
         "marker_ortholog_file": get("marker_ortholog_file", ""),
         "annotation_name": get("annotation_name", "cell_type"),
         "signature_file": get("signature_file", ""),
