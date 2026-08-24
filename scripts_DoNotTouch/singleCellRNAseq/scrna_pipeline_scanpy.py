@@ -509,7 +509,7 @@ def qc_recommendations(adata):
     return pd.concat([pd.DataFrame([global_row]), recommendations], ignore_index=True)
 
 
-def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, state_label=None):
+def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, state_label=None, gene_axis_from_zero=False):
     """Write clean, readable pre/post-filter QC figures without an interactive display."""
     import matplotlib.pyplot as plt
     sample_series = adata.obs["sample_id"].astype(str)
@@ -558,6 +558,8 @@ def save_qc_plots(adata, figures: Path, prefix: str = "01_qc", cutoffs=None, sta
         axis.set_ylabel(label)
         axis.set_title(label, loc="left", fontweight="bold")
         cutoff_lines(axis, column)
+        if column == "n_genes_by_counts" and gene_axis_from_zero:
+            axis.set_ylim(bottom=0)
         if column == "pct_counts_mt":
             values = np.concatenate(groups)
             # A handful of all-mitochondrial droplets can stretch this axis to
@@ -1169,7 +1171,7 @@ def main():
         suggested_cutoffs = ({"min_features": p["min_features"], "min_counts": 0, "max_features": p["max_features"], "max_percent_mt": p["max_percent_mt"]}
                              if tutorial_qc else global_recommendation.iloc[0][["min_features", "min_counts", "max_features", "max_percent_mt"]].to_dict() if len(global_recommendation) else None)
         cutoff_label = "Unfiltered cells — Seurat PBMC 3K tutorial cutoffs" if tutorial_qc else "Unfiltered cells — suggested cutoffs"
-        save_qc_plots(adata, figures, prefix="00_qc_pre_filter", cutoffs=suggested_cutoffs, state_label=cutoff_label)
+        save_qc_plots(adata, figures, prefix="00_qc_pre_filter", cutoffs=suggested_cutoffs, state_label=cutoff_label, gene_axis_from_zero=tutorial_qc)
         # Continue a single processed AnnData object without rebuilding a
         # valid embedding. This writes only a project-local copy; the source
         # H5AD remains read-only and unchanged.
@@ -1215,7 +1217,7 @@ def main():
         sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], inplace=True, percent_top=None, log1p=False)
         # Replace the inspection preview with the exact same unfiltered cells,
         # now annotated with the cutoffs the user chose for this QC run.
-        save_qc_plots(adata, figures, prefix="00_qc_pre_filter", cutoffs=p, state_label="Before QC filtering")
+        save_qc_plots(adata, figures, prefix="00_qc_pre_filter", cutoffs=p, state_label="Before QC filtering", gene_axis_from_zero=p["qc_preset"] == "pbmc3k")
         pd.DataFrame([{
             "min_features": p["min_features"], "min_counts": p["min_counts"],
             "max_features": p["max_features"], "max_percent_mt": p["max_percent_mt"],
@@ -1251,7 +1253,7 @@ def main():
         qc_summary = qc.groupby("sample_id", observed=True).agg(cells_after_qc_and_doublets=("total_counts", "size"), median_umis=("total_counts", "median"), median_genes=("n_genes_by_counts", "median"), median_percent_mt=("pct_counts_mt", "median")).reset_index()
         qc_summary.insert(1, "cells_input", qc_summary["sample_id"].map(cells_before_qc).astype(int))
         qc_summary.to_csv(tables / "qc_summary_by_sample.tsv", sep="\t", index=False)
-        save_qc_plots(adata, figures, prefix="01_qc_post_filter", cutoffs=p, state_label="After QC filtering")
+        save_qc_plots(adata, figures, prefix="01_qc_post_filter", cutoffs=p, state_label="After QC filtering", gene_axis_from_zero=p["qc_preset"] == "pbmc3k")
         write_h5ad_checkpoint(adata, qc_checkpoint)
         mark_complete("qc")
         if stage == "qc":
