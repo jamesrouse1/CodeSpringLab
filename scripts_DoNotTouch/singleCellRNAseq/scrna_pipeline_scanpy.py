@@ -822,16 +822,21 @@ def save_marker_annotation_panels(adata, marker_sets, figures: Path, annotation_
         groupings = [("cluster", "Cluster")]
         if annotation_name in adata.obs.columns:
             groupings.append((annotation_name, "Cell type"))
+        group_levels_by_column = {}
+        for group_column, _ in groupings:
+            groups = adata.obs[group_column].astype(str)
+            group_levels_by_column[group_column] = sorted(groups.unique(), key=lambda value: (not str(value).replace(".", "", 1).isdigit(), float(value) if group_column == "cluster" and str(value).replace(".", "", 1).isdigit() else str(value)))
+        shared_group_count = max([len(levels) for levels in group_levels_by_column.values()] + [1])
+        width, height = max(8.0, 4.4 + 0.62 * shared_group_count), max(5.5, 2.5 + 0.24 * len(genes))
         for group_column, group_label in groupings:
             groups = adata.obs[group_column].astype(str)
-            group_levels = sorted(groups.unique(), key=lambda value: (not str(value).replace(".", "", 1).isdigit(), float(value) if group_column == "cluster" and str(value).replace(".", "", 1).isdigit() else str(value)))
+            group_levels = group_levels_by_column[group_column]
             means = np.zeros((len(genes), len(group_levels)), dtype=float); fractions = np.zeros((len(genes), len(group_levels)), dtype=float)
             for group_index, group in enumerate(group_levels):
                 subset = expression[groups.to_numpy() == group, genes]
                 values = subset.X.toarray() if hasattr(subset.X, "toarray") else np.asarray(subset.X)
                 means[:, group_index] = np.asarray(values.mean(axis=0)).ravel(); fractions[:, group_index] = np.asarray((values > 0).mean(axis=0)).ravel()
             z_scores = np.clip((means - means.mean(axis=1, keepdims=True)) / np.maximum(means.std(axis=1, keepdims=True), 1e-8), -2.5, 2.5)
-            width, height = max(8.0, 4.4 + 0.62 * len(group_levels)), max(5.5, 2.5 + 0.24 * len(genes))
             fig, ax = plt.subplots(figsize=(width, height))
             x_coords, y_coords = np.meshgrid(np.arange(len(group_levels)), np.arange(len(genes)))
             dots = ax.scatter(x_coords.ravel(), y_coords.ravel(), s=12 + 260 * fractions.ravel(), c=z_scores.ravel(), cmap="RdBu_r", vmin=-2.5, vmax=2.5, edgecolors="#374151", linewidths=0.18)

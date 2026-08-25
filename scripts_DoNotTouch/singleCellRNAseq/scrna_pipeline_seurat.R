@@ -1104,6 +1104,13 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
   expression <- Seurat::GetAssayData(obj, assay = assay, layer = "data")
   groupings <- list(cluster = as.character(obj$cluster))
   if (annotation_name %in% colnames(obj@meta.data)) groupings$cell_type <- as.character(obj[[annotation_name]][, 1])
+  grouping_levels <- lapply(names(groupings), function(group_key) {
+    grouping <- groupings[[group_key]]
+    levels <- if (identical(group_key, "cluster")) unique(grouping[order(suppressWarnings(as.numeric(grouping)), grouping, na.last = TRUE)]) else sort(unique(grouping))
+    levels[!is.na(levels) & nzchar(levels)]
+  })
+  names(grouping_levels) <- names(groupings)
+  shared_group_count <- max(1L, vapply(grouping_levels, length, integer(1)))
   panels <- marker_list_panels(marker_list)
   for (panel_index in seq_along(panels)) {
     features <- panels[[panel_index]]
@@ -1112,10 +1119,11 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
     genes <- marker_rows$gene
     if (!length(genes)) next
     panel_label <- paste0("Marker-list annotation: ", paste(names(features), collapse = "; "))
+    width <- max(8, 4.4 + 0.62 * shared_group_count)
+    height <- max(5.5, 2.5 + 0.24 * length(genes))
     for (group_key in names(groupings)) {
       grouping <- groupings[[group_key]]
-      group_levels <- if (identical(group_key, "cluster")) unique(grouping[order(suppressWarnings(as.numeric(grouping)), grouping, na.last = TRUE)]) else sort(unique(grouping))
-      group_levels <- group_levels[!is.na(group_levels) & nzchar(group_levels)]
+      group_levels <- grouping_levels[[group_key]]
       if (!length(group_levels)) next
       group_column <- if (identical(group_key, "cluster")) "cluster" else annotation_name
       group_label <- if (identical(group_key, "cluster")) "Cluster" else "Cell type"
@@ -1126,7 +1134,6 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
       scaled <- t(scale(t(means))); scaled[!is.finite(scaled)] <- 0
       scaled <- matrix(pmax(-2.5, pmin(2.5, scaled)), nrow = NROW(means), ncol = NCOL(means), dimnames = dimnames(means))
       fractions <- as.matrix(fractions); rownames(fractions) <- row_labels; colnames(fractions) <- group_levels
-      width <- max(8, 4.4 + 0.62 * length(group_levels)); height <- max(5.5, 2.5 + 0.24 * length(genes))
       # Use the same explicit matrix for both panels. This avoids opaque
       # Seurat DotPlot scaling and makes the two publication-facing views
       # directly comparable: color is per-gene relative expression and dot
