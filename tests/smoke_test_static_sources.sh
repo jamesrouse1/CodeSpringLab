@@ -171,5 +171,9 @@ grep -Fq 'volcano__cell_level_Wilcoxon__' "$repo_root/scripts_DoNotTouch/singleC
 grep -Fq 'heatmap__cell_level_Wilcoxon__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 grep -Fq 'volcano__pseudobulk_DESeq2__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pseudobulk_deseq2.R"
 grep -Fq 'heatmap__pseudobulk_DESeq2__' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pseudobulk_deseq2.R"
+grep -Fq 'compact_group_key' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq 'strwrap(' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_seurat.R"
+grep -Fq 'compact_group_key' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
+grep -Fq 'textwrap.fill' "$repo_root/scripts_DoNotTouch/singleCellRNAseq/scrna_pipeline_scanpy.py"
 
 echo "Shell, Python, and R source syntax checks passed."

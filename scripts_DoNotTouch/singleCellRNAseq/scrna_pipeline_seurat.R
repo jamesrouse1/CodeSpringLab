@@ -1110,7 +1110,11 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
     levels[!is.na(levels) & nzchar(levels)]
   })
   names(grouping_levels) <- names(groupings)
-  shared_group_count <- max(1L, vapply(grouping_levels, length, integer(1)))
+  # Keep cluster and cell-type exports on the same compact canvas. Once an
+  # annotation exists, the cell-type view is the visual reference rather than
+  # allowing a larger cluster count to stretch both figures horizontally.
+  compact_group_key <- if ("cell_type" %in% names(grouping_levels) && length(grouping_levels$cell_type)) "cell_type" else "cluster"
+  shared_group_count <- max(1L, length(grouping_levels[[compact_group_key]]))
   panels <- marker_list_panels(marker_list)
   for (panel_index in seq_along(panels)) {
     features <- panels[[panel_index]]
@@ -1119,8 +1123,10 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
     genes <- marker_rows$gene
     if (!length(genes)) next
     panel_label <- paste0("Marker-list annotation: ", paste(names(features), collapse = "; "))
+    dot_subtitle <- paste(strwrap(paste0(panel_label, ". Color is scaled within each gene; size is the fraction of positive cells."), width = 88), collapse = "\n")
+    subtitle_lines <- length(strsplit(dot_subtitle, "\n", fixed = TRUE)[[1]])
     width <- max(8, 4.4 + 0.62 * shared_group_count)
-    height <- max(5.5, 2.5 + 0.24 * length(genes))
+    height <- max(5.8, 2.7 + 0.24 * length(genes) + 0.28 * max(0L, subtitle_lines - 1L))
     for (group_key in names(groupings)) {
       grouping <- groupings[[group_key]]
       group_levels <- grouping_levels[[group_key]]
@@ -1153,9 +1159,9 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
         ggplot2::geom_point(ggplot2::aes(size = .data$percent_expressing, fill = .data$scaled_mean), shape = 21, color = "#374151", stroke = 0.18) +
         ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#C51B29", midpoint = 0, limits = c(-2.5, 2.5), name = "Relative mean\nexpression") +
         ggplot2::scale_size_area(max_size = 10, breaks = c(0, 25, 50, 75, 100), limits = c(0, 100), name = "% cells\nexpressing") +
-        ggplot2::labs(title = paste0("Marker expression by ", group_label), subtitle = paste0(panel_label, ". Color is scaled within each gene; size is the fraction of positive cells."), x = group_label, y = "Marker set | gene") +
+        ggplot2::labs(title = paste0("Marker expression by ", group_label), subtitle = dot_subtitle, x = group_label, y = "Marker set | gene") +
         ggplot2::theme_classic(base_size = 12) +
-        ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 14), plot.subtitle = ggplot2::element_text(size = 10), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), axis.text.y = ggplot2::element_text(size = 9), panel.grid.major.x = ggplot2::element_line(color = "#E5E7EB", linewidth = 0.25), legend.box = "vertical")
+        ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 14), plot.subtitle = ggplot2::element_text(size = 10, lineheight = 1.05), plot.margin = ggplot2::margin(12, 12, 10, 10), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), axis.text.y = ggplot2::element_text(size = 9), panel.grid.major.x = ggplot2::element_line(color = "#E5E7EB", linewidth = 0.25), legend.box = "vertical")
       save_plot(dot, sprintf("07_marker_annotation_dotplot_by_%s.png", group_key), width + 2, height)
       heatmap_path <- file.path(figures_dir, sprintf("07_marker_annotation_heatmap_by_%s.png", group_key))
       if (requireNamespace("pheatmap", quietly = TRUE)) {
