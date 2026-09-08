@@ -22,7 +22,9 @@ if ! type module >/dev/null 2>&1; then
   for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /cm/local/apps/environment-modules/current/init/bash; do
     if [[ -s "$module_init" ]]; then
       # shellcheck disable=SC1090
+      set +u
       source "$module_init"
+      set -u
       break
     fi
   done

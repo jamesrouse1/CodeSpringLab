@@ -14,7 +14,13 @@ fi
 
 if ! type module >/dev/null 2>&1; then
   for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /cm/local/apps/environment-modules/current/init/bash; do
-    [[ -s "$module_init" ]] && source "$module_init" && break
+    if [[ -s "$module_init" ]]; then
+      set +u
+      # shellcheck disable=SC1090
+      source "$module_init"
+      set -u
+      break
+    fi
   done
 fi
 type module >/dev/null 2>&1 || { echo "ERROR: cluster module command is unavailable." >&2; exit 127; }

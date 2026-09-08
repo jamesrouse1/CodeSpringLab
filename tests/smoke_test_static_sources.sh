@@ -17,6 +17,31 @@ for path in sorted((root / "scripts_DoNotTouch").rglob("*.py")):
     ast.parse(path.read_text(), filename=str(path))
 PY
 
+# The CSHL module initializer reads optional shell variables such as
+# `enable_lmod`. Every runner that sources it must temporarily relax nounset so
+# jobs behave consistently for users with different login environments.
+python3 - "$repo_root" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]) / "scripts_DoNotTouch"
+unprotected = []
+for path in sorted(root.rglob("*.sh")):
+    lines = path.read_text(errors="replace").splitlines()
+    for index, line in enumerate(lines):
+        if 'source "$module_init"' not in line:
+            continue
+        before = "\n".join(lines[max(0, index - 4):index])
+        after = "\n".join(lines[index + 1:index + 4])
+        if "set +u" not in before or "set -u" not in after:
+            unprotected.append(f"{path.relative_to(root)}:{index + 1}")
+if unprotected:
+    raise SystemExit(
+        "Module initialization must be wrapped by set +u / set -u:\n"
+        + "\n".join(unprotected)
+    )
+PY
+
 Rscript -e 'root <- commandArgs(TRUE)[1]; files <- list.files(file.path(root, "scripts_DoNotTouch"), pattern="[.][Rr]$", recursive=TRUE, full.names=TRUE); for (file in files) parse(file=file)' "$repo_root"
 Rscript "$repo_root/tests/smoke_test_completed_rnaseq_comparisons.R" "$repo_root"
 
