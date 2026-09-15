@@ -20,6 +20,13 @@ row.names(count) <- count[,1]
 count[,1] <- NULL
 
 design <- read.delim(args[2],header=T,sep="\t",row.names = 1,check.names=FALSE)
+# Design matrices are often prepared in spreadsheets. Treat leading/trailing
+# whitespace as formatting, rather than as a distinct treatment, batch, or
+# sample value. CodeSpringApp performs the same normalization when it writes
+# the DESeq2-specific design file; retaining it here also protects direct use.
+design[] <- lapply(design, function(x) {
+    if (is.factor(x) || is.character(x)) trimws(as.character(x)) else x
+})
 if (redundant %in% colnames(design)){
     design <- design[,-match(redundant, colnames(design))]
 }
