@@ -57,10 +57,15 @@ load_seurat_runtime() {
     return 2
   fi
 
-  # A user's older R packages can otherwise shadow compatible packages from
+  # A user's general R library can otherwise shadow compatible packages from
   # the tested module (for example, an old parallelly can prevent SeuratObject
-  # from loading). These settings affect only this submitted CodeSpring job.
-  export R_LIBS_USER="${CSL_R_LIBS_USER:-$out_dir/.codespring_unused_user_library}"
+  # from loading). Use a versioned CodeSpring-managed library for the few
+  # lightweight packages that are not supplied by the shared Seurat module.
+  # This library is reused across projects but never exposes unrelated user
+  # packages to the submitted workflow.
+  local runtime_tag="${seurat_module//\//_}"
+  export R_LIBS_USER="${CSL_R_LIBS_USER:-${HOME}/.codespringlab/R/${runtime_tag}}"
+  mkdir -p "$R_LIBS_USER"
   export R_ENVIRON_USER="${CSL_R_ENVIRON_USER:-/dev/null}"
   export R_PROFILE_USER="${CSL_R_PROFILE_USER:-/dev/null}"
 }
@@ -71,6 +76,29 @@ run_seurat_r() {
   runtime_executable="$(command -v Rscript || true)"
   require_executable "$runtime_executable" "Seurat Rscript"
   "$runtime_executable" "$@"
+}
+
+install_seurat_r_package_if_missing() {
+  local pkg="$1"
+  load_seurat_runtime
+  local runtime_executable
+  runtime_executable="$(command -v Rscript || true)"
+  require_executable "$runtime_executable" "Seurat Rscript"
+
+  if "$runtime_executable" -e 'pkg <- commandArgs(TRUE)[1]; quit(status = if (requireNamespace(pkg, quietly = TRUE)) 0 else 1)' "$pkg" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Installing required R package $pkg into the CodeSpringLab runtime..."
+  "$runtime_executable" -e '
+    pkg <- commandArgs(TRUE)[1]
+    lib <- Sys.getenv("R_LIBS_USER")
+    if (!nzchar(lib)) stop("R_LIBS_USER is not configured")
+    dir.create(lib, recursive = TRUE, showWarnings = FALSE)
+    .libPaths(c(lib, .libPaths()))
+    install.packages(pkg, lib = lib, repos = "https://cloud.r-project.org", dependencies = NA)
+    if (!requireNamespace(pkg, quietly = TRUE)) stop("Could not install required R package: ", pkg)
+  ' "$pkg"
 }
 
 scanpy_container() {
@@ -135,6 +163,7 @@ if [[ "$stage" == "pathway" ]]; then
 fi
 case "$engine" in
   seurat)
+    install_seurat_r_package_if_missing "pheatmap"
     run_seurat_r -e 'for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork", "pheatmap")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
     run_seurat_r "$script_dir/scrna_pipeline_seurat.R" "$samples" "$out_dir" "$params" "$stage"
     ;;
@@ -167,6 +196,7 @@ case "$engine" in
 esac
 
 if [[ "$stage" == "differential" ]]; then
+  install_seurat_r_package_if_missing "pheatmap"
   run_seurat_r -e 'for (pkg in c("DESeq2", "ggplot2", "pheatmap")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
   run_seurat_r "$script_dir/scrna_pseudobulk_deseq2.R" "$out_dir" "$params"
   printf 'complete\n' > "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE"

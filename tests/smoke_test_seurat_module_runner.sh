@@ -23,6 +23,7 @@ printf '%s\n' \
   'printf "R_LIBS_USER=%s\nR_ENVIRON_USER=%s\nR_PROFILE_USER=%s\nARGS=%s\n" "${R_LIBS_USER:-}" "${R_ENVIRON_USER:-}" "${R_PROFILE_USER:-}" "$*" >> "${CSL_TEST_RSCRIPT_LOG:?}"' > "$work/bin/Rscript"
 chmod +x "$work/bin/Rscript"
 
+HOME="$work/home" \
 PATH="$work/bin:$PATH" \
   CSL_TEST_MODULE_LOG="$work/module_args.txt" \
   CSL_TEST_RSCRIPT_LOG="$work/rscript_args.txt" \
@@ -30,7 +31,7 @@ PATH="$work/bin:$PATH" \
 
 grep -Fxq 'load EB5Modules' "$work/module_args.txt"
 grep -Fxq 'load Seurat/5.4.0-foss-2024a-R-4.4.2' "$work/module_args.txt"
-grep -Fxq "R_LIBS_USER=$work/output/.codespring_unused_user_library" "$work/rscript_args.txt"
+grep -Fxq "R_LIBS_USER=$work/home/.codespringlab/R/Seurat_5.4.0-foss-2024a-R-4.4.2" "$work/rscript_args.txt"
 grep -Fxq 'R_ENVIRON_USER=/dev/null' "$work/rscript_args.txt"
 grep -Fxq 'R_PROFILE_USER=/dev/null' "$work/rscript_args.txt"
 grep -Fq 'scrna_pipeline_seurat.R' "$work/rscript_args.txt"
