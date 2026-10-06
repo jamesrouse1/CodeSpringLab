@@ -1365,8 +1365,8 @@ def main():
         # The dashboard uses this full symbol list to request one gene at a
         # time from the post-UMAP H5AD's normalized `.raw` layer.
         pd.DataFrame({"gene": adata.raw.var_names.astype(str)}).to_csv(tables / "dashboard_all_genes.tsv", sep="\t", index=False)
-        # Diagnostic embedding before any technical-batch correction. Keep a
-        # separate copy so the integrated UMAP cannot overwrite this view.
+        # Initial embedding. For multi-sample projects it is the diagnostic
+        # view before batch correction; a single sample has no integration step.
         pre_n_pcs = min(p["n_pcs"], adata.obsm["X_pca"].shape[1])
         sc.pp.neighbors(adata, n_neighbors=min(p["n_neighbors"], max(2, adata.n_obs - 1)), n_pcs=pre_n_pcs, use_rep="X_pca", metric=p["umap_metric"])
         sc.tl.umap(adata, min_dist=p["umap_min_dist"], spread=p["umap_spread"], init_pos=p["umap_init_pos"], random_state=p["seed"])
@@ -1377,10 +1377,14 @@ def main():
             pre_metadata = pre_metadata.rename(columns={"cell": "input_cell"})
         pre = pd.concat([pre, pre_metadata], axis=1)
         pre.insert(0, "cell", pre.index.astype(str))
-        pre.to_csv(tables / "preintegration_umap_coordinates.tsv", sep="\t", index=False)
-        save_umap(adata, "sample_id", figures / "02_preintegration_umap_sample.png", title="Before integration — sample")
-        if p["batch_column"] in adata.obs.columns and adata.obs[p["batch_column"]].astype(str).nunique() > 1 and p["batch_column"] != "sample_id":
-            save_umap(adata, p["batch_column"], figures / "02_preintegration_umap_batch.png", title=f"Before integration — {p['batch_column']}")
+        multiple_inputs = samples["sample_id"].astype(str).nunique() > 1
+        initial_prefix = "02_preintegration_umap" if multiple_inputs else "02_initial_umap"
+        initial_table = "preintegration_umap_coordinates.tsv" if multiple_inputs else "initial_umap_coordinates.tsv"
+        pre.to_csv(tables / initial_table, sep="\t", index=False)
+        initial_title = "Before integration — sample" if multiple_inputs else "Initial UMAP — sample"
+        save_umap(adata, "sample_id", figures / f"{initial_prefix}_sample.png", title=initial_title)
+        if multiple_inputs and p["batch_column"] in adata.obs.columns and adata.obs[p["batch_column"]].astype(str).nunique() > 1 and p["batch_column"] != "sample_id":
+            save_umap(adata, p["batch_column"], figures / f"{initial_prefix}_batch.png", title=f"Before integration — {p['batch_column']}")
         write_h5ad_checkpoint(adata, preprocess_checkpoint)
         # Once normalized/PCA data are safely checkpointed, the QC object is
         # redundant.  The raw input checkpoint is retained so users can

@@ -195,10 +195,10 @@ testing human-symbol pathway collections.
 
 ## Output layout
 
-- `figures/`: QC, pre-integration UMAP, and final UMAP figures;
+- `figures/`: QC, an initial UMAP (or a pre-integration UMAP for multi-sample projects), and final UMAP figures;
 - `tables/`: per-cell QC, per-sample QC, doublet calls, highly-variable genes,
   PCA variance, metadata, marker, annotation, exact cell-type composition by
-  sample, `preintegration_umap_coordinates.tsv`, and `umap_coordinates.tsv`;
+  sample, `initial_umap_coordinates.tsv` for one sample (or `preintegration_umap_coordinates.tsv` for multiple inputs), and `umap_coordinates.tsv`;
 - `objects/`: processed Seurat RDS or AnnData H5AD;
 - `checkpoints/`: internal stage checkpoints used to resume the workflow;
 - `run_summary.txt`: processing choices and cell/cluster counts;

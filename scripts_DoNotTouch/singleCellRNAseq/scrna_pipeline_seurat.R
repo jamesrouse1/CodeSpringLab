@@ -827,8 +827,8 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
       Seurat::ScaleData(obj, verbose = FALSE)
     })
   }
-  # Diagnostic embedding before any batch correction. Raw RNA counts remain
-  # untouched and are retained for marker and differential-expression work.
+  # Initial embedding. For multi-sample projects it is the diagnostic view
+  # before batch correction; a single sample has no integration step.
   features <- Seurat::SelectIntegrationFeatures(object.list = objects, nfeatures = 3000)
   unintegrated <- Reduce(function(a, b) merge(a, y = b), objects)
   DefaultAssay(unintegrated) <- if (identical(params$normalization, "sct")) "SCT" else "RNA"
@@ -843,16 +843,19 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
                                   n.neighbors = pre_neighbors, min.dist = params$umap_min_dist, spread = params$umap_spread,
                                   metric = params$umap_metric,
                                   seed.use = params$seed, verbose = FALSE)
-  save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = "sample_id", shuffle = TRUE), "02_preintegration_umap_sample.png", 8, 6)
-  if (nzchar(params$batch_column) && params$batch_column %in% colnames(unintegrated@meta.data) && length(unique(as.character(unintegrated[[params$batch_column]][, 1]))) > 1L && !identical(params$batch_column, "sample_id")) {
-    save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = params$batch_column, shuffle = TRUE), "02_preintegration_umap_batch.png", 8, 6)
+  multiple_inputs <- length(unique(as.character(samples$sample_id))) > 1L
+  initial_prefix <- if (multiple_inputs) "02_preintegration_umap" else "02_initial_umap"
+  save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = "sample_id", shuffle = TRUE), paste0(initial_prefix, "_sample.png"), 8, 6)
+  if (multiple_inputs && nzchar(params$batch_column) && params$batch_column %in% colnames(unintegrated@meta.data) && length(unique(as.character(unintegrated[[params$batch_column]][, 1]))) > 1L && !identical(params$batch_column, "sample_id")) {
+    save_plot(Seurat::DimPlot(unintegrated, reduction = "umap.unintegrated", group.by = params$batch_column, shuffle = TRUE), paste0(initial_prefix, "_batch.png"), 8, 6)
   }
   pre_coords <- as.data.frame(Seurat::Embeddings(unintegrated, "umap.unintegrated"))
   names(pre_coords)[1:2] <- c("UMAP_1", "UMAP_2")
   pre_metadata <- unintegrated@meta.data
   if ("cell" %in% names(pre_metadata)) names(pre_metadata)[names(pre_metadata) == "cell"] <- "input_cell"
   pre_table <- data.frame(cell = rownames(pre_coords), pre_coords[, c("UMAP_1", "UMAP_2"), drop = FALSE], pre_metadata, check.names = FALSE)
-  utils::write.table(pre_table, file.path(tables_dir, "preintegration_umap_coordinates.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  initial_table <- if (multiple_inputs) "preintegration_umap_coordinates.tsv" else "initial_umap_coordinates.tsv"
+  utils::write.table(pre_table, file.path(tables_dir, initial_table), sep = "\t", row.names = FALSE, quote = FALSE)
   rm(unintegrated); invisible(gc())
   saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("03_preprocessed"))
   stage_marker("preprocess")
