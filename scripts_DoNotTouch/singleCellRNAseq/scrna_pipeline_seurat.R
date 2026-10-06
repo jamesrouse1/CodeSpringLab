@@ -18,7 +18,7 @@ samples_path <- normalizePath(args[[1]], mustWork = TRUE)
 out_dir <- normalizePath(args[[2]], mustWork = FALSE)
 params_path <- normalizePath(args[[3]], mustWork = TRUE)
 stage <- tolower(if (length(args) >= 4L) args[[4]] else "all")
-if (!stage %in% c("inspect", "qc", "preprocess", "cluster", "annotate", "score", "differential", "all")) stop("Unknown scRNA stage: ", stage)
+if (!stage %in% c("inspect", "qc", "pca_preview", "preprocess", "cluster", "annotate", "score", "differential", "all")) stop("Unknown scRNA stage: ", stage)
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 need_pkg <- function(pkg) {
@@ -549,6 +549,8 @@ qc_scatter_plot <- function(obj, cutoffs = NULL, state_label = "") {
   combined
 }
 
+save_plot <- function(plot, file, width = 9, height = 6) ggplot2::ggsave(file.path(figures_dir, file), plot = plot, width = width, height = height, dpi = 160)
+
 if (stage %in% c("inspect", "qc", "all")) {
   objects <- lapply(seq_len(NROW(samples)), function(i) read_one(as.list(samples[i, , drop = FALSE])))
   names(objects) <- samples$sample_id
@@ -760,7 +762,6 @@ qc_by_sample <- do.call(rbind, lapply(split(qc_cells, qc_cells$sample_id), funct
 )))
 utils::write.table(qc_by_sample, file.path(tables_dir, "qc_summary_by_sample.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
 
-save_plot <- function(plot, file, width = 9, height = 6) ggplot2::ggsave(file.path(figures_dir, file), plot = plot, width = width, height = height, dpi = 160)
 qc_merged <- Reduce(function(a, b) merge(a, y = b), objects)
 DefaultAssay(qc_merged) <- "RNA"
 applied_cutoffs <- list(min_features = params$min_features, min_counts = params$min_counts, max_features = params$max_features, max_percent_mt = params$max_percent_mt)
@@ -779,7 +780,7 @@ if (any(is.finite(doublet_calls$doublet_score))) {
 saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("02_qc"))
 stage_marker("qc")
 if (identical(stage, "qc")) quit(save = "no", status = 0L)
-} else if (identical(stage, "preprocess")) {
+} else if (stage %in% c("pca_preview", "preprocess")) {
   qc_state <- require_checkpoint("02_qc", "QC and doublet handling")
   objects <- qc_state$objects
   cells_before_qc <- qc_state$cells_before_qc
@@ -787,7 +788,7 @@ if (identical(stage, "qc")) quit(save = "no", status = 0L)
   doublet_summary <- qc_state$doublet_summary
 }
 
-if (stage %in% c("preprocess", "all")) {
+if (stage %in% c("pca_preview", "preprocess", "all")) {
 integration <- params$integration
 batch_values <- unlist(lapply(objects, function(obj) {
   if (params$batch_column %in% colnames(obj@meta.data)) as.character(obj[[params$batch_column]][, 1]) else character(0)
@@ -836,6 +837,14 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   if (!identical(params$normalization, "sct")) unintegrated <- Seurat::ScaleData(unintegrated, features = Seurat::VariableFeatures(unintegrated), verbose = FALSE)
   pre_npcs <- max(2L, min(params$n_pcs, ncol(unintegrated) - 1L, length(Seurat::VariableFeatures(unintegrated)) - 1L))
   unintegrated <- Seurat::RunPCA(unintegrated, features = Seurat::VariableFeatures(unintegrated), npcs = pre_npcs, verbose = FALSE)
+  preview_stdev <- Seurat::Stdev(unintegrated, reduction = "pca")
+  preview_variance <- (preview_stdev ^ 2) / sum(preview_stdev ^ 2)
+  utils::write.table(data.frame(PC = seq_along(preview_variance), variance_explained = preview_variance, percent_variance_explained = 100 * preview_variance), file.path(tables_dir, "pca_variance_explained.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  save_plot(Seurat::ElbowPlot(unintegrated, ndims = min(50L, length(preview_variance))) + ggplot2::labs(title = "PCA elbow plot"), "03_pca_elbow_preview.png", 8, 5)
+  if (identical(stage, "pca_preview")) {
+    stage_marker("pca_preview")
+    quit(save = "no", status = 0L)
+  }
   pre_dims <- seq_len(min(params$n_pcs, ncol(Seurat::Embeddings(unintegrated, "pca"))))
   pre_neighbors <- min(params$n_neighbors, max(2L, ncol(unintegrated) - 1L))
   unintegrated <- Seurat::FindNeighbors(unintegrated, reduction = "pca", dims = pre_dims, k.param = pre_neighbors, verbose = FALSE)

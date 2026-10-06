@@ -1151,7 +1151,7 @@ def main():
         raise SystemExit("Usage: scrna_pipeline_scanpy.py <samples.tsv> <out_dir> <params.tsv> [inspect|qc|preprocess|cluster|annotate|score|differential|all]")
     samples_path, out_dir, params_path = map(Path, sys.argv[1:4])
     stage = sys.argv[4].lower() if len(sys.argv) == 5 else "all"
-    stages = {"inspect", "qc", "preprocess", "cluster", "annotate", "score", "differential", "all"}
+    stages = {"inspect", "qc", "pca_preview", "preprocess", "cluster", "annotate", "score", "differential", "all"}
     if stage not in stages:
         raise SystemExit("Unknown scRNA stage: " + stage)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1267,7 +1267,7 @@ def main():
             return
     elif stage == "qc":
         adata = require_checkpoint(input_checkpoint, "input inspection")
-    elif stage == "preprocess":
+    elif stage in {"pca_preview", "preprocess"}:
         adata = require_checkpoint(qc_checkpoint, "QC and doublet handling")
     elif stage == "cluster":
         adata = require_checkpoint(preprocess_checkpoint, "normalization and PCA")
@@ -1330,7 +1330,7 @@ def main():
             return
 
     # Stage 3: normalization, highly variable features, scaling, and PCA.
-    if stage in {"preprocess", "all"}:
+    if stage in {"pca_preview", "preprocess", "all"}:
         # Keep only one raw-count matrix in the QC checkpoint.  The counts
         # layer is needed downstream, so create it here immediately before X
         # is normalized instead of storing a second full sparse matrix during
@@ -1362,6 +1362,9 @@ def main():
         pd.DataFrame({"PC": np.arange(1, len(pca_ratio) + 1), "variance_explained": pca_ratio, "percent_variance_explained": 100 * pca_ratio}).to_csv(tables / "pca_variance_explained.tsv", sep="\t", index=False)
         pd.DataFrame([{"recommended_n_pcs": recommended_pcs, "basis": "PCA variance elbow (bounded to 10–50 PCs)"}]).to_csv(tables / "pca_recommended_parameters.tsv", sep="\t", index=False)
         save_pca_outputs(adata, figures, recommended_pcs=recommended_pcs)
+        if stage == "pca_preview":
+            mark_complete("pca_preview")
+            return
         # The dashboard uses this full symbol list to request one gene at a
         # time from the post-UMAP H5AD's normalized `.raw` layer.
         pd.DataFrame({"gene": adata.raw.var_names.astype(str)}).to_csv(tables / "dashboard_all_genes.tsv", sep="\t", index=False)

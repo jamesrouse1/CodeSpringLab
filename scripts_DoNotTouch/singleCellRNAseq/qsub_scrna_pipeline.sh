@@ -69,6 +69,7 @@ fi
 case "$stage" in
   inspect) rm -f "$out_dir/_STAGE_QC_COMPLETE" "$out_dir/_STAGE_PREPROCESS_COMPLETE" "$out_dir/_STAGE_CLUSTER_COMPLETE" "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
   qc) rm -f "$out_dir/_STAGE_PREPROCESS_COMPLETE" "$out_dir/_STAGE_CLUSTER_COMPLETE" "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
+  pca_preview) rm -f "$out_dir/_STAGE_PREPROCESS_COMPLETE" "$out_dir/_STAGE_CLUSTER_COMPLETE" "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
   preprocess) rm -f "$out_dir/_STAGE_CLUSTER_COMPLETE" "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
   cluster) rm -f "$out_dir/_STAGE_ANNOTATE_COMPLETE" "$out_dir/_STAGE_SCORE_COMPLETE" "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" "$out_dir/_COMPLETE" ;;
   annotate) rm -f "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE" "$out_dir/_STAGE_PATHWAY_COMPLETE" ;;
