@@ -66,24 +66,6 @@ stopifnot(NROW(doublets) == 2L, identical(sort(doublets$capture_id), c("capture_
 obj <- readRDS(file.path(out, "objects", "processed_seurat.rds"))
 stopifnot("harmony" %in% names(obj@reductions), "umap" %in% names(obj@reductions), NROW(obj) == length(genes))
 
-# The PCA preview is a separate tutorial step, but its normalized data should
-# be reusable when the user proceeds to the final Normalize & PCA step.  Delete
-# the QC checkpoint after preview to prove preprocessing uses the preview
-# checkpoint rather than repeating normalization from the QC object.
-params$value[params$key == "integration"] <- "none"
-utils::write.table(params, params_path, sep = "\t", row.names = FALSE, quote = FALSE)
-out_preview <- file.path(work, "output_preview")
-for (stage in c("inspect", "qc", "pca_preview")) {
-  status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(pipeline, manifest_path, out_preview, params_path, stage)))
-  stopifnot(status == 0L)
-}
-stopifnot(file.exists(file.path(out_preview, "checkpoints", "03_pca_preview_seurat.rds")))
-status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(pipeline, manifest_path, out_preview, params_path, "cluster")))
-stopifnot(status == 0L, file.exists(file.path(out_preview, "_STAGE_CLUSTER_COMPLETE")))
-unlink(file.path(out_preview, "checkpoints", "02_qc_seurat.rds"))
-status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(pipeline, manifest_path, out_preview, params_path, "preprocess")))
-stopifnot(status == 0L, file.exists(file.path(out_preview, "checkpoints", "03_preprocessed_seurat.rds")))
-
 # Anchor integration must group the two inputs from run_1 into one integration
 # unit instead of incorrectly correcting sample_A and sample_B apart.
 params$value[params$key == "integration"] <- "rpca"

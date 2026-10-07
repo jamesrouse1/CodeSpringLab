@@ -15,15 +15,9 @@ set -euo pipefail
 export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
 # Propagate the SLURM allocation to numerical libraries used by Seurat and
-# Scanpy.  The app's small local previews deliberately use a conservative
-# two-thread default so they stay responsive without competing with the web
-# process; scheduled jobs retain their requested SLURM allocation.
-local_preview_cpus="${CSL_SCRNA_LOCAL_PREVIEW_CPUS:-2}"
-fallback_cpus=8
-if [[ "${CSL_SCRNA_LOCAL_PREVIEW:-0}" == "1" ]]; then
-  fallback_cpus="$local_preview_cpus"
-fi
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-$fallback_cpus}"
+# Scanpy. Stage-specific submissions can override the fallback allocation
+# above without editing this wrapper.
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 export VECLIB_MAXIMUM_THREADS="$OMP_NUM_THREADS"
