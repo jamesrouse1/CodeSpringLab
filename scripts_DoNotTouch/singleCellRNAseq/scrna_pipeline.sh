@@ -163,8 +163,10 @@ if [[ "$stage" == "pathway" ]]; then
 fi
 case "$engine" in
   seurat)
-    install_seurat_r_package_if_missing "pheatmap"
-    run_seurat_r -e 'for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork", "pheatmap")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
+    # pheatmap is optional: the analysis still completes when the shared
+    # Seurat runtime does not provide it; only optional heatmap figures are
+    # skipped.  Never install R packages during a submitted analysis job.
+    run_seurat_r -e 'for (pkg in c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
     run_seurat_r "$script_dir/scrna_pipeline_seurat.R" "$samples" "$out_dir" "$params" "$stage"
     ;;
   scanpy)
@@ -196,8 +198,7 @@ case "$engine" in
 esac
 
 if [[ "$stage" == "differential" ]]; then
-  install_seurat_r_package_if_missing "pheatmap"
-  run_seurat_r -e 'for (pkg in c("DESeq2", "ggplot2", "pheatmap")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
+  run_seurat_r -e 'for (pkg in c("DESeq2", "ggplot2")) if (!requireNamespace(pkg, quietly=TRUE)) stop("Missing R package: ", pkg)'
   run_seurat_r "$script_dir/scrna_pseudobulk_deseq2.R" "$out_dir" "$params"
   printf 'complete\n' > "$out_dir/_STAGE_DIFFERENTIAL_COMPLETE"
 fi
