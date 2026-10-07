@@ -1173,6 +1173,7 @@ def main():
     np.random.seed(p["seed"])
     input_checkpoint = checkpoints / "01_input_scanpy.h5ad"
     qc_checkpoint = checkpoints / "02_qc_scanpy.h5ad"
+    pca_preview_checkpoint = checkpoints / "03_pca_preview_scanpy.h5ad"
     preprocess_checkpoint = checkpoints / "03_preprocessed_scanpy.h5ad"
     cluster_checkpoint = checkpoints / "04_clustered_scanpy.h5ad"
     processed_object = objects / "processed_scanpy.h5ad"
@@ -1270,7 +1271,8 @@ def main():
     elif stage in {"pca_preview", "preprocess"}:
         adata = require_checkpoint(qc_checkpoint, "QC and doublet handling")
     elif stage == "cluster":
-        adata = require_checkpoint(preprocess_checkpoint, "normalization and PCA")
+        cluster_input = preprocess_checkpoint if preprocess_checkpoint.exists() else pca_preview_checkpoint
+        adata = require_checkpoint(cluster_input, "PCA preview")
     elif stage == "annotate":
         annotation_input = cluster_checkpoint if cluster_checkpoint.exists() else processed_object
         adata = require_checkpoint(annotation_input, "UMAP and clustering")
@@ -1363,6 +1365,7 @@ def main():
         pd.DataFrame([{"recommended_n_pcs": recommended_pcs, "basis": "PCA variance elbow (bounded to 10–50 PCs)"}]).to_csv(tables / "pca_recommended_parameters.tsv", sep="\t", index=False)
         save_pca_outputs(adata, figures, recommended_pcs=recommended_pcs)
         if stage == "pca_preview":
+            write_h5ad_checkpoint(adata, pca_preview_checkpoint)
             mark_complete("pca_preview")
             return
         # The dashboard uses this full symbol list to request one gene at a

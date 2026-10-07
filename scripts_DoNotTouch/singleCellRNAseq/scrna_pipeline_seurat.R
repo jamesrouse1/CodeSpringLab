@@ -279,6 +279,7 @@ require_checkpoint <- function(name, prior) {
   if (!file.exists(path)) stop("The ", prior, " stage has not completed. Run ", prior, " before this stage.")
   readRDS(path)
 }
+preview_reused <- FALSE
 
 input_kind <- function(path) {
   lower <- tolower(path)
@@ -781,11 +782,24 @@ saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = sam
 stage_marker("qc")
 if (identical(stage, "qc")) quit(save = "no", status = 0L)
 } else if (stage %in% c("pca_preview", "preprocess")) {
-  qc_state <- require_checkpoint("02_qc", "QC and doublet handling")
-  objects <- qc_state$objects
-  cells_before_qc <- qc_state$cells_before_qc
-  samples <- qc_state$samples
-  doublet_summary <- qc_state$doublet_summary
+  preview_path <- checkpoint_path("03_pca_preview")
+  preview_state <- if (identical(stage, "preprocess") && file.exists(preview_path)) {
+    tryCatch(readRDS(preview_path), error = function(e) NULL)
+  } else NULL
+  if (!is.null(preview_state) && identical(preview_state$normalization %||% "", params$normalization) && !is.null(preview_state$objects)) {
+    objects <- preview_state$objects
+    cells_before_qc <- preview_state$cells_before_qc
+    samples <- preview_state$samples
+    doublet_summary <- preview_state$doublet_summary
+    preview_reused <- TRUE
+    message("Reusing normalized data from the PCA preview.")
+  } else {
+    qc_state <- require_checkpoint("02_qc", "QC and doublet handling")
+    objects <- qc_state$objects
+    cells_before_qc <- qc_state$cells_before_qc
+    samples <- qc_state$samples
+    doublet_summary <- qc_state$doublet_summary
+  }
 }
 
 if (stage %in% c("pca_preview", "preprocess", "all")) {
@@ -819,9 +833,9 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
       grouped_object
     })
   }
-  if (identical(params$normalization, "sct")) {
+  if (identical(params$normalization, "sct") && !preview_reused) {
     objects <- lapply(objects, function(obj) Seurat::SCTransform(obj, assay = "RNA", vst.flavor = "v2", verbose = FALSE))
-  } else {
+  } else if (!preview_reused) {
     objects <- lapply(objects, function(obj) {
       obj <- Seurat::NormalizeData(obj, verbose = FALSE)
       obj <- Seurat::FindVariableFeatures(obj, selection.method = "vst", nfeatures = 3000, verbose = FALSE)
@@ -842,6 +856,11 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   utils::write.table(data.frame(PC = seq_along(preview_variance), variance_explained = preview_variance, percent_variance_explained = 100 * preview_variance), file.path(tables_dir, "pca_variance_explained.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   save_plot(Seurat::ElbowPlot(unintegrated, ndims = min(50L, length(preview_variance))) + ggplot2::labs(title = "PCA elbow plot"), "03_pca_elbow_preview.png", 8, 5)
   if (identical(stage, "pca_preview")) {
+    atomic_save_rds(
+      list(objects = objects, cells_before_qc = cells_before_qc, samples = samples,
+           doublet_summary = doublet_summary, normalization = params$normalization),
+      checkpoint_path("03_pca_preview")
+    )
     stage_marker("pca_preview")
     quit(save = "no", status = 0L)
   }
@@ -870,7 +889,14 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   stage_marker("preprocess")
   if (identical(stage, "preprocess")) quit(save = "no", status = 0L)
 } else if (identical(stage, "cluster")) {
-  pre_state <- require_checkpoint("03_preprocessed", "normalization and PCA")
+  # The tutorial now proceeds directly from the reviewed PCA preview to final
+  # normalization/UMAP/clustering.  Retain the former checkpoint path so old
+  # projects can still resume without rebuilding.
+  pre_state <- if (file.exists(checkpoint_path("03_preprocessed"))) {
+    readRDS(checkpoint_path("03_preprocessed"))
+  } else if (file.exists(checkpoint_path("03_pca_preview"))) {
+    readRDS(checkpoint_path("03_pca_preview"))
+  } else require_checkpoint("02_qc", "QC and PCA preview")
   objects <- pre_state$objects
   cells_before_qc <- pre_state$cells_before_qc
   samples <- pre_state$samples
