@@ -1363,6 +1363,9 @@ def main():
         pd.DataFrame([{"recommended_n_pcs": recommended_pcs, "basis": "PCA variance elbow (bounded to 10–50 PCs)"}]).to_csv(tables / "pca_recommended_parameters.tsv", sep="\t", index=False)
         save_pca_outputs(adata, figures, recommended_pcs=recommended_pcs)
         if stage == "pca_preview":
+            # Preserve the post-PCA object so the combined final UMAP and
+            # clustering submission can start after the elbow plot is reviewed.
+            write_h5ad_checkpoint(adata, preprocess_checkpoint)
             mark_complete("pca_preview")
             return
         # The dashboard uses this full symbol list to request one gene at a

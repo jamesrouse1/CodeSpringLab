@@ -842,6 +842,10 @@ if (integration %in% c("rpca", "cca", "harmony") && length(unique(batch_values[n
   utils::write.table(data.frame(PC = seq_along(preview_variance), variance_explained = preview_variance, percent_variance_explained = 100 * preview_variance), file.path(tables_dir, "pca_variance_explained.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   save_plot(Seurat::ElbowPlot(unintegrated, ndims = min(50L, length(preview_variance))) + ggplot2::labs(title = "PCA elbow plot"), "03_pca_elbow_preview.png", 8, 5)
   if (identical(stage, "pca_preview")) {
+    # The next user action is the combined final PCA/UMAP/clustering step.
+    # Save the normalized checkpoint now so it can proceed directly from the
+    # reviewed elbow plot without a separate preprocessing submission.
+    saveRDS(list(objects = objects, cells_before_qc = cells_before_qc, samples = samples, doublet_summary = doublet_summary), checkpoint_path("03_preprocessed"))
     stage_marker("pca_preview")
     quit(save = "no", status = 0L)
   }
