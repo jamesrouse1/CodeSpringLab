@@ -66,6 +66,23 @@ stopifnot(NROW(doublets) == 2L, identical(sort(doublets$capture_id), c("capture_
 obj <- readRDS(file.path(out, "objects", "processed_seurat.rds"))
 stopifnot("harmony" %in% names(obj@reductions), "umap" %in% names(obj@reductions), NROW(obj) == length(genes))
 
+# One reference can be compared with multiple selected metadata groups in one
+# differential-expression submission.  Each contrast must retain its own
+# result directory and manifest row.
+de_params <- rbind(
+  params,
+  data.frame(
+    key = c("de_group_column", "de_reference", "de_comparison", "de_comparisons", "de_annotation_column", "de_annotation_values", "de_method"),
+    value = c("sample_id", "sample_A", "sample_B", "sample_B||sample_C", "", "all", "cell"),
+    stringsAsFactors = FALSE
+  )
+)
+utils::write.table(de_params, params_path, sep = "\t", row.names = FALSE, quote = FALSE)
+de_status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(pipeline, manifest_path, out, params_path, "differential")))
+stopifnot(de_status == 0L)
+de_jobs <- utils::read.delim(file.path(out, "tables", "differential_jobs.tsv"), check.names = FALSE)
+stopifnot(NROW(de_jobs) == 2L, identical(sort(as.character(de_jobs$comparison)), c("sample_B", "sample_C")), all(file.exists(de_jobs$cell_result_file)))
+
 # Anchor integration must group the two inputs from run_1 into one integration
 # unit instead of incorrectly correcting sample_A and sample_B apart.
 params$value[params$key == "integration"] <- "rpca"

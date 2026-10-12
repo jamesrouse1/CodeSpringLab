@@ -201,6 +201,7 @@ read_params <- function(path) {
     de_group_column = get("de_group_column", "condition"),
     de_reference = get("de_reference", ""),
     de_comparison = get("de_comparison", ""),
+    de_comparisons = Filter(nzchar, strsplit(get("de_comparisons", get("de_comparison", "")), "||", fixed = TRUE)[[1]]),
     de_annotation_column = get("de_annotation_column", ""),
     de_annotation_values = Filter(nzchar, strsplit(get("de_annotation_values", get("de_annotation_value", "all")), "||", fixed = TRUE)[[1]]),
     de_method = tolower(get("de_method", "both")),
@@ -1778,14 +1779,17 @@ save_cell_level_de_plots <- function(subset_obj, cell_de, group_column, comparis
 
 if (identical(stage, "differential")) {
   group_column <- params$de_group_column
-  reference <- params$de_reference; comparison <- params$de_comparison
+  reference <- params$de_reference
+  comparisons <- unique(params$de_comparisons %||% params$de_comparison)
   if (!group_column %in% colnames(obj@meta.data)) stop("Differential-expression group field is absent from cell metadata: ", group_column)
-  if (!nzchar(reference) || !nzchar(comparison) || identical(reference, comparison)) stop("Choose two different reference and comparison groups for differential expression.")
+  if (!nzchar(reference) || !length(comparisons) || any(!nzchar(comparisons)) || any(comparisons == reference)) stop("Choose a reference group and at least one different comparison group for differential expression.")
   targets <- unique(params$de_annotation_values %||% "all")
   if (any(!tolower(targets) %in% c("all", "all cells")) && (!nzchar(params$de_annotation_column) || !params$de_annotation_column %in% colnames(obj@meta.data))) stop("Choose an annotation metadata field before requesting individual-population differential expression.")
+  manifest_rows <- list(); completed <- 0L
+  global_cell_results <- list()
+  for (comparison in comparisons) {
   contrast_slug <- paste0(safe_metadata_name(comparison, "comparison"), "_vs_", safe_metadata_name(reference, "reference"))
   root <- file.path(out_dir, "differential_expression", contrast_slug); dir.create(root, recursive = TRUE, showWarnings = FALSE)
-  manifest_rows <- list(); completed <- 0L
   for (annotation_value in targets) {
     is_global <- tolower(annotation_value) %in% c("all", "all cells")
     population_slug <- if (is_global) "global" else paste0(safe_metadata_name(params$de_annotation_column, "annotation"), "__", safe_metadata_name(annotation_value, "population"))
@@ -1833,7 +1837,7 @@ if (identical(stage, "differential")) {
           cell_file <- file.path(job_dir, paste0("cell_level_Wilcoxon__", file_slug, ".tsv")); utils::write.table(cell_de, cell_file, sep = "\t", row.names = FALSE, quote = FALSE); row$cell_result_file <- cell_file
           plot_error <- tryCatch({ save_cell_level_de_plots(subset_obj, cell_de, group_column, comparison, reference, file_slug, job_dir); "" }, error = function(e) conditionMessage(e))
           if (nzchar(plot_error)) row$note <- paste0("DE completed; figure generation skipped: ", plot_error)
-          if (is_global) utils::write.table(cell_de, file.path(tables_dir, "cell_level_differential_expression.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+          if (is_global) global_cell_results[[length(global_cell_results) + 1L]] <- cell_de
           ""
         }, error = function(e) conditionMessage(e))
         if (nzchar(cell_error)) row$note <- paste0("Cell-level test skipped: ", cell_error)
@@ -1844,6 +1848,8 @@ if (identical(stage, "differential")) {
     if (nzchar(error)) { row$status <- "skipped"; row$note <- error }
     manifest_rows[[length(manifest_rows) + 1L]] <- row
   }
+  }
   utils::write.table(do.call(rbind, manifest_rows), file.path(tables_dir, "differential_jobs.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
+  if (length(global_cell_results)) utils::write.table(do.call(rbind, global_cell_results), file.path(tables_dir, "cell_level_differential_expression.tsv"), sep = "\t", row.names = FALSE, quote = FALSE)
   if (!completed) stop("No requested differential-expression population could be prepared. Review tables/differential_jobs.tsv.")
 }

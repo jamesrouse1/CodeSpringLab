@@ -193,6 +193,7 @@ def params_from(path: Path):
         "de_group_column": get("de_group_column", "condition"),
         "de_reference": get("de_reference", ""),
         "de_comparison": get("de_comparison", ""),
+        "de_comparisons": [x for x in get("de_comparisons", get("de_comparison", "")).split("||") if x],
         "de_annotation_column": get("de_annotation_column", ""),
         "de_annotation_values": [x for x in get("de_annotation_values", get("de_annotation_value", "all")).split("||") if x],
         "de_method": get("de_method", "both").lower(),
@@ -1061,21 +1062,24 @@ def save_cell_level_de_plots(subset, result, group_column, comparison, reference
 
 def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
     group_column = p["de_group_column"]
-    reference, comparison = p["de_reference"], p["de_comparison"]
+    reference = p["de_reference"]
+    comparisons = list(dict.fromkeys(p.get("de_comparisons") or [p["de_comparison"]]))
     if group_column not in adata.obs.columns:
         raise SystemExit(f"Differential-expression group field is absent from cell metadata: {group_column}")
-    if not reference or not comparison or reference == comparison:
-        raise SystemExit("Choose two different reference and comparison groups for differential expression.")
+    if not reference or not comparisons or any(not x or x == reference for x in comparisons):
+        raise SystemExit("Choose a reference group and at least one different comparison group for differential expression.")
     annotation_column = p["de_annotation_column"]
     targets = p["de_annotation_values"] or ["all"]
     targets = list(dict.fromkeys(targets))
     if any(str(x).lower() not in {"all", "all cells"} for x in targets):
         if not annotation_column or annotation_column not in adata.obs.columns:
             raise SystemExit("Choose an annotation metadata field before requesting individual-population differential expression.")
-    contrast_slug = f"{safe_metadata_name(comparison, 'comparison')}_vs_{safe_metadata_name(reference, 'reference')}"
-    root = out_dir / "differential_expression" / contrast_slug
     manifest_rows, completed = [], 0
-    for annotation_value in targets:
+    global_cell_results = []
+    for comparison in comparisons:
+      contrast_slug = f"{safe_metadata_name(comparison, 'comparison')}_vs_{safe_metadata_name(reference, 'reference')}"
+      root = out_dir / "differential_expression" / contrast_slug
+      for annotation_value in targets:
         is_global = str(annotation_value).lower() in {"all", "all cells"}
         population_slug = "global" if is_global else f"{safe_metadata_name(annotation_column, 'annotation')}__{safe_metadata_name(annotation_value, 'population')}"
         job_dir = root / population_slug
@@ -1135,13 +1139,15 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
                 except Exception as plot_error:
                     row["note"] = f"DE completed; figure generation skipped: {plot_error}"
                 if is_global:
-                    result.to_csv(tables_dir / "cell_level_differential_expression.tsv", sep="\t", index=False)
+                    global_cell_results.append(result)
             completed += 1
         except Exception as exc:
             row["status"], row["note"] = "skipped", str(exc)
         manifest_rows.append(row)
     manifest = pd.DataFrame(manifest_rows)
     manifest.to_csv(tables_dir / "differential_jobs.tsv", sep="\t", index=False)
+    if global_cell_results:
+        pd.concat(global_cell_results, ignore_index=True).to_csv(tables_dir / "cell_level_differential_expression.tsv", sep="\t", index=False)
     if completed == 0:
         raise SystemExit("No requested differential-expression population could be prepared. Review tables/differential_jobs.tsv.")
 
