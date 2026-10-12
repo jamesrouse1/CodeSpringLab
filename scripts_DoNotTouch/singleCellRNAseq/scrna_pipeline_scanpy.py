@@ -192,6 +192,7 @@ def params_from(path: Path):
         "signature_ortholog_file": get("signature_ortholog_file", ""),
         "de_group_column": get("de_group_column", "condition"),
         "de_reference": get("de_reference", ""),
+        "de_references": [x for x in get("de_references", get("de_reference", "")).split("||") if x],
         "de_comparison": get("de_comparison", ""),
         "de_comparisons": [x for x in get("de_comparisons", get("de_comparison", "")).split("||") if x],
         "de_comparison_mode": get("de_comparison_mode", "separate").lower(),
@@ -1064,11 +1065,12 @@ def save_cell_level_de_plots(subset, result, group_column, comparison, reference
 
 def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
     group_column = p["de_group_column"]
-    reference = p["de_reference"]
+    reference_values = list(dict.fromkeys(p.get("de_references") or [p["de_reference"]]))
+    reference = " + ".join(map(str, reference_values))
     comparisons = list(dict.fromkeys(p.get("de_comparisons") or [p["de_comparison"]]))
     if group_column not in adata.obs.columns:
         raise SystemExit(f"Differential-expression group field is absent from cell metadata: {group_column}")
-    if not reference or not comparisons or any(not x or x == reference for x in comparisons):
+    if not reference_values or any(not x for x in reference_values) or not comparisons or any(not x for x in comparisons) or set(reference_values).intersection(comparisons):
         raise SystemExit("Choose a reference group and at least one different comparison group for differential expression.")
     comparison_mode = p.get("de_comparison_mode", "separate")
     contrast_sets = [comparisons] if comparison_mode == "combined" else [[x] for x in comparisons]
@@ -1107,14 +1109,16 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
             "count_file": "", "design_file": "", "cell_result_file": "",
         }
         try:
-            keep = adata.obs[group_column].astype(str).isin([reference, *comparison_values])
+            keep = adata.obs[group_column].astype(str).isin([*reference_values, *comparison_values])
             if not is_global:
                 keep &= adata.obs[annotation_column].astype(str).isin(map(str, annotation_values))
             subset = adata[keep].copy()
             if subset.n_obs == 0:
                 raise ValueError("No cells remain for this population.")
             analysis_group_column = "_codespring_de_group"
-            subset.obs[analysis_group_column] = subset.obs[group_column].astype(str).where(~subset.obs[group_column].astype(str).isin(comparison_values), comparison)
+            subset.obs[analysis_group_column] = subset.obs[group_column].astype(str)
+            subset.obs.loc[subset.obs[analysis_group_column].isin(reference_values), analysis_group_column] = reference
+            subset.obs.loc[subset.obs[analysis_group_column].isin(comparison_values), analysis_group_column] = comparison
             if not {reference, comparison}.issubset(set(subset.obs[analysis_group_column].astype(str))):
                 raise ValueError("Both comparison groups must contain cells in this population.")
             if p["de_method"] in {"both", "pseudobulk"}:

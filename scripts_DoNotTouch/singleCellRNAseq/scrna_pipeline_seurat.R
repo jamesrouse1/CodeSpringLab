@@ -200,6 +200,7 @@ read_params <- function(path) {
     signature_ortholog_file = get("signature_ortholog_file", ""),
     de_group_column = get("de_group_column", "condition"),
     de_reference = get("de_reference", ""),
+    de_references = Filter(nzchar, strsplit(get("de_references", get("de_reference", "")), "||", fixed = TRUE)[[1]]),
     de_comparison = get("de_comparison", ""),
     de_comparisons = Filter(nzchar, strsplit(get("de_comparisons", get("de_comparison", "")), "||", fixed = TRUE)[[1]]),
     de_comparison_mode = tolower(get("de_comparison_mode", "separate")),
@@ -1781,10 +1782,11 @@ save_cell_level_de_plots <- function(subset_obj, cell_de, group_column, comparis
 
 if (identical(stage, "differential")) {
   group_column <- params$de_group_column
-  reference <- params$de_reference
+  reference_values <- unique(params$de_references %||% params$de_reference)
+  reference <- paste(reference_values, collapse = " + ")
   comparisons <- unique(params$de_comparisons %||% params$de_comparison)
   if (!group_column %in% colnames(obj@meta.data)) stop("Differential-expression group field is absent from cell metadata: ", group_column)
-  if (!nzchar(reference) || !length(comparisons) || any(!nzchar(comparisons)) || any(comparisons == reference)) stop("Choose a reference group and at least one different comparison group for differential expression.")
+  if (!length(reference_values) || any(!nzchar(reference_values)) || !length(comparisons) || any(!nzchar(comparisons)) || length(intersect(reference_values, comparisons))) stop("Choose a reference group and at least one different comparison group for differential expression.")
   comparison_mode <- if (params$de_comparison_mode %in% c("separate", "combined")) params$de_comparison_mode else "separate"
   contrast_sets <- if (identical(comparison_mode, "combined")) list(comparisons) else lapply(comparisons, function(x) x)
   targets <- unique(params$de_annotation_values %||% "all")
@@ -1812,12 +1814,13 @@ if (identical(stage, "differential")) {
     file_slug <- paste0(contrast_slug, "__", population_slug)
     row <- data.frame(job_id = file_slug, comparison = comparison, reference = reference, annotation_column = if (is_global) "" else params$de_annotation_column, annotation_value = annotation_label, output_dir = normalizePath(job_dir, winslash = "/", mustWork = FALSE), file_slug = file_slug, status = "prepared", note = "", count_file = "", design_file = "", cell_result_file = "", stringsAsFactors = FALSE)
     error <- tryCatch({
-      keep <- as.character(obj@meta.data[[group_column]]) %in% c(reference, comparison_values)
+      keep <- as.character(obj@meta.data[[group_column]]) %in% c(reference_values, comparison_values)
       if (!is_global) keep <- keep & as.character(obj@meta.data[[params$de_annotation_column]]) %in% annotation_values
       subset_obj <- subset(obj, cells = colnames(obj)[keep])
       if (!ncol(subset_obj)) stop("No cells remain for this population.")
       analysis_group_column <- ".codespring_de_group"
       subset_obj[[analysis_group_column]] <- as.character(subset_obj@meta.data[[group_column]])
+      subset_obj@meta.data[[analysis_group_column]][subset_obj@meta.data[[analysis_group_column]] %in% reference_values] <- reference
       subset_obj@meta.data[[analysis_group_column]][subset_obj@meta.data[[analysis_group_column]] %in% comparison_values] <- comparison
       if (!all(c(reference, comparison) %in% unique(as.character(subset_obj@meta.data[[analysis_group_column]])))) stop("Both comparison groups must contain cells in this population.")
       if (params$de_method %in% c("both", "pseudobulk")) {
