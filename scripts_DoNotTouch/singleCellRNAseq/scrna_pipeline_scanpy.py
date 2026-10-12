@@ -1066,7 +1066,7 @@ def save_cell_level_de_plots(subset, result, group_column, comparison, reference
 def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
     group_column = p["de_group_column"]
     reference_values = list(dict.fromkeys(p.get("de_references") or [p["de_reference"]]))
-    reference = " + ".join(map(str, reference_values))
+    reference = ", ".join(map(str, reference_values))
     comparisons = list(dict.fromkeys(p.get("de_comparisons") or [p["de_comparison"]]))
     if group_column not in adata.obs.columns:
         raise SystemExit(f"Differential-expression group field is absent from cell metadata: {group_column}")
@@ -1091,12 +1091,12 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
     manifest_rows, completed = [], 0
     global_cell_results = []
     for comparison_values in contrast_sets:
-      comparison = " + ".join(map(str, comparison_values))
-      contrast_slug = f"{safe_metadata_name(comparison, 'comparison')}_vs_{safe_metadata_name(reference, 'reference')}"
+      comparison = ", ".join(map(str, comparison_values))
+      contrast_slug = f"{safe_metadata_name('_and_'.join(map(str, comparison_values)), 'comparison')}_vs_{safe_metadata_name('_and_'.join(map(str, reference_values)), 'reference')}"
       root = out_dir / "differential_expression" / contrast_slug
       for annotation_values in target_sets:
         is_global = len(annotation_values) == 1 and str(annotation_values[0]).lower() in {"all", "all cells"}
-        annotation_label = "all" if is_global else " + ".join(map(str, annotation_values))
+        annotation_label = "all" if is_global else ", ".join(map(str, annotation_values))
         population_slug = "global" if is_global else f"{safe_metadata_name(annotation_column, 'annotation')}__{safe_metadata_name('_and_'.join(map(str, annotation_values)), 'population')}"
         job_dir = root / population_slug
         job_dir.mkdir(parents=True, exist_ok=True)

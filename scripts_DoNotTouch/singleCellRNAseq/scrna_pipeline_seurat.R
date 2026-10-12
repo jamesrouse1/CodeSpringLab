@@ -1783,7 +1783,7 @@ save_cell_level_de_plots <- function(subset_obj, cell_de, group_column, comparis
 if (identical(stage, "differential")) {
   group_column <- params$de_group_column
   reference_values <- unique(params$de_references %||% params$de_reference)
-  reference <- paste(reference_values, collapse = " + ")
+  reference <- paste(reference_values, collapse = ", ")
   comparisons <- unique(params$de_comparisons %||% params$de_comparison)
   if (!group_column %in% colnames(obj@meta.data)) stop("Differential-expression group field is absent from cell metadata: ", group_column)
   if (!length(reference_values) || any(!nzchar(reference_values)) || !length(comparisons) || any(!nzchar(comparisons)) || length(intersect(reference_values, comparisons))) stop("Choose a reference group and at least one different comparison group for differential expression.")
@@ -1803,12 +1803,12 @@ if (identical(stage, "differential")) {
   manifest_rows <- list(); completed <- 0L
   global_cell_results <- list()
   for (comparison_values in contrast_sets) {
-  comparison <- paste(comparison_values, collapse = " + ")
-  contrast_slug <- paste0(safe_metadata_name(comparison, "comparison"), "_vs_", safe_metadata_name(reference, "reference"))
+  comparison <- paste(comparison_values, collapse = ", ")
+  contrast_slug <- paste0(safe_metadata_name(paste(comparison_values, collapse = "_and_"), "comparison"), "_vs_", safe_metadata_name(paste(reference_values, collapse = "_and_"), "reference"))
   root <- file.path(out_dir, "differential_expression", contrast_slug); dir.create(root, recursive = TRUE, showWarnings = FALSE)
   for (annotation_values in target_sets) {
     is_global <- length(annotation_values) == 1L && tolower(annotation_values[[1]]) %in% c("all", "all cells")
-    annotation_label <- if (is_global) "all" else paste(annotation_values, collapse = " + ")
+    annotation_label <- if (is_global) "all" else paste(annotation_values, collapse = ", ")
     population_slug <- if (is_global) "global" else paste0(safe_metadata_name(params$de_annotation_column, "annotation"), "__", safe_metadata_name(paste(annotation_values, collapse = "_and_"), "population"))
     job_dir <- file.path(root, population_slug); dir.create(job_dir, recursive = TRUE, showWarnings = FALSE)
     file_slug <- paste0(contrast_slug, "__", population_slug)

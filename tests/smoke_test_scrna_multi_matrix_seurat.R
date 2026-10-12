@@ -81,7 +81,7 @@ utils::write.table(de_params, params_path, sep = "\t", row.names = FALSE, quote 
 de_status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(pipeline, manifest_path, out, params_path, "differential")))
 stopifnot(de_status == 0L)
 de_jobs <- utils::read.delim(file.path(out, "tables", "differential_jobs.tsv"), check.names = FALSE)
-stopifnot(NROW(de_jobs) == 1L, identical(de_jobs$reference, "sample_A + sample_B"), identical(de_jobs$comparison, "sample_C"), all(de_jobs$annotation_value == "control + treated"), all(file.exists(de_jobs$cell_result_file)))
+stopifnot(NROW(de_jobs) == 1L, identical(de_jobs$reference, "sample_A, sample_B"), identical(de_jobs$comparison, "sample_C"), all(de_jobs$annotation_value == "control, treated"), all(file.exists(de_jobs$cell_result_file)))
 
 # Anchor integration must group the two inputs from run_1 into one integration
 # unit instead of incorrectly correcting sample_A and sample_B apart.
