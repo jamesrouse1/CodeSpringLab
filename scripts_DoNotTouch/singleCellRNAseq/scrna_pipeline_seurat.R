@@ -204,6 +204,7 @@ read_params <- function(path) {
     de_comparisons = Filter(nzchar, strsplit(get("de_comparisons", get("de_comparison", "")), "||", fixed = TRUE)[[1]]),
     de_annotation_column = get("de_annotation_column", ""),
     de_annotation_values = Filter(nzchar, strsplit(get("de_annotation_values", get("de_annotation_value", "all")), "||", fixed = TRUE)[[1]]),
+    de_annotation_mode = tolower(get("de_annotation_mode", "separate")),
     de_method = tolower(get("de_method", "both")),
     de_covariates = Filter(nzchar, trimws(strsplit(get("de_covariates", ""), ",", fixed = TRUE)[[1]])),
     harmony_theta = suppressWarnings(as.numeric(get("harmony_theta", "2"))),
@@ -1784,21 +1785,31 @@ if (identical(stage, "differential")) {
   if (!group_column %in% colnames(obj@meta.data)) stop("Differential-expression group field is absent from cell metadata: ", group_column)
   if (!nzchar(reference) || !length(comparisons) || any(!nzchar(comparisons)) || any(comparisons == reference)) stop("Choose a reference group and at least one different comparison group for differential expression.")
   targets <- unique(params$de_annotation_values %||% "all")
-  if (any(!tolower(targets) %in% c("all", "all cells")) && (!nzchar(params$de_annotation_column) || !params$de_annotation_column %in% colnames(obj@meta.data))) stop("Choose an annotation metadata field before requesting individual-population differential expression.")
+  non_global_targets <- targets[!tolower(targets) %in% c("all", "all cells")]
+  if (length(non_global_targets) && (!nzchar(params$de_annotation_column) || !params$de_annotation_column %in% colnames(obj@meta.data))) stop("Choose an annotation metadata field before requesting individual-population differential expression.")
+  annotation_mode <- if (params$de_annotation_mode %in% c("separate", "combined")) params$de_annotation_mode else "separate"
+  target_sets <- list()
+  if (any(tolower(targets) %in% c("all", "all cells"))) target_sets[["all"]] <- "all"
+  if (length(non_global_targets)) {
+    if (identical(annotation_mode, "combined")) target_sets[[paste(non_global_targets, collapse = "||")]] <- non_global_targets
+    else for (target in non_global_targets) target_sets[[target]] <- target
+  }
+  if (!length(target_sets)) target_sets[["all"]] <- "all"
   manifest_rows <- list(); completed <- 0L
   global_cell_results <- list()
   for (comparison in comparisons) {
   contrast_slug <- paste0(safe_metadata_name(comparison, "comparison"), "_vs_", safe_metadata_name(reference, "reference"))
   root <- file.path(out_dir, "differential_expression", contrast_slug); dir.create(root, recursive = TRUE, showWarnings = FALSE)
-  for (annotation_value in targets) {
-    is_global <- tolower(annotation_value) %in% c("all", "all cells")
-    population_slug <- if (is_global) "global" else paste0(safe_metadata_name(params$de_annotation_column, "annotation"), "__", safe_metadata_name(annotation_value, "population"))
+  for (annotation_values in target_sets) {
+    is_global <- length(annotation_values) == 1L && tolower(annotation_values[[1]]) %in% c("all", "all cells")
+    annotation_label <- if (is_global) "all" else paste(annotation_values, collapse = " + ")
+    population_slug <- if (is_global) "global" else paste0(safe_metadata_name(params$de_annotation_column, "annotation"), "__", safe_metadata_name(paste(annotation_values, collapse = "_and_"), "population"))
     job_dir <- file.path(root, population_slug); dir.create(job_dir, recursive = TRUE, showWarnings = FALSE)
     file_slug <- paste0(contrast_slug, "__", population_slug)
-    row <- data.frame(job_id = file_slug, comparison = comparison, reference = reference, annotation_column = if (is_global) "" else params$de_annotation_column, annotation_value = if (is_global) "all" else annotation_value, output_dir = normalizePath(job_dir, winslash = "/", mustWork = FALSE), file_slug = file_slug, status = "prepared", note = "", count_file = "", design_file = "", cell_result_file = "", stringsAsFactors = FALSE)
+    row <- data.frame(job_id = file_slug, comparison = comparison, reference = reference, annotation_column = if (is_global) "" else params$de_annotation_column, annotation_value = annotation_label, output_dir = normalizePath(job_dir, winslash = "/", mustWork = FALSE), file_slug = file_slug, status = "prepared", note = "", count_file = "", design_file = "", cell_result_file = "", stringsAsFactors = FALSE)
     error <- tryCatch({
       keep <- as.character(obj@meta.data[[group_column]]) %in% c(reference, comparison)
-      if (!is_global) keep <- keep & as.character(obj@meta.data[[params$de_annotation_column]]) == annotation_value
+      if (!is_global) keep <- keep & as.character(obj@meta.data[[params$de_annotation_column]]) %in% annotation_values
       subset_obj <- subset(obj, cells = colnames(obj)[keep])
       if (!ncol(subset_obj)) stop("No cells remain for this population.")
       if (!all(c(reference, comparison) %in% unique(as.character(subset_obj@meta.data[[group_column]])))) stop("Both comparison groups must contain cells in this population.")
@@ -1833,7 +1844,7 @@ if (identical(stage, "differential")) {
           if (identical(DefaultAssay(subset_obj), "SCT") && length(subset_obj[["SCT"]]@SCTModel.list) > 1L) subset_obj <- Seurat::PrepSCTFindMarkers(subset_obj, verbose = FALSE)
           Seurat::Idents(subset_obj) <- as.character(subset_obj@meta.data[[group_column]])
           cell_de <- Seurat::FindMarkers(subset_obj, ident.1 = comparison, ident.2 = reference, test.use = "wilcox", logfc.threshold = 0, min.pct = 0, verbose = FALSE)
-          cell_de <- data.frame(gene = rownames(cell_de), comparison = paste0(comparison, "_vs_", reference), population = if (is_global) "global" else annotation_value, cell_de, analysis_level = "cell-level Wilcoxon", check.names = FALSE)
+          cell_de <- data.frame(gene = rownames(cell_de), comparison = paste0(comparison, "_vs_", reference), population = if (is_global) "global" else annotation_label, cell_de, analysis_level = "cell-level Wilcoxon", check.names = FALSE)
           cell_file <- file.path(job_dir, paste0("cell_level_Wilcoxon__", file_slug, ".tsv")); utils::write.table(cell_de, cell_file, sep = "\t", row.names = FALSE, quote = FALSE); row$cell_result_file <- cell_file
           plot_error <- tryCatch({ save_cell_level_de_plots(subset_obj, cell_de, group_column, comparison, reference, file_slug, job_dir); "" }, error = function(e) conditionMessage(e))
           if (nzchar(plot_error)) row$note <- paste0("DE completed; figure generation skipped: ", plot_error)

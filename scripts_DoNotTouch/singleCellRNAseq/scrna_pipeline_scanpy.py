@@ -196,6 +196,7 @@ def params_from(path: Path):
         "de_comparisons": [x for x in get("de_comparisons", get("de_comparison", "")).split("||") if x],
         "de_annotation_column": get("de_annotation_column", ""),
         "de_annotation_values": [x for x in get("de_annotation_values", get("de_annotation_value", "all")).split("||") if x],
+        "de_annotation_mode": get("de_annotation_mode", "separate").lower(),
         "de_method": get("de_method", "both").lower(),
         "de_covariates": [x.strip() for x in get("de_covariates", "").split(",") if x.strip()],
         "scvi_max_epochs": int(float(get("scvi_max_epochs", "400") or 400)),
@@ -1069,33 +1070,42 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
     if not reference or not comparisons or any(not x or x == reference for x in comparisons):
         raise SystemExit("Choose a reference group and at least one different comparison group for differential expression.")
     annotation_column = p["de_annotation_column"]
-    targets = p["de_annotation_values"] or ["all"]
-    targets = list(dict.fromkeys(targets))
-    if any(str(x).lower() not in {"all", "all cells"} for x in targets):
+    targets = list(dict.fromkeys(p["de_annotation_values"] or ["all"]))
+    non_global_targets = [x for x in targets if str(x).lower() not in {"all", "all cells"}]
+    if non_global_targets:
         if not annotation_column or annotation_column not in adata.obs.columns:
             raise SystemExit("Choose an annotation metadata field before requesting individual-population differential expression.")
+    annotation_mode = p.get("de_annotation_mode", "separate")
+    target_sets = []
+    if any(str(x).lower() in {"all", "all cells"} for x in targets):
+        target_sets.append(["all"])
+    if non_global_targets:
+        target_sets.extend([non_global_targets] if annotation_mode == "combined" else [[x] for x in non_global_targets])
+    if not target_sets:
+        target_sets = [["all"]]
     manifest_rows, completed = [], 0
     global_cell_results = []
     for comparison in comparisons:
       contrast_slug = f"{safe_metadata_name(comparison, 'comparison')}_vs_{safe_metadata_name(reference, 'reference')}"
       root = out_dir / "differential_expression" / contrast_slug
-      for annotation_value in targets:
-        is_global = str(annotation_value).lower() in {"all", "all cells"}
-        population_slug = "global" if is_global else f"{safe_metadata_name(annotation_column, 'annotation')}__{safe_metadata_name(annotation_value, 'population')}"
+      for annotation_values in target_sets:
+        is_global = len(annotation_values) == 1 and str(annotation_values[0]).lower() in {"all", "all cells"}
+        annotation_label = "all" if is_global else " + ".join(map(str, annotation_values))
+        population_slug = "global" if is_global else f"{safe_metadata_name(annotation_column, 'annotation')}__{safe_metadata_name('_and_'.join(map(str, annotation_values)), 'population')}"
         job_dir = root / population_slug
         job_dir.mkdir(parents=True, exist_ok=True)
         file_slug = f"{contrast_slug}__{population_slug}"
         row = {
             "job_id": file_slug, "comparison": comparison, "reference": reference,
             "annotation_column": "" if is_global else annotation_column,
-            "annotation_value": "all" if is_global else str(annotation_value),
+            "annotation_value": annotation_label,
             "output_dir": str(job_dir), "file_slug": file_slug, "status": "prepared", "note": "",
             "count_file": "", "design_file": "", "cell_result_file": "",
         }
         try:
             keep = adata.obs[group_column].astype(str).isin([reference, comparison])
             if not is_global:
-                keep &= adata.obs[annotation_column].astype(str) == str(annotation_value)
+                keep &= adata.obs[annotation_column].astype(str).isin(map(str, annotation_values))
             subset = adata[keep].copy()
             if subset.n_obs == 0:
                 raise ValueError("No cells remain for this population.")
@@ -1130,7 +1140,7 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
                 sc.tl.rank_genes_groups(subset, groupby=group_column, groups=[comparison], reference=reference, method="wilcoxon", use_raw=True, pts=True)
                 result = sc.get.rank_genes_groups_df(subset, group=comparison)
                 result.insert(0, "comparison", f"{comparison}_vs_{reference}")
-                result.insert(1, "population", "global" if is_global else str(annotation_value))
+                result.insert(1, "population", "global" if is_global else annotation_label)
                 result["analysis_level"] = "cell-level Wilcoxon"
                 cell_file = job_dir / f"cell_level_Wilcoxon__{file_slug}.tsv"
                 result.to_csv(cell_file, sep="\t", index=False); row["cell_result_file"] = str(cell_file)
