@@ -202,6 +202,7 @@ read_params <- function(path) {
     de_reference = get("de_reference", ""),
     de_comparison = get("de_comparison", ""),
     de_comparisons = Filter(nzchar, strsplit(get("de_comparisons", get("de_comparison", "")), "||", fixed = TRUE)[[1]]),
+    de_comparison_mode = tolower(get("de_comparison_mode", "separate")),
     de_annotation_column = get("de_annotation_column", ""),
     de_annotation_values = Filter(nzchar, strsplit(get("de_annotation_values", get("de_annotation_value", "all")), "||", fixed = TRUE)[[1]]),
     de_annotation_mode = tolower(get("de_annotation_mode", "separate")),
@@ -1784,6 +1785,8 @@ if (identical(stage, "differential")) {
   comparisons <- unique(params$de_comparisons %||% params$de_comparison)
   if (!group_column %in% colnames(obj@meta.data)) stop("Differential-expression group field is absent from cell metadata: ", group_column)
   if (!nzchar(reference) || !length(comparisons) || any(!nzchar(comparisons)) || any(comparisons == reference)) stop("Choose a reference group and at least one different comparison group for differential expression.")
+  comparison_mode <- if (params$de_comparison_mode %in% c("separate", "combined")) params$de_comparison_mode else "separate"
+  contrast_sets <- if (identical(comparison_mode, "combined")) list(comparisons) else lapply(comparisons, function(x) x)
   targets <- unique(params$de_annotation_values %||% "all")
   non_global_targets <- targets[!tolower(targets) %in% c("all", "all cells")]
   if (length(non_global_targets) && (!nzchar(params$de_annotation_column) || !params$de_annotation_column %in% colnames(obj@meta.data))) stop("Choose an annotation metadata field before requesting individual-population differential expression.")
@@ -1797,7 +1800,8 @@ if (identical(stage, "differential")) {
   if (!length(target_sets)) target_sets[["all"]] <- "all"
   manifest_rows <- list(); completed <- 0L
   global_cell_results <- list()
-  for (comparison in comparisons) {
+  for (comparison_values in contrast_sets) {
+  comparison <- paste(comparison_values, collapse = " + ")
   contrast_slug <- paste0(safe_metadata_name(comparison, "comparison"), "_vs_", safe_metadata_name(reference, "reference"))
   root <- file.path(out_dir, "differential_expression", contrast_slug); dir.create(root, recursive = TRUE, showWarnings = FALSE)
   for (annotation_values in target_sets) {
@@ -1808,11 +1812,14 @@ if (identical(stage, "differential")) {
     file_slug <- paste0(contrast_slug, "__", population_slug)
     row <- data.frame(job_id = file_slug, comparison = comparison, reference = reference, annotation_column = if (is_global) "" else params$de_annotation_column, annotation_value = annotation_label, output_dir = normalizePath(job_dir, winslash = "/", mustWork = FALSE), file_slug = file_slug, status = "prepared", note = "", count_file = "", design_file = "", cell_result_file = "", stringsAsFactors = FALSE)
     error <- tryCatch({
-      keep <- as.character(obj@meta.data[[group_column]]) %in% c(reference, comparison)
+      keep <- as.character(obj@meta.data[[group_column]]) %in% c(reference, comparison_values)
       if (!is_global) keep <- keep & as.character(obj@meta.data[[params$de_annotation_column]]) %in% annotation_values
       subset_obj <- subset(obj, cells = colnames(obj)[keep])
       if (!ncol(subset_obj)) stop("No cells remain for this population.")
-      if (!all(c(reference, comparison) %in% unique(as.character(subset_obj@meta.data[[group_column]])))) stop("Both comparison groups must contain cells in this population.")
+      analysis_group_column <- ".codespring_de_group"
+      subset_obj[[analysis_group_column]] <- as.character(subset_obj@meta.data[[group_column]])
+      subset_obj@meta.data[[analysis_group_column]][subset_obj@meta.data[[analysis_group_column]] %in% comparison_values] <- comparison
+      if (!all(c(reference, comparison) %in% unique(as.character(subset_obj@meta.data[[analysis_group_column]])))) stop("Both comparison groups must contain cells in this population.")
       if (params$de_method %in% c("both", "pseudobulk")) {
         count_layers <- grep("^counts($|\\.)", assay_layers_safe(subset_obj, "RNA"), value = TRUE)
         if (length(count_layers) > 1L) subset_obj <- SeuratObject::JoinLayers(subset_obj, assay = "RNA", layers = "counts", new = "counts")
@@ -1820,7 +1827,7 @@ if (identical(stage, "differential")) {
         count_columns <- list(); design_rows <- list()
         for (sample_id in unique(as.character(subset_obj$sample_id))) {
           cells <- which(as.character(subset_obj$sample_id) == sample_id)
-          groups <- unique(as.character(subset_obj@meta.data[[group_column]][cells]))
+          groups <- unique(as.character(subset_obj@meta.data[[analysis_group_column]][cells]))
           if (length(groups) != 1L) stop("Biological replicate ", sample_id, " contains multiple comparison-group values.")
           count_columns[[sample_id]] <- Matrix::rowSums(counts[, cells, drop = FALSE])
           design_row <- data.frame(sample_id = sample_id, group = groups[[1]], cells = length(cells), check.names = FALSE)
@@ -1842,11 +1849,11 @@ if (identical(stage, "differential")) {
         cell_error <- tryCatch({
           DefaultAssay(subset_obj) <- if ("SCT" %in% names(subset_obj@assays)) "SCT" else "RNA"
           if (identical(DefaultAssay(subset_obj), "SCT") && length(subset_obj[["SCT"]]@SCTModel.list) > 1L) subset_obj <- Seurat::PrepSCTFindMarkers(subset_obj, verbose = FALSE)
-          Seurat::Idents(subset_obj) <- as.character(subset_obj@meta.data[[group_column]])
+          Seurat::Idents(subset_obj) <- as.character(subset_obj@meta.data[[analysis_group_column]])
           cell_de <- Seurat::FindMarkers(subset_obj, ident.1 = comparison, ident.2 = reference, test.use = "wilcox", logfc.threshold = 0, min.pct = 0, verbose = FALSE)
           cell_de <- data.frame(gene = rownames(cell_de), comparison = paste0(comparison, "_vs_", reference), population = if (is_global) "global" else annotation_label, cell_de, analysis_level = "cell-level Wilcoxon", check.names = FALSE)
           cell_file <- file.path(job_dir, paste0("cell_level_Wilcoxon__", file_slug, ".tsv")); utils::write.table(cell_de, cell_file, sep = "\t", row.names = FALSE, quote = FALSE); row$cell_result_file <- cell_file
-          plot_error <- tryCatch({ save_cell_level_de_plots(subset_obj, cell_de, group_column, comparison, reference, file_slug, job_dir); "" }, error = function(e) conditionMessage(e))
+          plot_error <- tryCatch({ save_cell_level_de_plots(subset_obj, cell_de, analysis_group_column, comparison, reference, file_slug, job_dir); "" }, error = function(e) conditionMessage(e))
           if (nzchar(plot_error)) row$note <- paste0("DE completed; figure generation skipped: ", plot_error)
           if (is_global) global_cell_results[[length(global_cell_results) + 1L]] <- cell_de
           ""

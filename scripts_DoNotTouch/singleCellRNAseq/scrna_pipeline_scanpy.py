@@ -194,6 +194,7 @@ def params_from(path: Path):
         "de_reference": get("de_reference", ""),
         "de_comparison": get("de_comparison", ""),
         "de_comparisons": [x for x in get("de_comparisons", get("de_comparison", "")).split("||") if x],
+        "de_comparison_mode": get("de_comparison_mode", "separate").lower(),
         "de_annotation_column": get("de_annotation_column", ""),
         "de_annotation_values": [x for x in get("de_annotation_values", get("de_annotation_value", "all")).split("||") if x],
         "de_annotation_mode": get("de_annotation_mode", "separate").lower(),
@@ -1069,6 +1070,8 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
         raise SystemExit(f"Differential-expression group field is absent from cell metadata: {group_column}")
     if not reference or not comparisons or any(not x or x == reference for x in comparisons):
         raise SystemExit("Choose a reference group and at least one different comparison group for differential expression.")
+    comparison_mode = p.get("de_comparison_mode", "separate")
+    contrast_sets = [comparisons] if comparison_mode == "combined" else [[x] for x in comparisons]
     annotation_column = p["de_annotation_column"]
     targets = list(dict.fromkeys(p["de_annotation_values"] or ["all"]))
     non_global_targets = [x for x in targets if str(x).lower() not in {"all", "all cells"}]
@@ -1085,7 +1088,8 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
         target_sets = [["all"]]
     manifest_rows, completed = [], 0
     global_cell_results = []
-    for comparison in comparisons:
+    for comparison_values in contrast_sets:
+      comparison = " + ".join(map(str, comparison_values))
       contrast_slug = f"{safe_metadata_name(comparison, 'comparison')}_vs_{safe_metadata_name(reference, 'reference')}"
       root = out_dir / "differential_expression" / contrast_slug
       for annotation_values in target_sets:
@@ -1103,13 +1107,15 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
             "count_file": "", "design_file": "", "cell_result_file": "",
         }
         try:
-            keep = adata.obs[group_column].astype(str).isin([reference, comparison])
+            keep = adata.obs[group_column].astype(str).isin([reference, *comparison_values])
             if not is_global:
                 keep &= adata.obs[annotation_column].astype(str).isin(map(str, annotation_values))
             subset = adata[keep].copy()
             if subset.n_obs == 0:
                 raise ValueError("No cells remain for this population.")
-            if not {reference, comparison}.issubset(set(subset.obs[group_column].astype(str))):
+            analysis_group_column = "_codespring_de_group"
+            subset.obs[analysis_group_column] = subset.obs[group_column].astype(str).where(~subset.obs[group_column].astype(str).isin(comparison_values), comparison)
+            if not {reference, comparison}.issubset(set(subset.obs[analysis_group_column].astype(str))):
                 raise ValueError("Both comparison groups must contain cells in this population.")
             if p["de_method"] in {"both", "pseudobulk"}:
                 counts = subset.layers.get("counts")
@@ -1118,7 +1124,7 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
                 design_rows, matrices = [], []
                 for sample_id, cell_index in subset.obs.groupby("sample_id", observed=True).groups.items():
                     positions = subset.obs_names.get_indexer(cell_index)
-                    sample_groups = subset.obs.iloc[positions][group_column].astype(str).unique()
+                    sample_groups = subset.obs.iloc[positions][analysis_group_column].astype(str).unique()
                     if len(sample_groups) != 1:
                         raise ValueError(f"Biological replicate {sample_id} contains multiple values of {group_column}.")
                     matrices.append(np.asarray(counts[positions].sum(axis=0)).ravel())
@@ -1137,7 +1143,7 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
                 pd.DataFrame(design_rows).to_csv(design_file, sep="\t", index=False)
                 row["count_file"], row["design_file"] = str(count_file), str(design_file)
             if p["de_method"] in {"both", "cell", "cell_level"}:
-                sc.tl.rank_genes_groups(subset, groupby=group_column, groups=[comparison], reference=reference, method="wilcoxon", use_raw=True, pts=True)
+                sc.tl.rank_genes_groups(subset, groupby=analysis_group_column, groups=[comparison], reference=reference, method="wilcoxon", use_raw=True, pts=True)
                 result = sc.get.rank_genes_groups_df(subset, group=comparison)
                 result.insert(0, "comparison", f"{comparison}_vs_{reference}")
                 result.insert(1, "population", "global" if is_global else annotation_label)
@@ -1145,7 +1151,7 @@ def export_differential_inputs(adata, p, tables_dir: Path, out_dir: Path):
                 cell_file = job_dir / f"cell_level_Wilcoxon__{file_slug}.tsv"
                 result.to_csv(cell_file, sep="\t", index=False); row["cell_result_file"] = str(cell_file)
                 try:
-                    save_cell_level_de_plots(subset, result, group_column, comparison, reference, file_slug, job_dir)
+                    save_cell_level_de_plots(subset, result, analysis_group_column, comparison, reference, file_slug, job_dir)
                 except Exception as plot_error:
                     row["note"] = f"DE completed; figure generation skipped: {plot_error}"
                 if is_global:
