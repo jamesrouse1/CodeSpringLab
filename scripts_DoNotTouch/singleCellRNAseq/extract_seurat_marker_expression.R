@@ -15,6 +15,17 @@ if (!inherits(obj, "Seurat")) stop("Processed RDS is not a Seurat object.")
 # Prefer SCT when it has normalized data, then reliably fall back to RNA.
 assays <- unique(c(if ("SCT" %in% names(obj@assays)) "SCT", "RNA", names(obj@assays)))
 read_normalized_matrix <- function(object, assay_name) {
+  # Seurat v5 can retain one normalized data layer per input/sample after a
+  # merge. GetAssayData deliberately refuses that ambiguous multi-layer
+  # assay, so join the normalized layers before extracting one gene.
+  layers <- tryCatch(SeuratObject::Layers(object[[assay_name]]), error = function(e) character(0))
+  data_layers <- grep("^data($|\\.)", layers, value = TRUE)
+  if (length(data_layers) > 1L) {
+    object <- tryCatch(
+      SeuratObject::JoinLayers(object, assay = assay_name, layers = "data", new = "data"),
+      error = function(e) object
+    )
+  }
   attempts <- list(
     function() Seurat::GetAssayData(object, assay = assay_name, layer = "data"),
     function() Seurat::GetAssayData(object, assay = assay_name, slot = "data"),

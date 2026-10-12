@@ -66,6 +66,14 @@ stopifnot(NROW(doublets) == 2L, identical(sort(doublets$capture_id), c("capture_
 obj <- readRDS(file.path(out, "objects", "processed_seurat.rds"))
 stopifnot("harmony" %in% names(obj@reductions), "umap" %in% names(obj@reductions), NROW(obj) == length(genes))
 
+# The interactive dashboard queries this reusable object for one normalized
+# marker at a time; verify that extraction also works for merged v5 layers.
+extractor <- file.path(repo, "scripts_DoNotTouch", "singleCellRNAseq", "extract_seurat_marker_expression.R")
+marker_cache <- file.path(work, "marker_expression.tsv.gz")
+marker_status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(c(extractor, file.path(out, "objects", "processed_seurat.rds"), "Gene1", marker_cache)))
+marker_values <- utils::read.delim(gzfile(marker_cache), check.names = FALSE)
+stopifnot(marker_status == 0L, NROW(marker_values) == 360L, all(c("cell", "expression") %in% names(marker_values)))
+
 # One reference can be compared with multiple selected metadata groups in one
 # differential-expression submission.  Each contrast must retain its own
 # result directory and manifest row.
