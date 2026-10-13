@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=codespring_scrna
+#SBATCH --partition=cpuq
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
