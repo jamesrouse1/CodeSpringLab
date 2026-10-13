@@ -1113,36 +1113,7 @@ apply_marker_annotation <- function(obj, path, annotation_name) {
 
 marker_list_panels <- function(marker_list, max_cell_types = 6L, max_genes = 32L) {
   marker_list <- marker_list[lengths(marker_list) > 0]
-  if (!length(marker_list)) return(list())
-  # Split large marker collections into readable, self-contained figures.
-  # A single all-markers plot becomes too tall to inspect in the app and makes
-  # its labels look artificially small after browser scaling.
-  panels <- list()
-  current <- list()
-  current_genes <- 0L
-  add_panel <- function() {
-    if (length(current)) panels[[length(panels) + 1L]] <<- current
-    current <<- list()
-    current_genes <<- 0L
-  }
-  for (label in names(marker_list)) {
-    genes <- unique(as.character(marker_list[[label]]))
-    genes <- genes[nzchar(genes)]
-    while (length(genes)) {
-      room <- max(1L, max_genes - current_genes)
-      take <- genes[seq_len(min(length(genes), room))]
-      if (length(current) >= max_cell_types || (current_genes > 0L && length(take) < length(genes))) {
-        add_panel()
-        next
-      }
-      current[[label]] <- c(current[[label]], take)
-      current_genes <- current_genes + length(take)
-      genes <- genes[-seq_along(take)]
-      if (length(genes)) add_panel()
-    }
-  }
-  add_panel()
-  panels
+  if (!length(marker_list)) list() else list(marker_list)
 }
 
 save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
@@ -1176,7 +1147,6 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
     subtitle_lines <- length(strsplit(dot_subtitle, "\n", fixed = TRUE)[[1]])
     width <- max(8, 4.4 + 0.62 * shared_group_count)
     height <- max(5.8, 2.7 + 0.24 * length(genes) + 0.28 * max(0L, subtitle_lines - 1L))
-    panel_suffix <- if (length(panels) > 1L) sprintf("_panel_%02d", panel_index) else ""
     for (group_key in names(groupings)) {
       grouping <- groupings[[group_key]]
       group_levels <- grouping_levels[[group_key]]
@@ -1212,8 +1182,8 @@ save_marker_annotation_panels <- function(obj, marker_list, annotation_name) {
         ggplot2::labs(title = paste0("Marker expression by ", group_label), subtitle = dot_subtitle, x = group_label, y = "Marker set | gene") +
         ggplot2::theme_classic(base_size = 12) +
         ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 14), plot.subtitle = ggplot2::element_text(size = 10, lineheight = 1.05), plot.margin = ggplot2::margin(12, 12, 10, 10), axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), axis.text.y = ggplot2::element_text(size = 9), panel.grid.major.x = ggplot2::element_line(color = "#E5E7EB", linewidth = 0.25), legend.box = "vertical")
-      save_plot(dot, sprintf("07_marker_annotation_dotplot_by_%s%s.png", group_key, panel_suffix), width + 2, height)
-      heatmap_path <- file.path(figures_dir, sprintf("07_marker_annotation_heatmap_by_%s%s.png", group_key, panel_suffix))
+      save_plot(dot, sprintf("07_marker_annotation_dotplot_by_%s.png", group_key), width + 2, height)
+      heatmap_path <- file.path(figures_dir, sprintf("07_marker_annotation_heatmap_by_%s.png", group_key))
       if (requireNamespace("pheatmap", quietly = TRUE)) {
         annotation_row <- data.frame(`Marker set` = marker_rows$marker_set, row.names = rownames(scaled), check.names = FALSE)
         marker_colors <- categorical_palette(marker_rows$marker_set)
